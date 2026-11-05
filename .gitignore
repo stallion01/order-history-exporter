@@ -1,0 +1,5 @@
+node_modules/
+test-results/
+*.csv
+*-diagnostic.html
+e2e-results.png

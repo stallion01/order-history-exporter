@@ -1,0 +1,42 @@
+{
+  "_note": "Synthetic response following the field layout eBay's endpoint uses. Not from a real account.",
+  "modules": {
+    "RIVER": [
+      {
+        "data": {
+          "items": [
+            {
+              "secondaryMessage": [
+                { "textSpans": [{ "text": "Order date" }] },
+                { "textSpans": [{ "text": "Sep 9, 2024" }] },
+                { "textSpans": [{ "text": "Order total" }] },
+                { "textSpans": [{ "text": "US $45.10" }] }
+              ],
+              "actions": [
+                { "action": { "name": "VIEW_ORDER_DETAILS", "URL": "https://order.ebay.com/ord/show?orderId=12-34567-89012#/" } }
+              ],
+              "itemCards": [
+                {
+                  "listingId": "123456789012",
+                  "image": { "title": "Vintage Film Camera" },
+                  "additionalPrice": { "value": { "value": 30.1, "currency": "USD" } },
+                  "aspectValuesList": [{ "textSpans": [{ "text": "Quantity : 2" }] }],
+                  "__myb": {
+                    "orderId": "12-34567-89012",
+                    "sellerInfo": [{ "textSpans": [{ "text": "Seller" }] }, { "textSpans": [{ "text": "camera_seller" }] }]
+                  }
+                },
+                {
+                  "listingId": "123456789013",
+                  "image": { "title": "Lens Cap" },
+                  "additionalPrice": { "value": { "value": 15, "currency": "USD" } },
+                  "__myb": { "orderId": "12-34567-89012" }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

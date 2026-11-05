@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- Made-up data in the structure of Home Depot's purchase history. Not captured from a real account. -->
+<html><head><title>Purchase History</title></head><body><main>
+<h1>Purchase History</h1>
+<button id="date-open">Date Placed: Last 25 Months</button>
+<div id="panel" hidden><button>Last 30 Days</button><button>Last 7 Years</button><button>View Results</button></div>
+<table>
+  <thead><tr><th></th><th>Products</th><th>Order/ Receipt #</th><th>Date</th><th>PO/Job</th><th>Payment</th><th>Purchaser</th><th>Total</th><th></th></tr></thead>
+  <tbody>
+    <tr><td></td><td><img alt="1 in. Test Conduit"><img alt="Test Junction Box"><p>+7</p></td><td><a href="/myaccount/order-details?orderNumber=00001-11111">#&nbsp;00001-11111</a></td><td>10/07/26</td><td>0</td><td><img alt="mastercard"><div>-</div><p>0027</p></td><td>A Customer</td><td><p>$ 97.43</p></td><td></td></tr>
+    <tr><td colspan="9">Purchased October 7</td></tr>
+    <tr><td></td><td><img alt="Test Wrench"></td><td><a href="/myaccount/order-details?orderNumber=00002-22222"># 00002-22222</a></td><td>09/17/26</td><td>Add PO/Job Name</td><td><img alt="visa"><div>-</div><p>8279</p></td><td>A Customer</td><td><p>$ -50.81</p></td><td></td></tr>
+    <tr><td></td><td><img alt="Test Paint"></td><td><a href="/myaccount/order-details?orderNumber=00003-33333"># 00003-33333</a></td><td>06/01/26</td><td></td><td><img alt=""><p>Cash</p></td><td>A Customer</td><td><p>$ 12.00</p></td><td></td></tr>
+  </tbody>
+</table>
+<nav><button aria-label="Skip to Previous Page" disabled></button><button aria-label="Page 1"></button><button aria-label="Go to Page 2"></button><button aria-label="Skip to Next Page"></button><button aria-label="Skip to Last Page"></button></nav>
+</main><script>
+document.getElementById('date-open').addEventListener('click', () => { document.getElementById('panel').hidden = false; });
+</script></body></html>

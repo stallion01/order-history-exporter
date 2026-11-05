@@ -1,0 +1,16 @@
+{
+  "name": "order-history-exporter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension that exports your purchase history from online stores to CSV.",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test tests/unit.test.js",
+    "test:e2e": "node --test tests/e2e.test.js",
+    "icons": "node scripts/make-icons.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3",
+    "playwright": "^1.48.0"
+  }
+}

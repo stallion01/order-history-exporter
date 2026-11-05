@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Order History Exporter</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Order History Exporter</h1>
+      <p class="muted">Reads your orders using the accounts you're already signed in to. Everything stays on this computer.</p>
+    </header>
+
+    <form id="setup">
+      <fieldset>
+        <legend>Stores</legend>
+        <div id="stores" class="stores"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Dates</legend>
+        <div class="row">
+          <label>Period
+            <select id="preset">
+              <option value="this-year">This year</option>
+              <option value="last-year">Last year</option>
+              <option value="year">A specific year</option>
+              <option value="last-30">Last 30 days</option>
+              <option value="last-90">Last 90 days</option>
+              <option value="custom">Custom date range</option>
+              <option value="all">All time</option>
+            </select>
+          </label>
+          <label id="year-field" hidden>Year <select id="year"></select></label>
+          <label id="from-field" hidden>From <input type="date" id="from"></label>
+          <label id="to-field" hidden>To <input type="date" id="to"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>CSV file</legend>
+        <div class="row">
+          <label>Rows
+            <select id="layout">
+              <option value="items">One row per item</option>
+              <option value="orders">One row per order</option>
+            </select>
+          </label>
+          <label>Files
+            <select id="split">
+              <option value="combined">One combined file</option>
+              <option value="per-store">One file per store</option>
+            </select>
+          </label>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="details" checked>
+          <span>Open each order for item prices, tax, shipping, payment method and delivery address <span class="muted">(slower: about 3 seconds per order)</span></span>
+        </label>
+      </fieldset>
+
+      <p id="form-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="submit" id="start" class="primary">Start export</button>
+        <button type="button" id="stop" hidden>Stop</button>
+      </div>
+    </form>
+
+    <section id="blocked" class="notice" role="alert" hidden>
+      <p id="blocked-text"></p>
+      <div class="actions">
+        <button type="button" id="blocked-continue" class="primary">Continue</button>
+        <button type="button" id="blocked-skip">Skip this store</button>
+      </div>
+    </section>
+
+    <section id="progress" hidden>
+      <h2>Progress</h2>
+      <ul id="progress-list" class="progress"></ul>
+    </section>
+
+    <section id="results" hidden>
+      <h2 id="results-title"></h2>
+      <p id="results-note" class="muted"></p>
+      <div class="actions">
+        <button type="button" id="download" class="primary">Download CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Store</th><th>Order</th><th>Items</th><th>Payment</th><th class="num">Total</th></tr></thead>
+          <tbody id="preview"></tbody>
+        </table>
+      </div>
+      <p id="preview-note" class="muted"></p>
+    </section>
+  </main>
+  <script src="../lib/core.js"></script>
+  <script src="../stores/index.js"></script>
+  <script src="../lib/crawler.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
