@@ -1,9 +1,12 @@
 // Single-series charts in one hue, with values available on hover, focus and in text.
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { money, monthLabel, wholeMoney } from './format';
 
-interface Row {
+export interface Row {
   label: string;
+  // The filter value behind the label, such as a store id.
+  key?: string;
   spend: number;
   orders: number;
 }
@@ -33,7 +36,7 @@ function fillMonths(rows: Row[]): Row[] {
   return out;
 }
 
-export function MonthlyBars({ rows }: { rows: Row[] }) {
+export function MonthlyBars({ rows, onSelect }: { rows: Row[]; onSelect?: (row: Row) => void }) {
   const holder = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [active, setActive] = useState<number | null>(null);
@@ -91,12 +94,15 @@ export function MonthlyBars({ rows }: { rows: Row[] }) {
             <g
               key={month.label}
               tabIndex={0}
+              role={onSelect ? 'link' : undefined}
               aria-label={`${monthLabel(month.label)}: ${money(month.spend)}, ${month.orders} orders`}
+              onClick={onSelect && month.orders ? () => onSelect(month) : undefined}
+              onKeyDown={onSelect && month.orders ? (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onSelect(month)) : undefined}
               onMouseEnter={() => setActive(index)}
               onMouseLeave={() => setActive(null)}
               onFocus={() => setActive(index)}
               onBlur={() => setActive(null)}
-              className="outline-none"
+              className={`outline-none ${onSelect && month.orders ? 'cursor-pointer' : ''}`}
             >
               <rect x={x} y={margin.top} width={slot} height={plot} fill="transparent" />
               {barHeight > 0 && <path d={d} className={active === index ? 'fill-[var(--color-bar-hover)]' : 'fill-[var(--color-bar)]'} />}
@@ -124,28 +130,49 @@ export function MonthlyBars({ rows }: { rows: Row[] }) {
 }
 
 // Ranked bars with the value in text beside each, so nothing depends on the bar alone.
-export function RankBars({ rows, empty, limit = 8 }: { rows: Row[]; empty: string; limit?: number }) {
+// With linkFor, each row opens the matching orders or items.
+export function RankBars({ rows, empty, limit = 8, linkFor }: { rows: Row[]; empty: string; limit?: number; linkFor?: (row: Row) => string }) {
+  const [expanded, setExpanded] = useState(false);
   if (!rows.length) return <p className="py-4 text-center text-sm text-slate-500">{empty}</p>;
-  const shown = rows.slice(0, limit);
-  const max = Math.max(...shown.map((row) => Math.abs(row.spend)), 1);
+  const shown = expanded ? rows : rows.slice(0, limit);
+  const max = Math.max(...rows.map((row) => Math.abs(row.spend)), 1);
   return (
-    <ul className="space-y-2.5">
-      {shown.map((row) => (
-        <li key={row.label} className="text-sm">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="min-w-0 truncate" title={row.label}>
-              {row.label}
-            </span>
-            <span className="shrink-0 tabular-nums">
-              {money(row.spend)} <span className="text-xs text-slate-500 dark:text-slate-400">· {row.orders}</span>
-            </span>
-          </div>
-          <div className="mt-1 h-2 rounded-r-full bg-slate-100 dark:bg-slate-800">
-            <div className="h-full rounded-r-full bg-[var(--color-bar)]" style={{ width: `${Math.max(1, (Math.abs(row.spend) / max) * 100)}%` }} />
-          </div>
+    <ul className="space-y-1">
+      {shown.map((row) => {
+        const body = (
+          <>
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0 truncate" title={row.label}>
+                {row.label}
+              </span>
+              <span className="shrink-0 tabular-nums">
+                {money(row.spend)} <span className="text-xs text-slate-500 dark:text-slate-400">· {row.orders}</span>
+              </span>
+            </div>
+            <div className="mt-1 h-2 rounded-r-full bg-slate-100 dark:bg-slate-800">
+              <div className="h-full rounded-r-full bg-[var(--color-bar)] group-hover:bg-[var(--color-bar-hover)]" style={{ width: `${Math.max(1, (Math.abs(row.spend) / max) * 100)}%` }} />
+            </div>
+          </>
+        );
+        return (
+          <li key={row.label} className="text-sm">
+            {linkFor ? (
+              <Link to={linkFor(row)} className="group -mx-2 block rounded-md px-2 py-1 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-emerald-600 dark:hover:bg-slate-800/60">
+                {body}
+              </Link>
+            ) : (
+              <div className="py-1">{body}</div>
+            )}
+          </li>
+        );
+      })}
+      {rows.length > limit && (
+        <li>
+          <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="mt-1 text-xs font-medium text-emerald-700 hover:underline dark:text-emerald-400">
+            {expanded ? 'Show fewer' : `and ${rows.length - limit} more`}
+          </button>
         </li>
-      ))}
-      {rows.length > limit && <li className="text-xs text-slate-500">and {rows.length - limit} more</li>}
+      )}
     </ul>
   );
 }

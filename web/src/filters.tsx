@@ -150,6 +150,7 @@ export function FilterBar({ meta, show = KEYS as unknown as string[] }: { meta: 
                 {p}
               </option>
             ))}
+            <option value="none">Not recorded</option>
           </Select>
         </Field>
       )}

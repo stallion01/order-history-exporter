@@ -218,20 +218,26 @@ test('report totals, filters, and CSV come from the database', async () => {
     orders: [
       { orderId: 'H1', storeName: 'Home Depot', date: '2025-01-10', total: 100, tax: 7, payment: 'Visa ending 1234', deliveryZip: '02134', items: [{ name: '=Paint', quantity: 2 }] },
       { orderId: 'H2', storeName: 'Home Depot', date: '2025-03-10', total: -40, payment: 'Visa ending 1234', items: [{ name: 'Returned Saw' }] },
+      { orderId: 'H3', storeName: 'Home Depot', date: '2025-03-12', total: 0, items: [{ name: 'Free Sample' }] },
     ],
   });
   const report = await get('/api/report?store=homedepot');
-  assert.equal(report.totals.orders, 2);
+  assert.equal(report.totals.orders, 3);
   assert.equal(report.totals.spend, 60, 'returns reduce spending');
+  // Each row carries the filter value that lists its orders, for the dashboard's links.
+  assert.equal(report.byStore[0].key, 'homedepot');
+  const unrecorded = report.byPayment.find((row) => row.label === 'Not recorded');
+  assert.equal(unrecorded.key, 'none');
+  assert.equal((await get('/api/orders?store=homedepot&payment=none')).total, 1);
   assert.equal(report.totals.tax, 7);
-  assert.equal(report.totals.items, 3);
+  assert.equal(report.totals.items, 4);
   assert.deepEqual(report.byMonth.map((m) => m.label), ['2025-01', '2025-03']);
   assert.equal(report.byPayment[0].label, 'Visa ending 1234');
   assert.equal(report.byZip[0].label, '02134');
 
   assert.equal((await get('/api/orders?q=saw')).total, 1);
   assert.equal((await get('/api/orders?q=%25')).total, 0, 'a % is searched for literally');
-  assert.equal((await get('/api/report?store=homedepot&from=2025-02-01')).totals.orders, 1);
+  assert.equal((await get('/api/report?store=homedepot&from=2025-02-01')).totals.orders, 2);
 
   const response = await call('/api/export.csv?store=homedepot&layout=items');
   assert.match(response.headers.get('content-disposition'), /attachment/);
@@ -239,7 +245,7 @@ test('report totals, filters, and CSV come from the database', async () => {
   assert.ok(csv.includes('Order Date'));
   assert.ok(csv.includes("'=Paint"), 'formula text stays neutralised');
   assert.ok(csv.includes(',02134,'), 'ZIP intact');
-  assert.equal((await (await call('/api/export.csv?store=homedepot&layout=orders')).text()).trim().split('\r\n').length, 3);
+  assert.equal((await (await call('/api/export.csv?store=homedepot&layout=orders')).text()).trim().split('\r\n').length, 4);
 });
 
 test('categories: rules, phrases beating single words, and store hints', () => {

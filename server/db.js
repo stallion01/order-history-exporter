@@ -171,6 +171,7 @@ const ITEM_SORTS = {
   status: (i) => i.status,
 };
 const NO_ZIP = 'none';
+const NO_PAYMENT = 'none';
 
 const present = (value) => value !== undefined && value !== null && value !== '';
 const now = () => new Date().toISOString();
@@ -477,7 +478,9 @@ function openDatabase(file) {
       clauses.push('o.store = ?');
       params.push(filters.store);
     }
-    if (filters.payment) {
+    if (filters.payment === NO_PAYMENT) {
+      clauses.push('o.payment IS NULL');
+    } else if (filters.payment) {
       clauses.push('o.payment = ?');
       params.push(filters.payment);
     }
@@ -576,15 +579,16 @@ function openDatabase(file) {
     return { total: items.length, amount: tax.cents(amount), items: limit ? items.slice(offset, offset + limit) : items };
   }
 
-  function bump(map, label, spend, orderKey) {
-    const entry = map.get(label) || { label, spend: 0, orderKeys: new Set() };
+  // key is the filter value that lists these orders, such as a store id.
+  function bump(map, label, spend, orderKey, key = label) {
+    const entry = map.get(label) || { label, key, spend: 0, orderKeys: new Set() };
     entry.spend += spend;
     entry.orderKeys.add(orderKey);
     map.set(label, entry);
   }
   const finish = (map) =>
     [...map.values()]
-      .map(({ label, spend, orderKeys }) => ({ label, spend: tax.cents(spend), orders: orderKeys.size }))
+      .map(({ label, key, spend, orderKeys }) => ({ label, key, spend: tax.cents(spend), orders: orderKeys.size }))
       .sort((a, b) => b.spend - a.spend);
 
   function report(filters = {}) {
@@ -619,8 +623,8 @@ function openDatabase(file) {
       if (!order.detail_fetched_at) totals.withoutDetails++;
       if (!order.order_date) totals.undated++;
       if (order.order_date) bump(months, order.order_date.slice(0, 7), value, key);
-      bump(stores, order.store_name || order.store, value, key);
-      bump(payments, order.payment || 'Not recorded', value, key);
+      bump(stores, order.store_name || order.store, value, key, order.store);
+      bump(payments, order.payment || 'Not recorded', value, key, order.payment || NO_PAYMENT);
       if (order.delivery_zip) bump(zips, order.delivery_zip, value, key);
     }
     const counted = totals.orders - totals.withoutTotal;
@@ -653,7 +657,7 @@ function openDatabase(file) {
       byMonth: finish(months).sort((a, b) => a.label.localeCompare(b.label)),
       byStore: finish(stores),
       byPayment: finish(payments),
-      byZip: finish(zips).slice(0, 15),
+      byZip: finish(zips),
       byCategory: finish(categories),
       topItems,
     };

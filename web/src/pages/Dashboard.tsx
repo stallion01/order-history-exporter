@@ -1,13 +1,31 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useApi } from '../api';
 import { MonthlyBars, RankBars } from '../charts';
+import type { Row } from '../charts';
 import { FilterBar, useFilters } from '../filters';
 import type { Meta } from '../filters';
 import { money, whole } from '../format';
 import { Banner, Card, Empty, Loading, PageHeader, Stat, TD, TH, TR } from '../ui';
 
 export function Dashboard({ meta }: { meta: Meta | null }) {
-  const { query } = useFilters();
+  const { query, params } = useFilters();
+  const navigate = useNavigate();
+
+  // A page link that keeps the dashboard's filters and adds one more.
+  const linkTo = (path: string, changes: Record<string, string>) => {
+    const next = new URLSearchParams();
+    for (const key of ['preset', 'from', 'to', 'store', 'category', 'zip', 'payment', 'q']) {
+      const value = changes[key] ?? params.get(key);
+      if (value) next.set(key, value);
+    }
+    return `${path}?${next}`;
+  };
+  const by = (path: string, key: string) => (row: Row) => linkTo(path, { [key]: row.key ?? row.label });
+  const openMonth = (row: Row) => {
+    const [year, month] = row.label.split('-').map(Number);
+    const last = new Date(year, month, 0).getDate();
+    navigate(linkTo('/orders', { preset: 'custom', from: `${row.label}-01`, to: `${row.label}-${String(last).padStart(2, '0')}` }));
+  };
   const report = useApi<any>(`/api/report?${query()}`);
   const status = useApi<any>('/api/status');
   const data = report.data;
@@ -35,21 +53,21 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
           {caveats.length > 0 && <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{caveats.join(' ')}</p>}
 
           <Card title="Spending by month" className="mt-5">
-            <MonthlyBars rows={data.byMonth} />
+            <MonthlyBars rows={data.byMonth} onSelect={openMonth} />
           </Card>
 
           <div className="mt-5 grid gap-5 lg:grid-cols-2">
             <Card title="By category">
-              <RankBars rows={data.byCategory} empty="No items match these filters." />
+              <RankBars rows={data.byCategory} empty="No items match these filters." linkFor={by('/items', 'category')} />
             </Card>
             <Card title="By store">
-              <RankBars rows={data.byStore} empty="No orders match these filters." />
+              <RankBars rows={data.byStore} empty="No orders match these filters." linkFor={by('/orders', 'store')} />
             </Card>
             <Card title="By payment method">
-              <RankBars rows={data.byPayment} empty="No orders match these filters." />
+              <RankBars rows={data.byPayment} empty="No orders match these filters." linkFor={by('/orders', 'payment')} />
             </Card>
             <Card title="By delivery ZIP">
-              <RankBars rows={data.byZip} empty="No delivered orders match these filters." />
+              <RankBars rows={data.byZip} empty="No delivered orders match these filters." linkFor={by('/orders', 'zip')} />
             </Card>
           </div>
 
@@ -68,7 +86,11 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
                   <tbody>
                     {data.topItems.map((item: any) => (
                       <tr key={item.label} className={TR}>
-                        <td className={TD}>{item.label}</td>
+                        <td className={TD}>
+                          <Link to={linkTo('/items', { q: item.label })} className="hover:underline">
+                            {item.label}
+                          </Link>
+                        </td>
                         <td className={`${TD} text-right tabular-nums`}>{whole(item.orders)}</td>
                         <td className={`${TD} text-right tabular-nums`}>{whole(item.quantity)}</td>
                         <td className={`${TD} whitespace-nowrap`}>{item.lastBought}</td>
