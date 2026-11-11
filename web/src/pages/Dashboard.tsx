@@ -1,0 +1,119 @@
+import { Link } from 'react-router-dom';
+import { useApi } from '../api';
+import { MonthlyBars, RankBars } from '../charts';
+import { FilterBar, useFilters } from '../filters';
+import type { Meta } from '../filters';
+import { money, whole } from '../format';
+import { Banner, Card, Empty, Loading, PageHeader, Stat, TD, TH, TR } from '../ui';
+
+export function Dashboard({ meta }: { meta: Meta | null }) {
+  const { query } = useFilters();
+  const report = useApi<any>(`/api/report?${query()}`);
+  const status = useApi<any>('/api/status');
+  const data = report.data;
+  const totals = data?.totals;
+
+  const caveats: string[] = [];
+  if (totals?.withoutTotal) caveats.push(`${totals.withoutTotal} order(s) have no total yet, so they aren't in the money figures.`);
+  if (totals?.estimatedItems) caveats.push(`${totals.estimatedItems} item(s) have no price yet, so their share of an order is estimated.`);
+  if (totals?.undated) caveats.push(`${totals.undated} order(s) have no date and only appear when no period is set.`);
+
+  return (
+    <>
+      <PageHeader title="Dashboard" description="Spending across your synced stores." />
+      <FilterBar meta={meta} />
+      {report.error && <Banner>{report.error.message}</Banner>}
+      {!data && report.loading && <Loading />}
+      {data && (
+        <>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Stat label="Total spent" value={money(totals.spend ?? 0)} />
+            <Stat label="Orders" value={whole(totals.orders)} />
+            <Stat label="Average order" value={money(totals.average)} />
+            <Stat label="Tax paid" value={totals.tax === null ? '–' : money(totals.tax ?? 0)} />
+          </div>
+          {caveats.length > 0 && <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{caveats.join(' ')}</p>}
+
+          <Card title="Spending by month" className="mt-5">
+            <MonthlyBars rows={data.byMonth} />
+          </Card>
+
+          <div className="mt-5 grid gap-5 lg:grid-cols-2">
+            <Card title="By category">
+              <RankBars rows={data.byCategory} empty="No items match these filters." />
+            </Card>
+            <Card title="By store">
+              <RankBars rows={data.byStore} empty="No orders match these filters." />
+            </Card>
+            <Card title="By payment method">
+              <RankBars rows={data.byPayment} empty="No orders match these filters." />
+            </Card>
+            <Card title="By delivery ZIP">
+              <RankBars rows={data.byZip} empty="No delivered orders match these filters." />
+            </Card>
+          </div>
+
+          <Card title="Most-bought items" className="mt-5" padded={false}>
+            {data.topItems.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr>
+                      <th className={TH}>Item</th>
+                      <th className={`${TH} text-right`}>Orders</th>
+                      <th className={`${TH} text-right`}>Quantity</th>
+                      <th className={TH}>Last bought</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.topItems.map((item: any) => (
+                      <tr key={item.label} className={TR}>
+                        <td className={TD}>{item.label}</td>
+                        <td className={`${TD} text-right tabular-nums`}>{whole(item.orders)}</td>
+                        <td className={`${TD} text-right tabular-nums`}>{whole(item.quantity)}</td>
+                        <td className={`${TD} whitespace-nowrap`}>{item.lastBought}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty>No items match these filters.</Empty>
+            )}
+          </Card>
+        </>
+      )}
+
+      <Card title="Sync status" className="mt-5" padded={false} actions={<Link to="/settings" className="text-sm text-emerald-700 hover:underline dark:text-emerald-400">Connect the extension</Link>}>
+        {status.data?.stores?.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr>
+                  <th className={TH}>Store</th>
+                  <th className={`${TH} text-right`}>Orders</th>
+                  <th className={TH}>Fully read</th>
+                  <th className={`${TH} text-right`}>Details missing</th>
+                  <th className={TH}>Last sync</th>
+                </tr>
+              </thead>
+              <tbody>
+                {status.data.stores.map((s: any) => (
+                  <tr key={s.store} className={TR}>
+                    <td className={`${TD} whitespace-nowrap`}>{s.name}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{whole(s.orders)}</td>
+                    <td className={TD}>{s.coverage.length ? s.coverage.map((c: any) => `${c.from || 'Beginning'} to ${c.to}`).join('; ') : 'Not yet'}</td>
+                    <td className={`${TD} text-right tabular-nums`}>{whole(s.missingDetails)}</td>
+                    <td className={`${TD} whitespace-nowrap`}>{s.lastRun.finished_at ? new Date(s.lastRun.finished_at).toLocaleString() : 'Never'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty>Nothing synced yet. Run the Chrome extension to fill in your orders.</Empty>
+        )}
+      </Card>
+    </>
+  );
+}

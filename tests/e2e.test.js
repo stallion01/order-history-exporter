@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { openDatabase } = require('../server/db');
-const { createApp } = require('../server/app');
+const { buildApp } = require('../server/dist/app');
 
 const ROOT = path.join(__dirname, '..');
 const fixture = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -41,18 +41,18 @@ const TOKEN = 'e2e-token';
 async function startDatabase() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ohe-e2e-'));
   const db = openDatabase(path.join(dir, 'orders.db'));
-  const placeholder = createApp({ db, token: TOKEN, allowedHosts: [] });
-  await new Promise((resolve) => placeholder.listen(0, '127.0.0.1', resolve));
-  const { port } = placeholder.address();
-  const real = createApp({ db, token: TOKEN, allowedHosts: [`127.0.0.1:${port}`] });
-  placeholder.removeAllListeners('request');
-  placeholder.on('request', (req, res) => real.emit('request', req, res));
+  const app = buildApp({
+    db,
+    tokens: { get: () => TOKEN, rotate: () => TOKEN },
+    allowedHosts: (host) => host.startsWith('127.0.0.1:'),
+    webRoot: path.join(ROOT, 'web', 'dist'),
+  });
+  await app.listen({ port: 0, host: '127.0.0.1' });
   return {
     db,
-    url: `http://127.0.0.1:${port}`,
-    stop() {
-      placeholder.close();
-      placeholder.closeAllConnections();
+    url: `http://127.0.0.1:${app.server.address().port}`,
+    async stop() {
+      await app.close();
       db.close();
       fs.rmSync(dir, { recursive: true, force: true });
     },
@@ -133,7 +133,7 @@ test('a second sync of an old period reads nothing again, except details still m
     assert.equal(visits.lists, 0);
     assert.deepEqual(visits.details, []);
     assert.match(await page.textContent('#progress-list'), /already up to date/);
-    assert.equal(await page.getAttribute('#open-reports', 'href'), `${server.url}/#token=${TOKEN}`);
+    assert.equal(await page.getAttribute('#open-reports', 'href'), `${server.url}/`);
 
     // A wider period reads only the part never read.
     await page.fill('#from', '2023-01-01');
@@ -243,7 +243,7 @@ test('a wrong token or stopped server is reported before any store page opens', 
   }
 });
 
-test('the reports page shows the database, filters it, and downloads CSV', { timeout: 120000 }, async () => {
+test('the web app: first-run setup, reports, corrections, tax groups and phone layout', { timeout: 180000 }, async () => {
   const server = await startDatabase();
   const stores = [['amazon', 'Amazon'], ['walmart', 'Walmart'], ['homedepot', 'Home Depot'], ['newegg', 'Newegg']];
   const payments = ['Visa ending 1111', 'Mastercard ending 2222', 'PayPal'];
@@ -271,123 +271,122 @@ test('the reports page shows the database, filters it, and downloads CSV', { tim
   server.db.recordRun('amazon', { newOrders: 1, complete: true });
 
   const browser = await chromium.launch({ channel: 'chromium' });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 1100 }, acceptDownloads: true, colorScheme: 'light' });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, acceptDownloads: true, colorScheme: 'light' });
   const page = await context.newPage();
   const problems = [];
   page.on('pageerror', (err) => problems.push(err.message));
-  page.on('console', (msg) => msg.type() === 'error' && problems.push(msg.text()));
+  page.on('console', (msg) => msg.type() === 'error' && !/401|Failed to load resource/.test(msg.text()) && problems.push(msg.text()));
+  const shots = process.env.E2E_SHOTS || ROOT;
+  const nav = (name) => page.getByRole('navigation', { name: 'Main' }).first().getByRole('link', { name });
   try {
-    // A wrong token is refused, with a way to enter the right one.
-    await page.goto(`${server.url}/#token=wrong`);
-    await page.waitForSelector('#signin:not([hidden])');
-    assert.match(await page.textContent('#signin-error'), /not accepted/);
-    assert.equal(new URL(page.url()).hash, '', 'token removed from the address bar');
-    problems.length = 0; // the refused request itself logs a console error
+    // First run: the owner account needs the setup code printed by the server.
+    await page.goto(server.url);
+    await page.getByRole('heading', { name: 'Create your account' }).waitFor();
+    await page.getByLabel('Setup code').fill('not it');
+    await page.getByLabel('Username').fill('owner');
+    await page.getByLabel('Password', { exact: true }).fill('a long test password');
+    await page.getByLabel('Confirm password').fill('a long test password');
+    await page.getByRole('button', { name: 'Create account' }).click();
+    await page.getByText("That setup code isn't right").waitFor();
+    await page.getByLabel('Setup code').fill(TOKEN);
+    await page.getByRole('button', { name: 'Create account' }).click();
 
-    await page.fill('#token', TOKEN);
-    await page.click('#signin button');
-    await page.waitForSelector('#content:not([hidden])');
-    await page.waitForFunction(() => document.getElementById('t-orders').textContent === '90');
-    assert.match(await page.textContent('#orders-title'), /90/);
-    assert.equal(await page.locator('#orders tr').count(), 50);
-    assert.equal(await page.locator('#months svg .column').count() > 12, true);
+    // Dashboard.
+    await page.getByRole('heading', { name: 'Dashboard' }).waitFor();
+    await page.getByText('$17,880.00').waitFor();
+    assert.ok((await page.locator('svg[aria-label="Spending by month"] g[tabindex]').count()) > 12);
+    assert.match(await page.textContent('main'), /Kitchen & Dining/);
+    await page.screenshot({ path: path.join(shots, 'web-dashboard.png'), fullPage: true });
 
-    // Page text from a store is shown as text, never run as HTML.
-    assert.equal(await page.locator('#orders b').count(), 0);
-    assert.match(await page.textContent('#orders'), /<b>Name<\/b>/);
+    // Orders: sort by ZIP, filter by category, and no store text is run as HTML.
+    await nav('Orders').click();
+    await page.getByRole('heading', { name: 'Orders', exact: true }).waitFor();
+    await page.waitForURL(/\/orders$/);
+    await page.getByText('90 orders').waitFor();
+    assert.equal(await page.locator('main b').count(), 0);
+    await page.getByRole('button', { name: 'Delivery ZIP' }).click();
+    await page.waitForFunction(() => document.querySelector('main table tbody tr td:nth-child(5)')?.textContent === '02134');
+    await page.getByLabel('Category').selectOption('Office Supplies');
+    await page.getByText('No orders match these filters.').waitFor();
+    await page.getByLabel('Category').selectOption('');
+    await page.getByLabel('Delivery ZIP').selectOption('02134');
+    await page.getByText('18 orders').waitFor();
+    await page.getByLabel('Delivery ZIP').selectOption('');
 
-    await page.screenshot({ path: path.join(process.env.E2E_SHOTS || ROOT, 'reports-light.png'), fullPage: true });
+    // Items: a category change applies to every item with that name.
+    await nav('Items').click();
+    await page.getByRole('heading', { name: 'Items', exact: true }).waitFor();
+    await page.getByText(/^90 items/).waitFor();
+    await page.getByLabel('Search').fill('kettle');
+    await page.getByText(/^18 items/).waitFor();
+    await page.getByLabel('Category for Stainless Steel Kettle').first().selectOption('Office Supplies');
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('select[aria-label="Category for Stainless Steel Kettle"]')].every((s) => s.value === 'Office Supplies')
+    );
+    await page.getByLabel('Search').fill('');
+    await page.getByLabel('Delivery ZIP').selectOption('02134');
+    await page.getByText(/^18 items/).waitFor();
+    await page.getByRole('button', { name: 'Mark all as business' }).click();
+    await page.getByRole('button', { name: 'Mark as business' }).click();
+    await page.getByText('18 items marked business.').waitFor();
+    await page.getByLabel('Delivery ZIP').selectOption('');
+    await page.screenshot({ path: path.join(shots, 'web-items.png') });
 
-    await page.selectOption('#store', 'walmart');
-    await page.waitForFunction(() => document.getElementById('orders-title').textContent.includes('(23)') || document.getElementById('orders-title').textContent.includes('(22)'));
-    await page.selectOption('#store', '');
-    await page.fill('#q', 'kettle');
-    await page.waitForFunction(() => document.getElementById('orders-title').textContent.includes('(18)'));
-
-    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#csv-items')]);
-    assert.equal(download.suggestedFilename(), 'orders_all-time_items.csv');
-    const csv = fs.readFileSync(await download.path(), 'utf8');
-    assert.equal(csv.trim().split('\r\n').length, 19, 'header plus the 18 filtered orders');
-    assert.ok(csv.includes('Stainless Steel Kettle'));
-    assert.ok(!csv.includes('Graphics Card'));
-
-    // The token persists for the next visit.
-    await page.reload();
-    await page.waitForSelector('#content:not([hidden])');
-    await page.waitForFunction(() => document.getElementById('t-orders').textContent === '90');
-
-    // Orders sort by delivery ZIP.
-    await page.click('#orders-head button:has-text("Delivery ZIP")');
-    await page.waitForFunction(() => document.querySelector('#orders tr td:nth-child(5)').textContent === '02134');
-    assert.equal(await page.getAttribute('#orders-head th:nth-child(5)', 'aria-sort'), 'ascending');
-    await page.selectOption('#category', 'Office Supplies');
-    await page.waitForFunction(() => document.getElementById('orders-title').textContent.includes('(0)'));
-    await page.selectOption('#category', '');
-    await page.selectOption('#zip', '02134');
-    await page.waitForFunction(() => document.getElementById('orders-title').textContent.includes('(18)'));
-    await page.selectOption('#zip', '');
-    assert.match(await page.textContent('#by-category'), /Kitchen & Dining/);
-
-    // Items tab: sort by category, correct one, and see it apply to the same name.
-    await page.click('#tab-items');
-    await page.waitForSelector('#items tr select');
-    await page.click('#items-head button:has-text("Category")');
-    await page.waitForFunction(() => document.querySelector('#items-head th[aria-sort="ascending"]'));
-    await page.fill('#q', 'kettle');
-    await page.waitForFunction(() => document.getElementById('items-title').textContent.startsWith('Items (18'));
-    await page.locator('#items tr select').first().selectOption('Office Supplies');
-    await page.waitForFunction(() => [...document.querySelectorAll('#items tr')].every((tr) => tr.querySelector('select').value === 'Office Supplies'));
-    await page.fill('#q', '');
-
-    // Marking everything that matches asks first.
-    page.once('dialog', (dialog) => dialog.accept());
-    await page.selectOption('#zip', '02134');
-    await page.waitForFunction(() => document.getElementById('items-title').textContent.startsWith('Items (18'));
-    await page.click('#mark-business');
-    await page.waitForFunction(() => /18 item/.test(document.getElementById('mark-note').textContent));
-    await page.selectOption('#zip', '');
-    await page.waitForFunction(() => !document.getElementById('items-title').textContent.startsWith('Items (18'));
-    await page.screenshot({ path: path.join(process.env.E2E_SHOTS || ROOT, 'reports-items.png'), fullPage: false });
-
-    // Tax tab: a rule, then form lines and a download.
-    await page.click('#tab-tax');
-    await page.waitForFunction(() => document.getElementById('tax-business').textContent !== '');
-    await page.selectOption('#tax-year', '');
-    await page.selectOption('#rule-field', 'payment');
-    await page.selectOption('#rule-value', 'PayPal');
-    await page.click('#rule-form button');
-    await page.waitForFunction(() => /PayPal: Business/.test(document.getElementById('rules').textContent));
-    await page.waitForFunction(() => document.querySelectorAll('#tax-lines tr').length > 1);
-    assert.match(await page.textContent('#tax-title'), /Schedule C/);
-    assert.match(await page.textContent('#tax-lines'), /Supplies|Office expense/);
-    assert.match(await page.textContent('#tax-caveats'), /aren't marked business or personal/);
-    await page.screenshot({ path: path.join(process.env.E2E_SHOTS || ROOT, 'reports-tax.png'), fullPage: true });
-    const [taxDownload] = await Promise.all([page.waitForEvent('download'), page.click('#tax-csv-summary')]);
+    // Tax groups: a rule, the form lines, and a download.
+    await nav('Tax groups').click();
+    await page.getByRole('heading', { name: 'Tax groups' }).waitFor();
+    await page.getByLabel('Tax year').selectOption('all');
+    await page.getByLabel('When').selectOption('payment');
+    await page.getByLabel('Value').selectOption('PayPal');
+    await page.getByRole('button', { name: 'Add rule' }).click();
+    await page.getByText(/Payment method is\s*PayPal: Business/).waitFor();
+    await page.getByRole('cell', { name: 'Office expense', exact: true }).waitFor();
+    const [taxDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Summary CSV' }).click()]);
     assert.equal(taxDownload.suggestedFilename(), 'schedule-c_all-years_summary.csv');
     assert.match(fs.readFileSync(await taxDownload.path(), 'utf8'), /Schedule C,18,Office expense/);
-    await page.selectOption('#tax-form', 'schedule-e');
-    await page.waitForFunction(() => /Schedule E/.test(document.getElementById('tax-title').textContent));
-    assert.match(await page.textContent('#mapping-head'), /Schedule E/);
-    await page.click('#tab-overview');
-    await page.waitForFunction(() => !document.getElementById('view-overview').hidden);
+    await page.screenshot({ path: path.join(shots, 'web-tax.png'), fullPage: true });
 
-    await page.setViewportSize({ width: 390, height: 800 });
+    // Settings: the extension's token is shown on request.
+    await nav('Settings').click();
+    await page.getByRole('button', { name: 'Show token' }).click();
+    await page.getByText(TOKEN).waitFor();
+
+    // Phone layout, dark mode: bottom tabs, no sideways scrolling.
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ colorScheme: 'dark' });
-    await page.fill('#q', '');
-    await page.waitForFunction(() => document.getElementById('t-orders').textContent === '90');
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    assert.ok(overflow <= 0, `page scrolls sideways on a phone by ${overflow}px`);
-    await page.waitForFunction(() => {
-      const chart = document.querySelector('#months svg');
-      return chart && chart.getBoundingClientRect().width <= 400;
-    });
-    await page.screenshot({ path: path.join(process.env.E2E_SHOTS || ROOT, 'reports-dark-phone.png'), fullPage: true });
+    await page.getByRole('navigation', { name: 'Main' }).last().getByRole('link', { name: 'Dashboard' }).click();
+    await page.getByText('$17,880.00').waitFor();
+    for (const route of ['/', '/orders', '/items', '/tax', '/settings']) {
+      await page.goto(`${server.url}${route}`);
+      await page.waitForLoadState('networkidle');
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      assert.ok(overflow <= 0, `${route} scrolls sideways on a phone by ${overflow}px`);
+    }
+    await page.goto(`${server.url}/items`);
+    await page.getByText(/^90 items/).waitFor();
+    await page.screenshot({ path: path.join(shots, 'web-phone-items.png'), fullPage: false });
+    await page.goto(server.url);
+    await page.getByText('$17,880.00').waitFor();
+    await page.screenshot({ path: path.join(shots, 'web-phone-dashboard.png'), fullPage: true });
+
+    // Signing out, then back in.
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    await page.getByLabel('Username').fill('owner');
+    await page.getByLabel('Password').fill('a long test password');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.getByRole('heading', { name: 'Dashboard' }).waitFor();
+
     assert.deepEqual(problems, []);
+  } catch (err) {
+    await page.screenshot({ path: path.join(shots, 'web-failure.png'), fullPage: true }).catch(() => {});
+    throw err;
   } finally {
     await browser.close();
     server.stop();
   }
 });
+
 
 test('exports two stores for a date range and downloads a correct CSV',{ timeout: 180000 }, async () => {
   const { context, page } = await launch();

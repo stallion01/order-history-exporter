@@ -76,3 +76,8 @@ function png(size) {
 const dir = path.join(__dirname, '..', 'icons');
 fs.mkdirSync(dir, { recursive: true });
 for (const size of [16, 32, 48, 128]) fs.writeFileSync(path.join(dir, `icon${size}.png`), png(size));
+
+// The same icon for the web app's home-screen install.
+const web = path.join(__dirname, '..', 'web', 'public');
+fs.mkdirSync(web, { recursive: true });
+for (const size of [192, 512]) fs.writeFileSync(path.join(web, `icon-${size}.png`), png(size));

@@ -344,7 +344,8 @@
     $('preview-wrap').hidden = true;
     $('preview-note').textContent = '';
     $('open-reports').hidden = false;
-    $('open-reports').href = `${client.base}/#token=${encodeURIComponent(databaseSettings().token)}`;
+    // The web app has its own sign-in; the token is only for syncing.
+    $('open-reports').href = `${client.base}/`;
   }
 
   function showResults({ stopped, undated, failures }) {

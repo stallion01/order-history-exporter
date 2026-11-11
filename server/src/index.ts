@@ -1,0 +1,56 @@
+// Starts Expense Hub. See the README for settings.
+import fs from 'node:fs';
+import path from 'node:path';
+import { buildApp } from './app';
+import { allowedHostsFor, fileTokenStore, loadConfig, networkAddresses } from './config';
+import { openDatabase } from './legacy';
+
+async function main() {
+  const config = loadConfig();
+  fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
+
+  const tokens = fileTokenStore(config.dataDir);
+  const db = openDatabase(path.join(config.dataDir, 'orders.db'));
+  const addresses = config.network ? networkAddresses() : [];
+  const app = buildApp({
+    db,
+    tokens,
+    allowedHosts: allowedHostsFor(config, addresses),
+    allowAnyClient: config.allowAnyClient,
+    webRoot: config.webRoot,
+    tls: config.tls,
+  });
+
+  try {
+    await app.listen({ host: config.host, port: config.port });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    console.error(code === 'EADDRINUSE' ? `Port ${config.port} is already in use. Is the server already running?` : err);
+    process.exit(1);
+  }
+
+  const scheme = config.tls ? 'https' : 'http';
+  const local = `${scheme}://127.0.0.1:${config.port}`;
+  const main = config.publicHost ? `https://${config.publicHost}` : addresses.length ? `${scheme}://${addresses[0]}:${config.port}` : local;
+  const setupNeeded = !db.raw.prepare('SELECT 1 FROM users LIMIT 1').get();
+  console.log('Expense Hub');
+  console.log(`  Database:     ${path.join(config.dataDir, 'orders.db')}`);
+  console.log(`  Web app:      ${main}`);
+  for (const address of addresses.slice(1)) console.log(`                ${scheme}://${address}:${config.port}`);
+  console.log(`  Access token: ${tokens.get()}  (for the Chrome extension${setupNeeded ? ', and as the setup code for your first sign-in' : ''})`);
+  if (!fs.existsSync(path.join(config.webRoot, 'index.html'))) console.warn('\nThe web app has not been built yet. Run: npm run build');
+  if (config.host !== '127.0.0.1' && config.host !== 'localhost' && !config.publicHost && !config.tls) {
+    console.warn('\nNETWORK MODE without HTTPS: anyone who can watch this network could read your');
+    console.warn('sign-in and data. Use it only on a network you trust, or put it behind Tailscale.');
+  }
+
+  const shutDown = async () => {
+    await app.close();
+    db.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutDown);
+  process.on('SIGTERM', shutDown);
+}
+
+main();

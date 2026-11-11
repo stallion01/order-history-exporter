@@ -1,0 +1,22 @@
+[Unit]
+Description=Expense Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=expense-hub
+Group=expense-hub
+WorkingDirectory=/opt/expense-hub
+EnvironmentFile=/etc/expense-hub/env
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/dist/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/expense-hub
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

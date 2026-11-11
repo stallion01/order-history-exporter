@@ -4,6 +4,8 @@ test-results/
 *-diagnostic.html
 e2e-results.png
 server/data/
+server/dist/
+web/dist/
 *.db
 *.db-wal
 *.db-shm

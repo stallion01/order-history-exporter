@@ -1,6 +1,11 @@
-# Order History Exporter
+# Expense Hub and Order History Exporter
 
-A free, open-source Chrome extension that collects your own purchase history from online stores into a database on your own machine, with a reports page and CSV downloads. Repeat runs read only what's new or missing. It can also export straight to a CSV file with no database.
+A free, open-source way to keep your business expenses on your own server:
+
+- **Expense Hub** is a web app you host yourself, for example on Proxmox, and use from a computer or phone. It has a dashboard, orders, items with categories, and tax groups for your CPA, behind a sign-in with optional two-factor authentication.
+- **The Order History Exporter** Chrome extension collects your own purchase history from online stores into Expense Hub. Repeat runs read only what's new or missing. It can also export straight to a CSV file with no server.
+
+Coming next: bank and credit card feeds (SimpleFIN, plus CSV and QFX import and export), receipt photos, matching charges to orders and receipts, and an annual CPA package.
 
 | Store | How it reads orders | Tested against live pages? |
 | --- | --- | --- |
@@ -18,7 +23,8 @@ A free, open-source Chrome extension that collects your own purchase history fro
 - Your orders are read in your own browser, using the accounts you're already signed in to.
 - There are no analytics or tracking, and no service run by this project. Your orders only go to the database server you set up, if you use one.
 - It never sees your password. If a store asks you to sign in, you do that yourself on the store's page.
-- The database holds your purchases, delivery addresses and the last four digits of your cards, unencrypted, so keep it somewhere private. It lives in `server/data/`, which git ignores.
+- The database holds your purchases, delivery addresses and the last four digits of your cards, unencrypted, so keep it somewhere private. It lives in `server/data/` (or `/var/lib/expense-hub` on Proxmox), which git ignores.
+- The web app needs a sign-in. Passwords are stored as scrypt hashes, sessions are stored hashed, and every change is written to an audit log. The extension's access token can only sync orders, not read reports.
 - In CSV-only mode, order data stays in memory until you close the page or download the file.
 
 ## Install
@@ -30,26 +36,66 @@ The extension isn't on the Chrome Web Store, so you load it from this folder:
 3. Click **Load unpacked** and select the repository folder (the one containing `manifest.json`).
 4. Pin the extension and click its icon to open the exporter.
 
-## Set up the database
+## Set up Expense Hub
 
-The database is [SQLite](https://sqlite.org): a single file, with no database software to install or administer. A small server that comes with this project looks after it and serves the reports page. It needs [Node.js](https://nodejs.org) 22.13 or newer and has no other dependencies.
+The database is [SQLite](https://sqlite.org): a single file, with no database software to install or administer. Expense Hub's server looks after it and serves the web app. It needs [Node.js](https://nodejs.org) 22.13 or newer.
+
+### On Proxmox (recommended)
+
+On the Proxmox host, as root, download and run the installer. It creates a Debian 12 container with Expense Hub, a service that starts with the container, and nightly database backups:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stallion01/order-history-exporter/main/deploy/proxmox/install.sh -o install.sh
+```
+
+```bash
+bash install.sh
+```
+
+Optional settings are listed at the top of the script, such as `CTID`, `STORAGE` and `BRIDGE`. To bring across a database from an earlier install, copy its `orders.db` and `token` into a folder on the host and run `IMPORT_DIR=/root/import bash install.sh`.
+
+Then turn on private access with [Tailscale](https://tailscale.com). It's free for personal use, puts the app on your own devices only, and gives it a real HTTPS address. Your tailnet needs MagicDNS and HTTPS certificates turned on in the Tailscale admin console, under DNS. Replace `CTID` with the container's number:
+
+```bash
+pct exec CTID -- bash /opt/expense-hub/deploy/proxmox/enable-tailscale.sh
+```
+
+Install the Tailscale app on your phone and computers, and open the `https://` address it prints. Expense Hub isn't reachable from the internet.
+
+To update later:
+
+```bash
+pct exec CTID -- bash /opt/expense-hub/deploy/proxmox/update.sh
+```
+
+### On this computer
+
+```bash
+npm install
+```
 
 ```bash
 npm run server
 ```
 
-The server prints its address and an **access token**. It must be running while you sync or view reports. Then, in the extension:
+### First sign-in
+
+The server prints an **access token**. Open the web app, enter that token as the setup code, and create your account. Then turn on two-factor sign-in under **Settings**.
+
+### Connecting the extension
+
+**Settings** in the web app shows the server address and access token. In the extension:
 
 1. Reload it at `chrome://extensions` if you've just updated it, so Chrome grants its permissions.
 2. Under **Save to**, choose **Database**, and enter the server address and token.
-3. Press **Test connection**.
+3. Press **Test connection**. For a Tailscale address, Chrome asks to allow it.
 
 ## Use
 
 1. Choose the stores and the period.
 2. Click **Start export**. A separate browser window opens and steps through your order pages. You can leave it running in the background, but don't close it.
 3. If a store asks you to sign in, enter a code sent by text or email, or complete a security check, do it in that window and press **Continue**. The extension can't do these for you or skip them.
-4. Press **Open reports**, or go to the server's address.
+4. Press **Open reports**, or open Expense Hub.
 
 Pages load one at a time with a pause between them, so a first run over a large history takes a while. Orders are saved as they're read, so you can stop at any time and carry on later. Turning off **Open each order** is much faster, but you lose item prices, tax, shipping, payment method and delivery address until a later run with it on.
 
@@ -62,15 +108,17 @@ Pages load one at a time with a pause between them, so a first run over a large 
 
 Everything else is skipped. To read a period again regardless, for example after a store's parser is improved, tick **Re-read everything in this period**. Existing values are never blanked by a later read.
 
-### Reports
+### The web app
 
-The reports page has three tabs, all filtered by period, store, category, delivery ZIP, payment method or text. Click a column heading to sort by it.
+Expense Hub works on a computer or a phone. On a phone, use your browser's **Add to Home Screen** to open it like an app. Pages are filtered by period, store, category, delivery ZIP, payment method or text, and filters stay in the address so a view can be bookmarked. Click a column heading to sort by it.
 
-- **Overview:** total spending, tax, spending by month, category, store, payment method and delivery ZIP, your most-bought items, a list of orders, and each store's sync status.
-- **Items:** every purchased item, sortable by category, ZIP, amount and more, where you can correct its category or mark it business or personal.
+- **Dashboard:** total spending, tax, spending by month, category, store, payment method and delivery ZIP, your most-bought items, and each store's sync status.
+- **Orders:** every synced order.
+- **Items:** every purchased item, where you can correct its category or mark it business or personal.
 - **Tax groups:** business purchases grouped by form line. See below.
+- **Settings:** two-factor sign-in, your password, and the extension's address and token.
 
-Each tab has CSV downloads for what it's showing.
+Each page has CSV downloads for what it's showing.
 
 Money figures add up each order's total, and returns count as negatives. An item's amount is its share of what the order actually cost, including tax and shipping, so items add up to the order total. If an order has no item prices yet, its total is split evenly and marked as an estimate. Totals assume a single currency.
 
@@ -98,22 +146,22 @@ Things to raise with your preparer:
 - Business meals are usually only 50% deductible, and fuel can't be claimed alongside the standard mileage rate. Amounts are shown in full.
 - Partial business use isn't handled: an item counts entirely as business or not at all.
 
-### Running the database on your network
+### Other ways to reach it on your network
 
-SQLite is a file rather than a network service, so this project's server is what other computers connect to. To serve your network from this computer, or from a Linux box:
+Tailscale is the recommended way. Without it, the server can also serve your local network directly from this computer or a Linux box:
 
 ```bash
 npm run server:network
 ```
 
-It prints a **Server URL** with this machine's network address. Put that URL and the access token into the extension on any computer, and press **Test connection**. Chrome will ask to allow that address. Open the same URL in a browser for the reports page. If other computers can't connect, your firewall may need to allow the port (8787 by default).
+It prints a **Web app** address with this machine's network address. If other computers can't connect, your firewall may need to allow the port (8787 by default).
 
 Only one server should use the database file at a time. Don't put it in a shared folder for several servers to open, because SQLite isn't safe to use that way over network file shares.
 
 **Security on a network:**
 
-- Every request needs the access token, and connections from public internet addresses are refused unless you set `OHE_ALLOW_PUBLIC_CLIENTS=1`.
-- **The connection isn't encrypted by default.** Anyone who can watch traffic on that network could read your token and orders, so use it only on a network you trust, such as your home network and not public Wi-Fi.
+- Every request needs a sign-in or the access token, and connections from public internet addresses are refused unless you set `OHE_ALLOW_PUBLIC_CLIENTS=1`.
+- **The connection isn't encrypted by default.** Anyone who can watch traffic on that network could read your password, token and orders, so use it only on a network you trust, such as your home network and not public Wi-Fi.
 - For encryption, set `OHE_TLS_CERT` and `OHE_TLS_KEY` to certificate files that your computers trust, use an SSH tunnel, or use an HTTPS reverse proxy.
 - Never forward this port from your router to the internet.
 
@@ -125,7 +173,7 @@ ssh -N -L 8787:127.0.0.1:8787 you@your-server
 
 With an HTTPS reverse proxy such as Caddy or nginx, set `OHE_PUBLIC_HOST` to its host name and use the `https://` address in the extension.
 
-To set it up on Linux, install Node.js 22.13 or newer and copy this repository across. Stop the server on your PC before copying `server/data/`. `deploy/order-history-server.service` is a systemd service with install steps at the top. The settings are environment variables:
+On Linux without Proxmox, follow `deploy/proxmox/setup-in-container.sh` by hand: it installs Node.js, builds the app, and installs `deploy/expense-hub.service` and the backup timer. The settings are environment variables, kept in `/etc/expense-hub/env` on Proxmox:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -138,7 +186,9 @@ To set it up on Linux, install Node.js 22.13 or newer and copy this repository a
 
 ### Backups
 
-Stop the server and copy the `server/data/` folder. Upgrades that change the database make their own copy first, as `orders.db.before-v2.bak` and so on. To change the token, delete `server/data/token` and restart.
+On Proxmox, a copy of the database is made every night into `/var/lib/expense-hub/backups`, and the last 14 are kept. Include the container in your Proxmox backups as well. On another machine, run `npm run backup -w server`, or stop the server and copy `server/data/`.
+
+Upgrades that change the database make their own copy first, named `orders.db.before-v3.bak` and so on. To replace the extension's token, use **Settings** in the web app.
 
 ### CSV only
 
@@ -194,7 +244,13 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The extension itself has no dependencies and no build step. `npm install` is only for the tests. See [CONTRIBUTING.md](CONTRIBUTING.md) to add a store.
+The extension has no dependencies and no build step. The server is TypeScript with Fastify, in `server/src`, and the web app is React, Vite and Tailwind, in `web/src`. `npm run build` builds both. To work on the web app with live reloading, run the server, then:
+
+```bash
+npm run dev -w web
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to add a store.
 
 ## Acknowledgements
 

@@ -9,20 +9,28 @@ const { DatabaseSync } = require('node:sqlite');
 
 const OHE = require('../server/core');
 const { openDatabase, SCHEMA_V1 } = require('../server/db');
-const { createApp, isPrivateAddress } = require('../server/app');
+const { buildApp } = require('../server/dist/app');
+const { isPrivateAddress } = require('../server/dist/security');
 const { createClassifier } = require('../server/categories');
 const { allocate } = require('../server/tax');
 
 const TOKEN = 'test-token';
 let dir;
 let db;
-let server;
+let app;
 let base;
+let cookie;
 
+// Calls the API as the signed-in owner, as the web app does.
 const call = (route, options = {}) =>
   fetch(`${base}${route}`, {
     ...options,
-    headers: { Authorization: `Bearer ${TOKEN}`, ...(options.headers || {}) },
+    headers: {
+      cookie,
+      'x-requested-with': 'expense-hub',
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
   });
 const post = async (route, body) => (await call(route, { method: 'POST', body: JSON.stringify(body) })).json();
 const get = async (route) => (await call(route)).json();
@@ -30,17 +38,20 @@ const get = async (route) => (await call(route)).json();
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ohe-test-'));
   db = openDatabase(path.join(dir, 'orders.db'));
-  server = createApp({ db, token: TOKEN, allowedHosts: [] });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  base = `http://127.0.0.1:${server.address().port}`;
-  server.removeAllListeners('request');
-  const real = createApp({ db, token: TOKEN, allowedHosts: [`127.0.0.1:${server.address().port}`] });
-  server.on('request', (req, res) => real.emit('request', req, res));
+  app = buildApp({ db, tokens: { get: () => TOKEN, rotate: () => TOKEN }, allowedHosts: (host) => host.startsWith('127.0.0.1:') });
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  base = `http://127.0.0.1:${app.server.address().port}`;
+  const setup = await fetch(`${base}/api/auth/setup`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-requested-with': 'expense-hub' },
+    body: JSON.stringify({ setupCode: TOKEN, username: 'owner', password: 'a long test password' }),
+  });
+  assert.equal(setup.status, 200);
+  cookie = setup.headers.get('set-cookie').split(';')[0];
 });
 
-after(() => {
-  server.close();
-  server.closeAllConnections();
+after(async () => {
+  await app.close();
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -78,12 +89,26 @@ test('mergeRanges joins overlapping and touching ranges only', () => {
   );
 });
 
-test('API needs the token, and only answers on allowed addresses', async () => {
+test('reports need a session, the token only syncs, and only allowed addresses answer', async () => {
+  const bearer = (value) => ({ headers: { Authorization: `Bearer ${value}` } });
   assert.equal((await fetch(`${base}/api/status`)).status, 401);
-  assert.equal((await fetch(`${base}/api/status`, { headers: { Authorization: 'Bearer wrong' } })).status, 401);
   assert.equal((await fetch(`${base}/api/export.csv`)).status, 401);
+  assert.equal((await fetch(`${base}/api/status`, bearer(TOKEN))).status, 403, 'the extension token cannot read reports');
+  assert.equal((await fetch(`${base}/api/settings/token`, bearer(TOKEN))).status, 403);
+  assert.equal((await fetch(`${base}/api/health`, bearer(TOKEN))).status, 200);
+  assert.equal((await fetch(`${base}/api/sync/plan?store=amazon`, bearer(TOKEN))).status, 200);
+  assert.equal((await fetch(`${base}/api/health`, bearer('wrong'))).status, 401);
+  assert.equal((await fetch(`${base}/api/health`)).status, 401);
   assert.equal((await call('/api/status')).status, 200);
-  assert.equal((await fetch(`${base}/`)).status, 200);
+  assert.equal((await fetch(`${base}/`)).status, 503, 'no web app is built into this test server');
+
+  // A signed-in change without the app's header is refused, so other sites can't forge one.
+  const forged = await fetch(`${base}/api/tax/rules`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ field: 'zip', value: '1', status: 'business' }),
+  });
+  assert.equal(forged.status, 403);
 
   const http = require('node:http');
   const status = await new Promise((resolve, reject) => {
@@ -103,7 +128,9 @@ test('rejects bad input, and search text cannot alter the query', async () => {
   assert.equal((await call('/api/orders', { method: 'POST', body: '{nope' })).status, 400);
   const injected = await get(`/api/orders?q=${encodeURIComponent("' OR 1=1 --")}`);
   assert.equal(injected.total, 0);
-  assert.equal((await call('/../db.js')).status, 404);
+  const traversal = await call('/../db.js');
+  assert.notEqual(traversal.status, 200);
+  assert.ok(!(await traversal.text()).includes('openDatabase'), 'server files are never served');
 });
 
 test('saving keeps known values, and list pages do not thin out detailed items', async () => {
@@ -283,12 +310,12 @@ test('private address check lets in local networks only', () => {
   }
 });
 
-test('network mode: reachable by LAN address, public clients refused, HTTPS works', async () => {
+test('network mode: reachable by LAN address, and public clients refused', async () => {
   const lan = Object.values(os.networkInterfaces()).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
   const netDb = openDatabase(path.join(dir, 'net.db'));
-  const net = createApp({ db: netDb, token: TOKEN, allowedHosts: () => true });
-  await new Promise((resolve) => net.listen(0, '0.0.0.0', resolve));
-  const { port } = net.address();
+  const net = buildApp({ db: netDb, tokens: { get: () => TOKEN, rotate: () => TOKEN }, allowedHosts: () => true });
+  await net.listen({ port: 0, host: '0.0.0.0' });
+  const { port } = net.server.address();
   try {
     if (lan && isPrivateAddress(lan.address)) {
       const response = await fetch(`http://${lan.address}:${port}/api/health`, { headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -296,13 +323,16 @@ test('network mode: reachable by LAN address, public clients refused, HTTPS work
       assert.equal((await fetch(`http://${lan.address}:${port}/api/health`)).status, 401, 'network mode still needs the token');
     }
     // A public address is refused, even with the right token.
-    const res = { writeHead(code) { this.code = code; }, end() { this.done(); }, headersSent: false };
-    const refused = new Promise((resolve) => { res.done = () => resolve(res.code); });
-    net.emit('request', { url: '/api/health', method: 'GET', headers: { host: 'x', authorization: `Bearer ${TOKEN}` }, socket: { remoteAddress: '8.8.8.8' } }, res);
-    assert.equal(await refused, 403);
+    const refused = await net.inject({ method: 'GET', url: '/api/health', remoteAddress: '8.8.8.8', headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.equal(refused.statusCode, 403);
+    // A proxy elsewhere can't pretend the request came from this network.
+    const spoofed = await net.inject({ method: 'GET', url: '/api/health', remoteAddress: '8.8.8.8', headers: { authorization: `Bearer ${TOKEN}`, 'x-forwarded-for': '192.168.1.5' } });
+    assert.equal(spoofed.statusCode, 403);
+    // A proxy on this machine, such as Tailscale's, is trusted to pass on the client.
+    const proxied = await net.inject({ method: 'GET', url: '/api/health', remoteAddress: '127.0.0.1', headers: { authorization: `Bearer ${TOKEN}`, 'x-forwarded-for': '100.101.102.103' } });
+    assert.equal(proxied.statusCode, 200);
   } finally {
-    net.close();
-    net.closeAllConnections();
+    await net.close();
     netDb.close();
   }
 });
@@ -431,14 +461,14 @@ test('upgrading an older database keeps its orders, backs it up, and queues miss
 
   const upgraded = openDatabase(file);
   assert.equal(upgraded.listOrders({}).total, 3);
-  assert.ok(fs.existsSync(`${file}.before-v2.bak`), 'a backup was made first');
+  assert.ok(fs.existsSync(`${file}.before-v3.bak`), 'a backup was made first');
   const pending = upgraded.syncPlan('samsclub', { from: null, to: null }).pendingDetails.map((o) => o.orderId);
   assert.deepEqual(pending, ['NOPRICE'], 'only orders missing prices are read again');
   assert.equal(upgraded.syncPlan('amazon', { from: null, to: null }).pendingDetails.length, 0);
   assert.ok(upgraded.categoryList().some((c) => c.name === 'Cleaning Supplies'));
   upgraded.close();
 
-  const backup = new DatabaseSync(`${file}.before-v2.bak`, { readOnly: true });
+  const backup = new DatabaseSync(`${file}.before-v3.bak`, { readOnly: true });
   assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 3);
   backup.close();
 });

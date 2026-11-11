@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -106,6 +106,37 @@ const SCHEMA_V2 = `
   );
 `;
 
+// Sign-in and an audit trail for the web app. Session ids are stored hashed, so a
+// copy of the database can't be used to sign in.
+const SCHEMA_V3 = `
+  CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    totp_secret TEXT,
+    totp_pending TEXT,
+    totp_last_step INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE sessions (
+    id_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    user_agent TEXT
+  );
+
+  CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    username TEXT,
+    action TEXT NOT NULL,
+    detail TEXT
+  );
+`;
+
 // Whitelisted so request data can never choose a column name.
 const ORDER_COLUMNS = {
   storeName: 'store_name',
@@ -181,6 +212,7 @@ function migrate(db, file) {
                  SELECT 1 FROM items i WHERE i.store = orders.store AND i.order_id = orders.order_id AND i.price IS NOT NULL
                )`);
     }
+    if (version < 3) db.exec(SCHEMA_V3);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
@@ -720,6 +752,8 @@ function openDatabase(file) {
     deleteTaxRule,
     markItems,
     taxReport,
+    // For the web app's own tables (users, sessions, audit log).
+    raw: db,
     close: () => db.close(),
   };
 }

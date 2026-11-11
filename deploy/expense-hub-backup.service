@@ -1,0 +1,15 @@
+[Unit]
+Description=Back up the Expense Hub database
+
+[Service]
+Type=oneshot
+User=expense-hub
+Group=expense-hub
+WorkingDirectory=/opt/expense-hub
+EnvironmentFile=/etc/expense-hub/env
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/dist/backup.js
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/expense-hub
+UMask=0077

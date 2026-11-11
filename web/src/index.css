@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+/* Chart colours, validated for colour-blind separation and contrast in each mode. */
+@theme {
+  --color-bar: #2a78d6;
+  --color-bar-hover: #1c5cab;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bar: #3987e5;
+    --color-bar-hover: #6aa6ee;
+  }
+}
+
+html { color-scheme: light dark; }
+body { @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100; }
+
+/* Room for the phone's home indicator under the bottom tab bar. */
+.safe-bottom { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
+
+:focus-visible { @apply outline-2 outline-offset-2 outline-emerald-600; }
