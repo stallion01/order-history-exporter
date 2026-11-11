@@ -31,7 +31,12 @@ export interface Account {
   sources: Source[];
 }
 
+export type ImportOutcome = 'added' | 'merged' | 'skipped';
+export const IMPORT_OUTCOMES: ImportOutcome[] = ['added', 'merged', 'skipped'];
+
 export interface ImportSummary {
+  // The import's id in the history, for listing its transactions (null for a preview).
+  importId: number | null;
   added: number;
   merged: number;
   skipped: number;
@@ -52,6 +57,9 @@ export interface TxFilters {
   direction?: 'in' | 'out' | null;
   q?: string | null;
   review?: boolean;
+  // Only the transactions one import added, matched or found already there.
+  importId?: number | null;
+  importOutcome?: ImportOutcome | null;
 }
 
 export const NO_CATEGORY = 'none';
@@ -343,7 +351,7 @@ export function createBankStore(db: DatabaseSync) {
   ): ImportSummary {
     if (!account(accountId)) throw new Error('That account no longer exists.');
     return transaction(() => {
-      const summary: ImportSummary = { added: 0, merged: 0, skipped: 0, transfers: 0, firstDate: null, lastDate: null, examples: [] };
+      const summary: ImportSummary = { importId: null, added: 0, merged: 0, skipped: 0, transfers: 0, firstDate: null, lastDate: null, examples: [] };
       const findSource = db.prepare('SELECT transaction_id FROM bank_tx_sources WHERE account_id = ? AND source = ? AND external_id = ?');
       const addSource = db.prepare('INSERT OR IGNORE INTO bank_tx_sources (account_id, source, external_id, transaction_id) VALUES (?, ?, ?, ?)');
       const exported = db.prepare('SELECT id FROM bank_transactions WHERE id = ? AND account_id = ?');
@@ -358,6 +366,7 @@ export function createBankStore(db: DatabaseSync) {
       const shift = (date: string, days: number) => new Date((dayNumber(date) + days) * DAY_MS).toISOString().slice(0, 10);
       const seen = new Map<string, number>();
       const added: number[] = [];
+      const outcomes: [number, ImportOutcome][] = [];
 
       for (const tx of incoming) {
         const description = tx.description.replace(/\s+/g, ' ').trim().slice(0, 500) || 'Transaction';
@@ -371,7 +380,9 @@ export function createBankStore(db: DatabaseSync) {
 
         // A file this app exported, being loaded back in.
         const ownId = source === 'ofx' ? fitIdToTransaction(externalId) : null;
-        if ((ownId && exported.get(ownId, accountId)) || findSource.get(accountId, source, externalId)) {
+        const already = (ownId ? (exported.get(ownId, accountId) as Row | undefined)?.id : null) ?? (findSource.get(accountId, source, externalId) as Row | undefined)?.transaction_id;
+        if (already) {
+          outcomes.push([already, 'skipped']);
           summary.skipped++;
           continue;
         }
@@ -386,6 +397,7 @@ export function createBankStore(db: DatabaseSync) {
           const day = dayNumber(tx.posted);
           const best = matches.reduce((a, b) => (Math.abs(dayNumber(b.posted) - day) < Math.abs(dayNumber(a.posted) - day) ? b : a));
           addSource.run(accountId, source, externalId, best.id);
+          outcomes.push([best.id, 'merged']);
           summary.merged++;
           continue;
         }
@@ -393,6 +405,7 @@ export function createBankStore(db: DatabaseSync) {
         const id = Number(insert.run(accountId, tx.posted, Math.round(tx.amount * 100) / 100, description, payee, tx.memo ? String(tx.memo).slice(0, 500) : null, now(), now()).lastInsertRowid);
         addSource.run(accountId, source, externalId, id);
         added.push(id);
+        outcomes.push([id, 'added']);
         summary.added++;
         if (summary.examples.length < 5) summary.examples.push({ posted: tx.posted, amount: tx.amount, description, payee });
       }
@@ -402,20 +415,29 @@ export function createBankStore(db: DatabaseSync) {
       // Daily syncs that found nothing new aren't worth a line in the history.
       const quiet = source === 'simplefin' && !summary.added && !summary.merged;
       if (!options.dryRun && !quiet) {
-        db.prepare(
-          'INSERT INTO bank_imports (at, username, source, file_name, account_id, added, merged, skipped, first_date, last_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(now(), options.username ?? null, source, options.fileName ?? null, accountId, summary.added, summary.merged, summary.skipped, summary.firstDate, summary.lastDate);
+        const importId = Number(
+          db
+            .prepare(
+              'INSERT INTO bank_imports (at, username, source, file_name, account_id, added, merged, skipped, first_date, last_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            )
+            .run(now(), options.username ?? null, source, options.fileName ?? null, accountId, summary.added, summary.merged, summary.skipped, summary.firstDate, summary.lastDate).lastInsertRowid
+        );
+        // Which transactions this import touched, so its result can be listed.
+        const remember = db.prepare('INSERT OR IGNORE INTO bank_import_rows (import_id, transaction_id, outcome) VALUES (?, ?, ?)');
+        for (const [txId, outcome] of outcomes) remember.run(importId, txId, outcome);
+        summary.importId = importId;
       }
       return summary;
     }, Boolean(options.dryRun));
   }
 
-  const imports = (limit = 20) =>
+  const imports = (limit = 20, id: number | null = null) =>
     db
       .prepare(
-        `SELECT i.*, a.name AS account_name FROM bank_imports i LEFT JOIN bank_accounts a ON a.id = i.account_id ORDER BY i.id DESC LIMIT ?`
+        `SELECT i.*, a.name AS account_name FROM bank_imports i LEFT JOIN bank_accounts a ON a.id = i.account_id
+         ${id === null ? '' : 'WHERE i.id = ?'} ORDER BY i.id DESC LIMIT ?`
       )
-      .all(limit)
+      .all(...(id === null ? [limit] : [id, limit]))
       .map((r) => {
         const row = r as Row;
         return {
@@ -429,8 +451,10 @@ export function createBankStore(db: DatabaseSync) {
           skipped: row.skipped,
           firstDate: row.first_date,
           lastDate: row.last_date,
+          accountId: row.account_id,
         };
       });
+  const importById = (id: number) => imports(1, id)[0] ?? null;
 
   /* ---------- CSV layouts ---------- */
 
@@ -488,6 +512,10 @@ export function createBankStore(db: DatabaseSync) {
       const like = `%${filters.q.replace(/[\\%_]/g, '\\$&')}%`;
       clauses.push(`(t.description LIKE ? ESCAPE '\\' OR t.payee LIKE ? ESCAPE '\\' OR t.memo LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\')`);
       params.push(like, like, like, like);
+    }
+    if (filters.importId) {
+      clauses.push(`EXISTS (SELECT 1 FROM bank_import_rows r WHERE r.transaction_id = t.id AND r.import_id = ?${filters.importOutcome ? ' AND r.outcome = ?' : ''})`);
+      params.push(filters.importId, ...(filters.importOutcome ? [filters.importOutcome] : []));
     }
     if (filters.review) {
       // Needs a decision: no business/personal status, or no category (store charges
@@ -625,6 +653,7 @@ export function createBankStore(db: DatabaseSync) {
     detectTransfers,
     importTransactions,
     imports,
+    importById,
     csvLayout,
     saveCsvLayout,
     listTransactions,

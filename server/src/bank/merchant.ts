@@ -3,6 +3,7 @@
 
 // Well-known merchants, whose descriptions vary a lot between banks.
 const KNOWN: [RegExp, string][] = [
+  [/payment\s*-?\s*thank you|thank you for your payment|autopay payment|^(online|mobile|electronic)? ?payment received/i, 'Card payment'],
   [/\bamzn\b|amazon(?!\s*web)|amazon\.com|amzn mktp/i, 'Amazon'],
   [/amazon web services|\baws\b/i, 'Amazon Web Services'],
   [/\bebay\b/i, 'eBay'],

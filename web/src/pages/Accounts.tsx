@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Download, ExternalLink, Link2, RefreshCw, Trash2, Unplug, Upload } from 'lucide-react';
 import { download, post, useApi } from '../api';
-import { KIND_LABELS, OWNER_LABELS, SourceBadges, when } from '../bank';
+import { KIND_LABELS, OWNER_LABELS, SourceBadges, importLink, when } from '../bank';
 import type { Account, SimplefinStatus } from '../bank';
 import { money, plural, whole } from '../format';
 import { Banner, Button, Card, Confirm, Empty, Field, Input, Loading, PageHeader, Select, cx } from '../ui';
@@ -65,7 +65,9 @@ export function Accounts() {
                 {imports.data.imports.map((i) => (
                   <li key={i.id} className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
                     <span>
-                      <span className="font-medium">{i.fileName || i.source}</span>
+                      <Link to={importLink(i.id)} className="font-medium text-emerald-700 hover:underline dark:text-emerald-400">
+                        {i.fileName || i.source}
+                      </Link>
                       <span className="text-slate-500 dark:text-slate-400">
                         {' '}
                         into {i.account || 'a removed account'} · {when(i.at)}

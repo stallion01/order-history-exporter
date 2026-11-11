@@ -6,7 +6,8 @@ import { applyMapping, guessMapping, layoutSignature, readTable } from '../bank/
 import type { CsvMapping } from '../bank/csv';
 import { looksLikeOfx, parseOfx, writeOfx } from '../bank/ofx';
 import type { SimplefinService } from '../bank/simplefin';
-import type { BankStore, TxFilters } from '../bank/store';
+import { IMPORT_OUTCOMES } from '../bank/store';
+import type { BankStore, ImportOutcome, TxFilters } from '../bank/store';
 import { ACCOUNT_KINDS, OWNERS, TX_KINDS, TX_STATUSES } from '../bank/types';
 import { core } from '../legacy';
 import { HttpError, dateParam, queryOf } from '../params';
@@ -37,6 +38,10 @@ export function txFiltersFrom(query: Query): TxFilters {
   const status = query.get('status') || null;
   if (status && ![...TX_STATUSES, 'none'].includes(status as never)) throw new HttpError(400, 'Unknown status.');
   const direction = query.get('direction');
+  const importId = query.get('import') ? Number(query.get('import')) : null;
+  if (importId !== null && !Number.isInteger(importId)) throw new HttpError(400, 'Unknown import.');
+  const outcome = query.get('outcome') || null;
+  if (outcome && !IMPORT_OUTCOMES.includes(outcome as ImportOutcome)) throw new HttpError(400, 'Unknown outcome.');
   return {
     from: dateParam(query.get('from'), 'from'),
     to: dateParam(query.get('to'), 'to'),
@@ -48,6 +53,8 @@ export function txFiltersFrom(query: Query): TxFilters {
     direction: direction === 'in' || direction === 'out' ? direction : null,
     q: query.get('q') || null,
     review: query.get('review') === '1',
+    importId,
+    importOutcome: outcome as ImportOutcome | null,
   };
 }
 
@@ -315,6 +322,12 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
   });
 
   app.get('/api/bank/imports', async () => ({ imports: bank.imports() }));
+
+  app.get('/api/bank/imports/:id', async (request) => {
+    const found = bank.importById(Number((request.params as { id: string }).id));
+    if (!found) throw new HttpError(404, 'That import was not found.');
+    return found;
+  });
 
   /* ---------- Exporting ---------- */
 

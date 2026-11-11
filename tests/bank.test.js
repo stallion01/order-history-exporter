@@ -256,6 +256,20 @@ test('a card statement as QFX, then the same months as CSV: overlapping rows mer
   assert.deepEqual([result.added, result.merged, result.skipped], [3, 2, 0]);
   const again = await post('/api/bank/import', { content: CARD_CSV, accountId: cardId, mapping: inspect.mapping });
   assert.deepEqual([again.added, again.skipped], [0, 5]);
+
+  // An import's result lists only the transactions in that file, not the rest of the account.
+  const fromFile = async (id, extra = '') => (await get(`/api/bank/transactions?import=${id}&kind=all${extra}`)).transactions;
+  assert.equal((await get(`/api/bank/transactions?account=${cardId}&kind=all`)).total, 5);
+  const first = await fromFile(result.importId);
+  assert.equal(first.length, 5);
+  assert.deepEqual((await fromFile(result.importId, '&outcome=merged')).map((t) => t.payee).sort(), ['Adobe Creative Cloud', 'Card payment']);
+  assert.equal((await fromFile(result.importId, '&outcome=added')).length, 3);
+  assert.equal((await fromFile(again.importId, '&outcome=skipped')).length, 5);
+  assert.equal((await fromFile(card.importId)).length, 2, 'the QFX had only two');
+  assert.equal((await get(`/api/bank/imports/${result.importId}`)).fileName, 'card.csv');
+  assert.equal((await call('/api/bank/transactions?outcome=bogus')).status, 400);
+  const dry = await post('/api/bank/import', { content: CARD_CSV, accountId: cardId, mapping: inspect.mapping, dryRun: true });
+  assert.equal(dry.importId, null, 'a preview leaves no history');
   // The layout and account are remembered for this bank's next file.
   const remembered = await post('/api/bank/import/inspect', { content: CARD_CSV });
   assert.equal(remembered.remembered, true);

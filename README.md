@@ -205,7 +205,7 @@ On Linux without Proxmox, follow `deploy/proxmox/setup-in-container.sh` by hand:
 
 On Proxmox, a copy of the database is made every night into `/var/lib/expense-hub/backups`, and the last 14 are kept. Include the container in your Proxmox backups as well. On another machine, run `npm run backup -w server`, or stop the server and copy `server/data/`.
 
-Upgrades that change the database make their own copy first, named `orders.db.before-v5.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
+Upgrades that change the database make their own copy first, named `orders.db.before-v6.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
 
 ### CSV only
 

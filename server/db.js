@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -225,6 +225,18 @@ const SCHEMA_V5 = `
   );
 `;
 
+// Which transactions each import added, matched to ones already there, or skipped as
+// already imported, so an import's result can be listed.
+const SCHEMA_V6 = `
+  CREATE TABLE bank_import_rows (
+    import_id INTEGER NOT NULL REFERENCES bank_imports (id) ON DELETE CASCADE,
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    outcome TEXT NOT NULL,
+    PRIMARY KEY (import_id, transaction_id)
+  );
+  CREATE INDEX bank_import_rows_tx ON bank_import_rows (transaction_id);
+`;
+
 // Categories for bank and card spending that store orders don't cover.
 // name, Schedule C line, Schedule E line.
 const BANK_CATEGORIES = [
@@ -337,6 +349,7 @@ function migrate(db, file) {
       );
       for (const [name, c, e] of BANK_CATEGORIES) insert.run(name, c, e);
     }
+    if (version < 6) db.exec(SCHEMA_V6);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

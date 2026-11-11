@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileUp } from 'lucide-react';
 import { post, useApi } from '../api';
-import { Amount, KIND_LABELS, OWNER_LABELS } from '../bank';
+import { Amount, KIND_LABELS, OWNER_LABELS, importLink } from '../bank';
 import type { Account } from '../bank';
 import { money, plural, whole } from '../format';
 import { Banner, Button, Card, Field, Input, PageHeader, Select, TD, TH, TR } from '../ui';
@@ -43,6 +43,7 @@ type Inspect =
     };
 
 interface Summary {
+  importId: number | null;
   added: number;
   merged: number;
   skipped: number;
@@ -146,12 +147,43 @@ export function Import() {
       {error && <Banner>{error}</Banner>}
       {done && (
         <Banner tone="info">
-          Imported: {plural(done.added, 'new transaction')}, {whole(done.merged)} matched to ones already here, {whole(done.skipped)} already imported
-          {done.transfers ? `, ${plural(done.transfers, 'transfer')} found` : ''}.{' '}
-          <Link to={`/transactions?preset=all${done.accountId ? `&account=${done.accountId}` : ''}`} className="font-medium underline">
-            See them
-          </Link>{' '}
-          or <Link to="/review" className="font-medium underline">review what needs a decision</Link>.
+          <p>
+            Imported {done.added + done.merged + done.skipped} transactions from the file
+            {done.transfers ? `, and found ${plural(done.transfers, 'transfer')} between your accounts` : ''}:
+          </p>
+          <ul className="mt-1 list-disc pl-5">
+            {(
+              [
+                ['added', done.added, 'new'],
+                ['merged', done.merged, 'matched to ones already here'],
+                ['skipped', done.skipped, 'already imported before'],
+              ] as const
+            ).map(([outcome, count, label]) => (
+              <li key={outcome}>
+                {count && done.importId ? (
+                  <Link to={importLink(done.importId, outcome)} className="font-medium underline">
+                    {whole(count)} {label}
+                  </Link>
+                ) : (
+                  `${whole(count)} ${label}`
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1">
+            {done.importId && (
+              <>
+                <Link to={importLink(done.importId)} className="font-medium underline">
+                  See everything from this file
+                </Link>
+                , or{' '}
+              </>
+            )}
+            <Link to="/review" className="font-medium underline">
+              review what needs a decision
+            </Link>
+            .
+          </p>
         </Banner>
       )}
 

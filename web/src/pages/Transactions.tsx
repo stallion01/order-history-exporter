@@ -4,10 +4,11 @@ import { Link } from 'react-router-dom';
 import { Download, Search, Upload } from 'lucide-react';
 import { download, useApi } from '../api';
 import { BulkBar, TxRow } from '../bank';
+import { when } from '../bank';
 import type { Account, Transaction } from '../bank';
 import { PeriodFilter, useFilters } from '../filters';
 import type { Meta } from '../filters';
-import { money, whole } from '../format';
+import { money, plural, whole } from '../format';
 import { Banner, Button, Card, Empty, Field, Input, Loading, MultiSelect, PageHeader, Pager, Select, Stat } from '../ui';
 
 const PAGE = 50;
@@ -22,7 +23,7 @@ export function useBankQuery() {
     if (to) out.set('to', to);
     for (const y of years || []) out.append('years', y);
     for (const key of ['account', 'category']) for (const v of filters.values(key)) out.append(key, v);
-    for (const key of ['status', 'kind', 'direction', 'q']) if (filters.value(key)) out.set(key, filters.value(key));
+    for (const key of ['status', 'kind', 'direction', 'q', 'import', 'outcome']) if (filters.value(key)) out.set(key, filters.value(key));
     for (const [key, v] of Object.entries(extra)) out.set(key, String(v));
     return out.toString();
   };
@@ -110,6 +111,7 @@ export function Transactions({ meta }: { meta: Meta | null }) {
         </Field>
       </form>
 
+      {filters.value('import') && <ImportFilter id={filters.value('import')} outcome={filters.value('outcome')} onChange={(changes) => filters.set(changes)} />}
       {(list.error || error) && <Banner>{list.error?.message || error}</Banner>}
       {accounts.data && !accounts.data.accounts.length && (
         <Banner tone="info">
@@ -125,7 +127,7 @@ export function Transactions({ meta }: { meta: Meta | null }) {
         </div>
       )}
 
-      <Card title={data ? `${whole(data.total)} transactions` : 'Transactions'} padded={false}>
+      <Card title={data ? plural(data.total, 'transaction') : 'Transactions'} padded={false}>
         <BulkBar ids={selected} categories={categories} onDone={list.reload} />
         {!data && list.loading && <Loading />}
         {data && !data.transactions.length && <Empty>No transactions match these filters.</Empty>}
@@ -165,6 +167,48 @@ export function Transactions({ meta }: { meta: Meta | null }) {
         {data && <Pager offset={offset} pageSize={PAGE} total={data.total} onChange={(next) => filters.set({ page: String(next) })} />}
       </Card>
     </>
+  );
+}
+
+// Shown while the list is limited to one import's transactions.
+function ImportFilter({ id, outcome, onChange }: { id: string; outcome: string; onChange: (changes: Record<string, string>) => void }) {
+  const { data } = useApi<{ fileName: string | null; source: string; at: string; account: string | null; added: number; merged: number; skipped: number }>(`/api/bank/imports/${encodeURIComponent(id)}`);
+  const tabs: [string, string, number | undefined][] = [
+    ['', 'All', data ? data.added + data.merged + data.skipped : undefined],
+    ['added', 'New', data?.added],
+    ['merged', 'Matched', data?.merged],
+    ['skipped', 'Already there', data?.skipped],
+  ];
+  return (
+    <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm dark:border-emerald-900 dark:bg-emerald-950">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span>
+          Showing only transactions from <strong>{data ? data.fileName || 'a SimpleFIN update' : 'one import'}</strong>
+          {data ? ` into ${data.account || 'a removed account'}, ${when(data.at)}` : ''}.
+        </span>
+        <button type="button" className="font-medium text-emerald-800 underline dark:text-emerald-300" onClick={() => onChange({ import: '', outcome: '' })}>
+          Show all transactions
+        </button>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Which of this import's transactions">
+        {tabs.map(([value, label, count]) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={outcome === value}
+            onClick={() => onChange({ outcome: value })}
+            className={
+              outcome === value
+                ? 'rounded-full bg-emerald-700 px-3 py-1 text-xs font-medium text-white'
+                : 'rounded-full border border-emerald-300 bg-white px-3 py-1 text-xs font-medium text-emerald-900 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-slate-900 dark:text-emerald-100'
+            }
+          >
+            {label}
+            {count !== undefined ? ` (${whole(count)})` : ''}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

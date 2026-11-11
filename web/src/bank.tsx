@@ -56,6 +56,8 @@ export const OWNER_LABELS = { business: 'Business', personal: 'Personal', mixed:
 export const SOURCE_LABELS: Record<string, string> = { simplefin: 'SimpleFIN', ofx: 'OFX/QFX file', csv: 'CSV file' };
 const WHY: Record<string, string> = { user: 'your choice', rule: 'from a rule', payee: 'guessed from the payee', account: "from the account's owner", auto: 'found automatically' };
 
+export const importLink = (id: number, outcome?: 'added' | 'merged' | 'skipped') => `/transactions?preset=all&kind=all&import=${id}${outcome ? `&outcome=${outcome}` : ''}`;
+
 export const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'never');
 
 export function SourceBadges({ sources }: { sources: string[] }) {
