@@ -22,7 +22,8 @@ const PHONE_NAV = [...NAV.filter((n) => n.phone), { to: '/more', label: 'More', 
 export function Layout({ username, onSignOut, children }: { username: string; onSignOut: () => void; children: ReactNode }) {
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[15rem_1fr]">
-      <aside className="hidden border-r border-slate-200 bg-slate-900 text-slate-100 md:flex md:min-h-dvh md:flex-col dark:border-slate-800">
+      {/* Stays in place while the page scrolls; scrolls itself if the window is short. */}
+      <aside className="hidden border-r border-slate-200 bg-slate-900 text-slate-100 md:sticky md:top-0 md:flex md:h-dvh md:flex-col md:self-start md:overflow-y-auto dark:border-slate-800">
         <div className="flex items-center gap-2 px-5 py-5">
           <Wallet className="size-6 text-emerald-400" aria-hidden />
           <span className="text-lg font-semibold tracking-tight">Expense Hub</span>
