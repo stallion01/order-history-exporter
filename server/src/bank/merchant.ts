@@ -113,4 +113,6 @@ export function categoryHint(description: string, payee: string, amount: number)
 // Words that show money moving between the owner's own accounts.
 export const TRANSFER_WORDS = /transfer|xfer|\bpayment\b|\bpymt\b|\bpmt\b|autopay|auto pay|e-?payment|online banking|thank you|to (chk|sav|checking|savings)|from (chk|sav|checking|savings)|credit card|crd pmt|card payment/i;
 // A payment received on a card, from an account that may not be connected.
-export const CARD_PAYMENT_WORDS = /payment|thank you|autopay|auto pay|pymt|pmt/i;
+// The wording banks use for a card payment, not just the word "payment" (an "AIRBNB
+// PAYMENTS" deposit is income, not a card payment).
+export const CARD_PAYMENT_WORDS = /payment\s*-?\s*thank you|thank you for your payment|\bautopay\b|auto pay|\b(online|mobile|electronic|internet|web|ach|e-?)\s?payment\b(?!s)|payment received|^payment$|\bpymt\b|\bpmt\b/i;

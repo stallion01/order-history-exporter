@@ -27,7 +27,18 @@ export interface SpendLine {
   status: string | null;
   entityId: number | null;
   amount: number;
+  // Where it came from: the transaction, and the order item when split by item.
+  txId: number;
+  posted: string;
+  account: string;
+  payee: string;
+  description: string;
+  receiptId: number | null;
+  item: { store: string; orderId: string; name: string } | null;
+  share: number; // percent of the line for this entity
 }
+
+type ItemLine = { category: string; status: string | null; amount: number; item: SpendLine['item'] };
 
 // Charges (each a negative amount in cents, as a positive number) that add up to a
 // total, smallest groups first. Stops once two answers are found: only a single
@@ -118,19 +129,24 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
   // A linked charge's spending, item by item: each item's share of the order,
   // scaled to the part of the charge that paid for that order.
   function itemLines(links: Row[], items: Map<string, Row[]>) {
-    const lines: { category: string; status: string | null; amount: number }[] = [];
+    const lines: ItemLine[] = [];
     let covered = 0;
     for (const link of links) {
       const own = items.get(orderKey(link.store, link.order_id)) || [];
       const sum = own.reduce((t, i) => t + (typeof i.amount === 'number' ? i.amount : 0), 0);
       covered += link.amount;
       if (sum <= 0) {
-        lines.push({ category: '', status: null, amount: link.amount });
+        lines.push({ category: '', status: null, amount: link.amount, item: null });
         continue;
       }
       for (const item of own) {
         if (typeof item.amount !== 'number' || !item.amount) continue;
-        lines.push({ category: item.category, status: item.status === 'business' || item.status === 'personal' ? item.status : null, amount: (item.amount / sum) * link.amount });
+        lines.push({
+          category: item.category,
+          status: item.status === 'business' || item.status === 'personal' ? item.status : null,
+          amount: (item.amount / sum) * link.amount,
+          item: { store: link.store, orderId: link.order_id, name: item.name },
+        });
       }
     }
     return { lines, covered };
@@ -328,20 +344,21 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
     const out: SpendLine[] = [];
     for (const tx of transactions) {
       const amount = -tx.amount;
-      let lines: { category: string; status: string | null; amount: number }[];
+      let lines: ItemLine[];
       const own = byTx.get(tx.id);
       // A category the user chose for the whole charge wins over the order's items.
       if (own && tx.categorySource !== 'user') {
         const split = itemLines(own, items);
-        lines = split.lines.map((l) => ({ category: l.category || tx.category || 'Uncategorized', status: l.status ?? tx.status, amount: l.amount }));
+        lines = split.lines.map((l) => ({ ...l, category: l.category || tx.category || 'Uncategorized', status: l.status ?? tx.status }));
         const rest = amount - split.covered;
-        if (rest > 0.004) lines.push({ category: tx.category || 'Uncategorized', status: tx.status, amount: rest });
+        if (rest > 0.004) lines.push({ category: tx.category || 'Uncategorized', status: tx.status, amount: rest, item: null });
       } else {
-        lines = [{ category: tx.category || 'Uncategorized', status: tx.status, amount }];
+        lines = [{ category: tx.category || 'Uncategorized', status: tx.status, amount, item: null }];
       }
       const shares: Share[] = tx.shares.length ? tx.shares : [{ entityId: tx.entityId as number, percent: 100 }];
+      const about = { txId: tx.id, posted: tx.posted, account: tx.account, payee: tx.payee || tx.description, description: tx.description, receiptId: tx.receiptId };
       for (const line of lines) {
-        for (const share of shares) out.push({ ...line, entityId: share.entityId ?? null, amount: (line.amount * share.percent) / 100 });
+        for (const share of shares) out.push({ ...line, ...about, entityId: share.entityId ?? null, share: share.percent, amount: (line.amount * share.percent) / 100 });
       }
     }
     return out;
@@ -399,6 +416,7 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
     orderSuggestions,
     chargesFor,
     spending,
+    spendLines,
     splitOf,
     refreshLinked,
   };

@@ -1,7 +1,7 @@
 // The app frame: a sidebar on wide screens, a tab bar along the bottom on phones.
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { ArrowLeftRight, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, Upload, Wallet } from 'lucide-react';
+import { ArrowLeftRight, FileCheck2, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, Upload, Wallet } from 'lucide-react';
 import { cx } from './ui';
 
 export const NAV = [
@@ -14,6 +14,7 @@ export const NAV = [
   { to: '/orders', label: 'Orders', icon: Package },
   { to: '/items', label: 'Items', icon: Tags },
   { to: '/tax', label: 'Tax groups', icon: FileSpreadsheet },
+  { to: '/year-end', label: 'Year end', icon: FileCheck2 },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 // On phones, the pages without a tab of their own are under More.

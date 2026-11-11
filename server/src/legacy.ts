@@ -36,9 +36,9 @@ export interface OrdersDb {
   listItems(filters: Partial<Filters>, options?: SortPage): { total: number; amount: number; items: Any[] };
   enrichedItems(filters: Partial<Filters>): Any[];
   status(): Any;
-  categoryList(): { name: string; scheduleC: string | null; scheduleE: string | null }[];
+  categoryList(): { name: string; scheduleC: string | null; scheduleE: string | null; expenseClass: 'opex' | 'cogs' }[];
   setItemCategory(name: string, category: string | null): void;
-  saveCategory(category: { name: string; scheduleC: string | null; scheduleE: string | null }): void;
+  saveCategory(category: { name: string; scheduleC: string | null; scheduleE: string | null; expenseClass?: 'opex' | 'cogs' | null }): void;
   taxRules(): { id: number; field: string; value: string; status: string }[];
   saveTaxRule(rule: { field: string; value: string; status: string }): void;
   deleteTaxRule(id: number): void;

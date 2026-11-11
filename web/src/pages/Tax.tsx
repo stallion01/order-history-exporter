@@ -256,7 +256,7 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
         </Card>
 
         <Card title={`Category to ${forms[form]?.name || ''} line`} padded={false}>
-          <p className="px-4 pt-3 text-xs text-slate-500">Suggestions only. Change them to match how your preparer files.</p>
+          <p className="px-4 pt-3 text-xs text-slate-500">Suggestions only. Change them to match how your preparer files. "Cost of goods sold" is for things bought to resell or to make products from.</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <tbody>
@@ -271,6 +271,19 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
                             {line}: {label}
                           </option>
                         ))}
+                      </Select>
+                    </td>
+                    <td className={TD}>
+                      <Select
+                        aria-label={`Kind of cost for ${category.name}`}
+                        value={category.expenseClass || 'opex'}
+                        onChange={(e) => act(async () => {
+                          await post('/api/categories', { ...category, expenseClass: e.target.value });
+                          onMetaChange();
+                        })}
+                      >
+                        <option value="opex">Operating expense</option>
+                        <option value="cogs">Cost of goods sold</option>
                       </Select>
                     </td>
                   </tr>

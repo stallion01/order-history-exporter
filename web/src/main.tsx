@@ -13,6 +13,7 @@ import { ReceiptDetail } from './pages/ReceiptDetail';
 import { Receipts } from './pages/Receipts';
 import { Review } from './pages/Review';
 import { Transactions } from './pages/Transactions';
+import { YearEnd } from './pages/YearEnd';
 import { Items } from './pages/Items';
 import { Orders } from './pages/Orders';
 import { Settings } from './pages/Settings';
@@ -93,6 +94,7 @@ function App() {
         <Route path="/orders" element={<Orders meta={meta} />} />
         <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
         <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />
+        <Route path="/year-end" element={<YearEnd meta={meta} forms={forms} />} />
         <Route path="/settings" element={<Settings user={auth.user} meta={meta} onUserChange={loadAuth} onSignedOut={() => setAuth({ loading: false, setupNeeded: false, user: null })} onMetaChange={loadMeta} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

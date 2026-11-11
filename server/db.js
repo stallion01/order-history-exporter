@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -340,6 +340,32 @@ const SCHEMA_V9 = `
   );
 `;
 
+// Phase 5: what kind of cost each category is (operating, cost of goods sold),
+// the register of capital assets, and large purchases the user decided aren't
+// capital, so they stop being flagged.
+const SCHEMA_V10 = `
+  ALTER TABLE categories ADD COLUMN expense_class TEXT NOT NULL DEFAULT 'opex';
+
+  CREATE TABLE assets (
+    id INTEGER PRIMARY KEY,
+    description TEXT NOT NULL,
+    cost REAL NOT NULL,
+    placed_in_service TEXT NOT NULL,
+    entity_id INTEGER REFERENCES entities (id) ON DELETE SET NULL,
+    recovery TEXT,
+    transaction_id INTEGER REFERENCES bank_transactions (id) ON DELETE SET NULL,
+    item_key TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX assets_source ON assets (transaction_id, COALESCE(item_key, '')) WHERE transaction_id IS NOT NULL;
+
+  CREATE TABLE capital_reviews (
+    key TEXT PRIMARY KEY,
+    decided_at TEXT NOT NULL
+  );
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -503,6 +529,7 @@ function migrate(db, file) {
     if (version < 7) db.exec(SCHEMA_V7);
     if (version < 8) db.exec(SCHEMA_V8);
     if (version < 9) db.exec(SCHEMA_V9);
+    if (version < 10) db.exec(SCHEMA_V10);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
@@ -698,9 +725,9 @@ function openDatabase(file) {
 
   function categoryList() {
     return db
-      .prepare('SELECT name, schedule_c, schedule_e FROM categories ORDER BY position')
+      .prepare('SELECT name, schedule_c, schedule_e, expense_class FROM categories ORDER BY position')
       .all()
-      .map((row) => ({ name: row.name, scheduleC: row.schedule_c, scheduleE: row.schedule_e }));
+      .map((row) => ({ name: row.name, scheduleC: row.schedule_c, scheduleE: row.schedule_e, expenseClass: row.expense_class }));
   }
 
   // Sets a category for every item with this name, and teaches similar names.
@@ -717,12 +744,13 @@ function openDatabase(file) {
     classifier = null;
   }
 
-  function saveCategory({ name, scheduleC, scheduleE }) {
+  function saveCategory({ name, scheduleC, scheduleE, expenseClass }) {
     const position = db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS next FROM categories').get().next;
     db.prepare(
-      `INSERT INTO categories (name, schedule_c, schedule_e, position) VALUES (?, ?, ?, ?)
-       ON CONFLICT (name) DO UPDATE SET schedule_c = excluded.schedule_c, schedule_e = excluded.schedule_e`
-    ).run(name, scheduleC ?? null, scheduleE ?? null, position);
+      `INSERT INTO categories (name, schedule_c, schedule_e, position, expense_class) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (name) DO UPDATE SET schedule_c = excluded.schedule_c, schedule_e = excluded.schedule_e,
+         expense_class = COALESCE(?, categories.expense_class)`
+    ).run(name, scheduleC ?? null, scheduleE ?? null, position, expenseClass ?? 'opex', expenseClass ?? null);
   }
 
   const taxRules = () => db.prepare('SELECT id, field, value, status FROM tax_rules ORDER BY field, value').all().map((row) => ({ ...row }));

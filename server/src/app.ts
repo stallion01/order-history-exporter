@@ -14,6 +14,8 @@ import { bankRoutes } from './routes/bank';
 import { receiptRoutes } from './routes/receipts';
 import { correlationRoutes } from './routes/correlate';
 import { correlationService } from './correlate/service';
+import { cpaService } from './cpa/service';
+import { cpaRoutes } from './routes/cpa';
 import { claudeReader } from './receipts/reader';
 import type { ReceiptReader } from './receipts/reader';
 import { receiptService } from './receipts/service';
@@ -172,6 +174,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   syncRoutes(app, db, () => correlate.matchOrders());
   bankRoutes(app, bank, simplefin, categoryNames, () => correlate.entities().map((e) => e.id));
   correlationRoutes(app, correlate, bank, db);
+  cpaRoutes(app, cpaService({ raw: db.raw, db, bank, correlate, receipts }), correlate);
   receiptRoutes(app, receipts, categoryNames);
   reportRoutes(app, db);
   authRoutes(app, store, tokens);

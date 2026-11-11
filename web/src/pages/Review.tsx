@@ -144,7 +144,7 @@ function Rules({ data, categories, entities, onChange }: { data: { rules: Rule[]
       </p>
       {error && <Banner>{error}</Banner>}
       {data?.rules.length ? (
-        <div className="mb-5 overflow-x-auto">
+        <div className="relative mb-5 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr>

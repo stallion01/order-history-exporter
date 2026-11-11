@@ -120,7 +120,8 @@ Expense Hub works on a computer or a phone. On a phone, use your browser's **Add
 - **Import:** bring in a statement file.
 - **Orders:** every synced order.
 - **Items:** every purchased item, where you can correct its category or mark it business or personal.
-- **Tax groups:** business purchases grouped by form line. See below.
+- **Tax groups:** business purchases grouped by form line, and each category's Schedule line and kind of cost. See below.
+- **Year end:** the package for your tax preparer. See below.
 - **Settings:** two-factor sign-in, your password, the extension's address and token, the key for reading receipts, and **Places**: the city each delivery ZIP is shown as, which you can rename (a property name, say) or correct. ZIP+4 codes are kept as their five-digit ZIP.
 
 Each page has CSV downloads for what it's showing.
@@ -149,6 +150,15 @@ A matched charge is split by the order's items, so one Amazon charge can count p
 ### Businesses and properties
 
 Add each business and rental property under **Settings → Businesses and properties**, and spending is reported for each. A transaction gets one from, in order: your own choice, a rule, where its store order was delivered (set per ZIP under **Settings → Places**), then its account's. A shared cost can be split between several by percentage (**Share between…**), or by a rule that shares it equally. The **Dashboard** shows bank and card spending by category, with matched charges split by item, and by business or property.
+
+### Year end
+
+**Year end** puts the year together for your tax preparer, for all your businesses and properties or one at a time:
+
+- **Totals by Schedule line**, per business (Schedule C) and rental property (Schedule E), from your bank and card spending, with matched store charges split by item. Each category's line is set under **Tax groups**, where a category can also be marked as cost of goods sold. Personal spending and transfers are left out.
+- **Purchases of $2,500 or more** are listed for you to decide, with your preparer: a capital asset (put on the asset register, with its recovery period) or an expense. That's the usual de minimis threshold; nothing is capitalized automatically, and depreciation isn't calculated.
+- **Before you send it:** what's still undecided, each with a link to sort it.
+- **Downloads:** a PDF summary, an Excel workbook (summary, monthly by category, every transaction line, income, assets, transfers with owner draws and contributions, and what still needs review), or the **CPA package**: a ZIP of both plus the year's receipts, named by date, vendor and amount.
 
 ### Receipts
 
@@ -224,7 +234,7 @@ On Linux without Proxmox, follow `deploy/proxmox/setup-in-container.sh` by hand:
 
 On Proxmox, a copy of the database is made every night into `/var/lib/expense-hub/backups`, and the last 14 are kept. New receipt photos are copied there too, into `backups/receipts`. Include the container in your Proxmox backups as well. On another machine, run `npm run backup -w server`, or stop the server and copy `server/data/`.
 
-Upgrades that change the database make their own copy first, named `orders.db.before-v9.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
+Upgrades that change the database make their own copy first, named `orders.db.before-v10.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
 
 ### CSV only
 

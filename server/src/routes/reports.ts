@@ -97,6 +97,8 @@ export function reportRoutes(app: FastifyInstance, db: OrdersDb) {
       name: textParam(body.name, 'Category name', 60),
       scheduleC: lineParam('schedule-c', body.scheduleC),
       scheduleE: lineParam('schedule-e', body.scheduleE),
+      // Operating expense, or cost of goods sold (things bought to resell or make products from).
+      expenseClass: body.expenseClass === 'cogs' || body.expenseClass === 'opex' ? (body.expenseClass as 'opex' | 'cogs') : null,
     };
     db.saveCategory(category);
     audit(request, 'category.save', category);
