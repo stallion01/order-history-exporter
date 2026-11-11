@@ -112,7 +112,11 @@ Everything else is skipped. To read a period again regardless, for example after
 
 Expense Hub works on a computer or a phone. On a phone, use your browser's **Add to Home Screen** to open it like an app. Pages are filtered by period, store, category, delivery ZIP, payment method or text, and filters stay in the address so a view can be bookmarked. Click a column heading to sort by it.
 
-- **Dashboard:** total spending, tax, spending by month, category, store, payment method and delivery ZIP, your most-bought items, and each store's sync status.
+- **Dashboard:** bank and card totals, then store spending: tax, spending by month, category, store, payment method and delivery ZIP, your most-bought items, and each store's sync status.
+- **Transactions:** every bank and card transaction. Set its category, business or personal, or mark it a transfer or ignored. See below.
+- **Review:** transactions that still need a category or a business or personal decision, and your rules.
+- **Accounts:** your bank and card accounts, and the SimpleFIN connection.
+- **Import:** bring in a statement file.
 - **Orders:** every synced order.
 - **Items:** every purchased item, where you can correct its category or mark it business or personal.
 - **Tax groups:** business purchases grouped by form line. See below.
@@ -121,6 +125,19 @@ Expense Hub works on a computer or a phone. On a phone, use your browser's **Add
 Each page has CSV downloads for what it's showing.
 
 Money figures add up each order's total, and returns count as negatives. An item's amount is its share of what the order actually cost, including tax and shipping, so items add up to the order total. If an order has no item prices yet, its total is split evenly and marked as an estimate. Totals assume a single currency.
+
+### Bank and card accounts
+
+Two ways in, which can be mixed freely:
+
+- **SimpleFIN** (about $15 a year at [SimpleFIN Bridge](https://bridge.simplefin.org)): read-only daily updates from most US banks and cards. Connect your banks there, make an app connection, and paste the SimpleFIN Token under **Accounts**. The first update reads the last 90 days, the most SimpleFIN offers; after that it checks once a day. The access it grants is stored encrypted, with the key in `secret.key` beside the database.
+- **Statement files**: OFX, QFX, QBO or CSV, from your bank's website. CSV columns are guessed from the headings and shown for you to confirm; the layout is remembered for that bank's next file. Use files for history older than 90 days, or if SimpleFIN stops working for a bank.
+
+Nothing is stored twice. Importing the same file again adds nothing, and when two sources report the same payment (SimpleFIN and a QFX file, say: same account and amount, dates within two days, similar description) it's kept once, with both sources noted. Choose the same account for both sources when importing. Account numbers aren't stored, only the last four digits.
+
+Money moving between your own accounts, such as paying a card from checking, is found and marked as a **transfer**, so it isn't counted as spending. Each transaction gets a payee name and, where the payee makes it clear, a category; charges from the stores the extension syncs are left for their orders to fill in. An account set to **Business** or **Personal** marks its transactions that way; **Mixed** leaves each one for you in **Review**. After an edit you're offered a **rule**, which applies to every matching transaction now and later. Your own edits always win over rules and guesses.
+
+**Transactions** downloads as CSV, or one account as OFX for Quicken, QuickBooks and other money programs. Loading that OFX back in adds nothing.
 
 ### Categories
 
@@ -188,7 +205,7 @@ On Linux without Proxmox, follow `deploy/proxmox/setup-in-container.sh` by hand:
 
 On Proxmox, a copy of the database is made every night into `/var/lib/expense-hub/backups`, and the last 14 are kept. Include the container in your Proxmox backups as well. On another machine, run `npm run backup -w server`, or stop the server and copy `server/data/`.
 
-Upgrades that change the database make their own copy first, named `orders.db.before-v3.bak` and so on. To replace the extension's token, use **Settings** in the web app.
+Upgrades that change the database make their own copy first, named `orders.db.before-v5.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
 
 ### CSV only
 

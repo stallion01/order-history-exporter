@@ -4,11 +4,13 @@ import { MonthlyBars, RankBars } from '../charts';
 import type { Row } from '../charts';
 import { FilterBar, useFilters } from '../filters';
 import type { Meta } from '../filters';
+import { when } from '../bank';
+import type { Account, SimplefinStatus } from '../bank';
 import { money, whole } from '../format';
 import { Banner, Card, Empty, Loading, PageHeader, Stat, TD, TH, TR } from '../ui';
 
 export function Dashboard({ meta }: { meta: Meta | null }) {
-  const { query, params } = useFilters();
+  const { query, params, range } = useFilters();
   const navigate = useNavigate();
 
   // A page link that keeps the dashboard's filters, with the clicked one replacing
@@ -39,8 +41,9 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
 
   return (
     <>
-      <PageHeader title="Dashboard" description="Spending across your synced stores." />
+      <PageHeader title="Dashboard" description="Spending across your bank and card accounts, and your synced stores." />
       <FilterBar meta={meta} />
+      <BankSummary range={range()} />
       {report.error && <Banner>{report.error.message}</Banner>}
       {!data && report.loading && <Loading />}
       {data && (
@@ -139,4 +142,71 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
       </Card>
     </>
   );
+}
+
+// Bank and card totals for the chosen period, and what needs reviewing.
+function BankSummary({ range }: { range: { from: string; to: string; years?: string[] } }) {
+  const accounts = useApi<{ accounts: Account[]; simplefin: SimplefinStatus | null; reviewCount: number }>('/api/bank/accounts');
+  const period = new URLSearchParams();
+  if (range.from) period.set('from', range.from);
+  if (range.to) period.set('to', range.to);
+  for (const y of range.years || []) period.append('years', y);
+  const totals = useApi<{ total: number; moneyOut: number; moneyIn: number }>(`/api/bank/transactions?${period}&limit=1`);
+  const link = 'text-sm text-emerald-700 hover:underline dark:text-emerald-400';
+  if (!accounts.data) return null;
+  if (!accounts.data.accounts.length) {
+    return (
+      <Card title="Bank and card accounts" className="mb-5">
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          Add your bank and card accounts to see all spending here, not only store orders.{' '}
+          <Link to="/accounts" className={link}>
+            Connect SimpleFIN
+          </Link>{' '}
+          or{' '}
+          <Link to="/import" className={link}>
+            import a statement file
+          </Link>
+          .
+        </p>
+      </Card>
+    );
+  }
+  const sf = accounts.data.simplefin;
+  return (
+    <Card
+      title="Bank and card accounts"
+      className="mb-5"
+      actions={
+        <Link to={`/transactions?${new URLSearchParams(params())}`} className={link}>
+          See transactions
+        </Link>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Money out" value={money(totals.data?.moneyOut ?? 0)} hint="Excludes transfers between your accounts" />
+        <Stat label="Money in" value={money(totals.data?.moneyIn ?? 0)} />
+        <Stat
+          label="To review"
+          value={
+            <Link to="/review" className={accounts.data.reviewCount ? 'text-amber-700 hover:underline dark:text-amber-400' : 'hover:underline'}>
+              {whole(accounts.data.reviewCount)}
+            </Link>
+          }
+          hint="Need a category, or business or personal"
+        />
+        <Stat label="Accounts" value={whole(accounts.data.accounts.length)} hint={sf?.connected ? `SimpleFIN updated ${when(sf.lastSuccess)}` : 'From imported files'} />
+      </div>
+      {sf?.errors.length ? (
+        <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">
+          SimpleFIN reported a problem on its last check. <Link to="/accounts" className="underline">See Accounts</Link>.
+        </p>
+      ) : null}
+    </Card>
+  );
+
+  function params() {
+    const out = new URLSearchParams(window.location.search);
+    for (const key of ['store', 'zip', 'payment', 'category', 'q']) out.delete(key);
+    return out;
+  }
 }

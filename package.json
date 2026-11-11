@@ -10,7 +10,7 @@
     "build": "npm run build -w server && npm run build -w web",
     "server": "npm run build && npm start -w server",
     "server:network": "npm run build && node --disable-warning=ExperimentalWarning server/dist/index.js --network",
-    "test": "npm run build -w server && node --disable-warning=ExperimentalWarning --test tests/unit.test.js tests/server.test.js tests/auth.test.js",
+    "test": "npm run build -w server && node --disable-warning=ExperimentalWarning --test tests/unit.test.js tests/server.test.js tests/auth.test.js tests/bank.test.js",
     "test:e2e": "npm run build && node --disable-warning=ExperimentalWarning --test tests/e2e.test.js",
     "icons": "node scripts/make-icons.js"
   },

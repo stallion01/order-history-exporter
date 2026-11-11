@@ -4,6 +4,9 @@ import path from 'node:path';
 import { buildApp } from './app';
 import { allowedHostsFor, fileTokenStore, loadConfig, networkAddresses } from './config';
 import { openDatabase } from './legacy';
+import { fileSecretBox } from './secrets';
+
+const SYNC_CHECK_MS = 30 * 60 * 1000;
 
 async function main() {
   const config = loadConfig();
@@ -19,6 +22,7 @@ async function main() {
     allowAnyClient: config.allowAnyClient,
     webRoot: config.webRoot,
     tls: config.tls,
+    secrets: fileSecretBox(config.dataDir),
   });
 
   try {
@@ -44,7 +48,20 @@ async function main() {
     console.warn('sign-in and data. Use it only on a network you trust, or put it behind Tailscale.');
   }
 
+  // SimpleFIN once a day, when connected. Checked every half hour, so a restart or a
+  // sleeping machine doesn't skip a day.
+  const syncIfDue = () => {
+    if (!app.simplefin?.due()) return;
+    app.simplefin
+      .sync('scheduled')
+      .then((r) => console.log(`SimpleFIN: ${r.accounts} accounts, ${r.added} new transactions${r.errors.length ? `, problems: ${r.errors.join('; ')}` : ''}`))
+      .catch((err) => console.error('SimpleFIN sync failed:', err.message));
+  };
+  const timer = setInterval(syncIfDue, SYNC_CHECK_MS);
+  setTimeout(syncIfDue, 60 * 1000);
+
   const shutDown = async () => {
+    clearInterval(timer);
     await app.close();
     db.close();
     process.exit(0);

@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -137,6 +137,117 @@ const SCHEMA_V3 = `
   );
 `;
 
+// Bank and card accounts and their transactions (Phase 2). Each transaction keeps
+// every source that reported it (SimpleFIN, an OFX/QFX file, a CSV file), so the same
+// payment arriving from two sources is stored once. Account numbers are never kept:
+// only the last four digits, and a hash to recognise the account in later files.
+const SCHEMA_V5 = `
+  CREATE TABLE bank_accounts (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    institution TEXT,
+    kind TEXT NOT NULL DEFAULT 'checking',
+    owner TEXT NOT NULL DEFAULT 'mixed',
+    last4 TEXT,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    simplefin_id TEXT UNIQUE,
+    file_key TEXT,
+    balance REAL,
+    balance_date TEXT,
+    last_synced_at TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE bank_transactions (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES bank_accounts (id) ON DELETE CASCADE,
+    posted TEXT NOT NULL,
+    amount REAL NOT NULL,
+    description TEXT NOT NULL,
+    payee TEXT,
+    memo TEXT,
+    kind TEXT NOT NULL DEFAULT 'normal',
+    kind_source TEXT,
+    transfer_id INTEGER REFERENCES bank_transactions (id) ON DELETE SET NULL,
+    category TEXT,
+    category_source TEXT,
+    status TEXT,
+    status_source TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX bank_tx_account_posted ON bank_transactions (account_id, posted);
+  CREATE INDEX bank_tx_posted ON bank_transactions (posted);
+
+  CREATE TABLE bank_tx_sources (
+    account_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    PRIMARY KEY (account_id, source, external_id)
+  );
+  CREATE INDEX bank_tx_sources_tx ON bank_tx_sources (transaction_id);
+
+  CREATE TABLE bank_rules (
+    id INTEGER PRIMARY KEY,
+    pattern TEXT NOT NULL,
+    account_id INTEGER REFERENCES bank_accounts (id) ON DELETE CASCADE,
+    category TEXT,
+    status TEXT,
+    kind TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE bank_imports (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    username TEXT,
+    source TEXT NOT NULL,
+    file_name TEXT,
+    account_id INTEGER REFERENCES bank_accounts (id) ON DELETE SET NULL,
+    added INTEGER NOT NULL DEFAULT 0,
+    merged INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    first_date TEXT,
+    last_date TEXT
+  );
+
+  CREATE TABLE csv_layouts (
+    signature TEXT PRIMARY KEY,
+    mapping TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+`;
+
+// Categories for bank and card spending that store orders don't cover.
+// name, Schedule C line, Schedule E line.
+const BANK_CATEGORIES = [
+  ['Utilities', '25', '17'],
+  ['Phone & Internet', '25', '17'],
+  ['Insurance', '15', '9'],
+  ['Software & Subscriptions', '18', '19'],
+  ['Professional Services', '17', '10'],
+  ['Advertising & Listing Fees', '8', '5'],
+  ['Platform & Merchant Fees', '10', '8'],
+  ['Bank & Card Fees', '27b', '19'],
+  ['Cleaning & Maintenance Services', '21', '7'],
+  ['Contractor Repairs', '21', '14'],
+  ['Taxes & Licenses', '23', '16'],
+  ['Travel', '24a', '6'],
+  ['Meals', '24b', null],
+  ['Rent & Lease', '20b', null],
+  ['Loan & Mortgage Payments', null, null],
+  ['Rental Income', null, null],
+  ['Refunds & Returns', null, null],
+  ['Other Income', null, null],
+];
+
 // Whitelisted so request data can never choose a column name.
 const ORDER_COLUMNS = {
   storeName: 'store_name',
@@ -218,6 +329,13 @@ function migrate(db, file) {
     // Amazon details are read again; a details read replaces an order's items.
     if (version >= 1 && version < 4) {
       db.exec(`UPDATE orders SET detail_fetched_at = NULL, detail_attempts = 0 WHERE store = 'amazon'`);
+    }
+    if (version < 5) {
+      db.exec(SCHEMA_V5);
+      const insert = db.prepare(
+        'INSERT OR IGNORE INTO categories (name, schedule_c, schedule_e, position) VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM categories))'
+      );
+      for (const [name, c, e] of BANK_CATEGORIES) insert.run(name, c, e);
     }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');

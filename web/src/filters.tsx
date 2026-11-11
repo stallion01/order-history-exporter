@@ -79,7 +79,37 @@ export function useFilters() {
     return from || to ? `${from || 'start'}_to_${to || 'today'}` : 'all-time';
   };
 
-  return { value, values, set, query, periodLabel, params };
+  return { value, values, set, query, range, periodLabel, params };
+}
+
+// The Period box (and its Years list), for pages with their own other filters.
+export function PeriodFilter({ years }: { years: string[] }) {
+  const { value, values, set } = useFilters();
+  return (
+    <>
+      <Field label="Period">
+        <Select value={value('preset')} onChange={(e) => set({ preset: e.target.value })}>
+          <option value="all">All time</option>
+          <option value="this-year">This year</option>
+          <option value="last-year">Last year</option>
+          <option value="last-90">Last 90 days</option>
+          <option value="years">Pick years</option>
+          <option value="custom">Custom dates</option>
+        </Select>
+      </Field>
+      {value('preset') === 'years' && <MultiSelect label="Years" allLabel="All years" options={years.map((y) => [y, y])} selected={values('years')} onChange={(next) => set({ years: next })} />}
+      {value('preset') === 'custom' && (
+        <>
+          <Field label="From">
+            <Input type="date" value={value('from')} onChange={(e) => set({ from: e.target.value })} />
+          </Field>
+          <Field label="To">
+            <Input type="date" value={value('to')} onChange={(e) => set({ to: e.target.value })} />
+          </Field>
+        </>
+      )}
+    </>
+  );
 }
 
 export function FilterBar({ meta, show = KEYS as unknown as string[] }: { meta: Meta | null; show?: string[] }) {

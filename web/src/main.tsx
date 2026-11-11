@@ -5,7 +5,12 @@ import './index.css';
 import { get, onSignedOut, post } from './api';
 import type { Meta } from './filters';
 import { Layout } from './Layout';
+import { Accounts } from './pages/Accounts';
 import { Dashboard } from './pages/Dashboard';
+import { Import } from './pages/Import';
+import { More } from './pages/More';
+import { Review } from './pages/Review';
+import { Transactions } from './pages/Transactions';
 import { Items } from './pages/Items';
 import { Orders } from './pages/Orders';
 import { Settings } from './pages/Settings';
@@ -72,6 +77,11 @@ function App() {
       {error && <Banner>{error}</Banner>}
       <Routes>
         <Route path="/" element={<Dashboard meta={meta} />} />
+        <Route path="/transactions" element={<Transactions meta={meta} />} />
+        <Route path="/review" element={<Review meta={meta} />} />
+        <Route path="/accounts" element={<Accounts />} />
+        <Route path="/import" element={<Import />} />
+        <Route path="/more" element={<More />} />
         <Route path="/orders" element={<Orders meta={meta} />} />
         <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
         <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />

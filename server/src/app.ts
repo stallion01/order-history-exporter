@@ -7,6 +7,11 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { createAuthStore } from './auth';
+import { simplefinService } from './bank/simplefin';
+import type { SimplefinService } from './bank/simplefin';
+import { createBankStore } from './bank/store';
+import { bankRoutes } from './routes/bank';
+import type { SecretBox } from './secrets';
 import type { User } from './auth';
 import type { OrdersDb } from './legacy';
 import { HttpError } from './params';
@@ -31,6 +36,16 @@ export interface AppOptions {
   webRoot?: string;
   // Certificate and key, to serve HTTPS directly instead of through a proxy.
   tls?: { cert: Buffer; key: Buffer } | null;
+  // Encrypts stored secrets. Without it, SimpleFIN can't be connected.
+  secrets?: SecretBox | null;
+  // For tests, in place of the network.
+  fetchImpl?: typeof fetch;
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    simplefin: SimplefinService | null;
+  }
 }
 
 export interface AuthedRequest extends FastifyRequest {
@@ -116,7 +131,12 @@ export function buildApp(options: AppOptions): FastifyInstance {
     reply.code(status).send({ error: status >= 500 ? 'The server hit an error. See its log.' : error.message });
   });
 
+  const bank = createBankStore(db.raw);
+  const simplefin = options.secrets ? simplefinService(bank, options.secrets, options.fetchImpl) : null;
+  app.decorate('simplefin', simplefin);
+
   syncRoutes(app, db);
+  bankRoutes(app, bank, simplefin, () => db.categoryList().map((c) => c.name));
   reportRoutes(app, db);
   authRoutes(app, store, tokens);
 

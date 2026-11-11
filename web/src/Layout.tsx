@@ -1,16 +1,22 @@
 // The app frame: a sidebar on wide screens, a tab bar along the bottom on phones.
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { FileSpreadsheet, LayoutDashboard, LogOut, Package, Settings, Tags, Wallet } from 'lucide-react';
+import { ArrowLeftRight, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Settings, Tags, Upload, Wallet } from 'lucide-react';
 import { cx } from './ui';
 
-const NAV = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/orders', label: 'Orders', icon: Package },
+export const NAV = [
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, phone: true },
+  { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight, phone: true },
+  { to: '/review', label: 'Review', icon: Inbox, phone: true },
+  { to: '/accounts', label: 'Accounts', icon: Landmark },
+  { to: '/import', label: 'Import', icon: Upload },
+  { to: '/orders', label: 'Orders', icon: Package, phone: true },
   { to: '/items', label: 'Items', icon: Tags },
   { to: '/tax', label: 'Tax groups', icon: FileSpreadsheet },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
+// On phones, the pages without a tab of their own are under More.
+const PHONE_NAV = [...NAV.filter((n) => n.phone), { to: '/more', label: 'More', icon: Menu, end: false, phone: true }];
 
 export function Layout({ username, onSignOut, children }: { username: string; onSignOut: () => void; children: ReactNode }) {
   return (
@@ -60,7 +66,7 @@ export function Layout({ username, onSignOut, children }: { username: string; on
       </div>
 
       <nav aria-label="Main" className="safe-bottom fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-slate-200 bg-white md:hidden dark:border-slate-800 dark:bg-slate-900">
-        {NAV.map(({ to, label, icon: Icon, end }) => (
+        {PHONE_NAV.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
