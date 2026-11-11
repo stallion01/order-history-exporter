@@ -9,6 +9,8 @@ import { Accounts } from './pages/Accounts';
 import { Dashboard } from './pages/Dashboard';
 import { Import } from './pages/Import';
 import { More } from './pages/More';
+import { ReceiptDetail } from './pages/ReceiptDetail';
+import { Receipts } from './pages/Receipts';
 import { Review } from './pages/Review';
 import { Transactions } from './pages/Transactions';
 import { Items } from './pages/Items';
@@ -82,6 +84,8 @@ function App() {
         <Route path="/accounts" element={<Accounts />} />
         <Route path="/import" element={<Import />} />
         <Route path="/more" element={<More />} />
+        <Route path="/receipts" element={<Receipts />} />
+        <Route path="/receipts/:id" element={<ReceiptDetail meta={meta} />} />
         <Route path="/orders" element={<Orders meta={meta} />} />
         <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
         <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />

@@ -103,6 +103,7 @@ export function rowId(tx: IncomingTransaction, occurrence: number) {
 }
 
 export function createBankStore(db: DatabaseSync) {
+  const afterImport: (() => void)[] = [];
   function transaction<T>(fn: () => T, rollback = false): T {
     db.exec('BEGIN');
     try {
@@ -253,7 +254,10 @@ export function createBankStore(db: DatabaseSync) {
   function applyRules(where = '1 = 1') {
     const list = rules();
     const rows = db
-      .prepare(`SELECT t.*, a.owner FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id WHERE ${where}`)
+      .prepare(
+        `SELECT t.*, a.owner, (SELECT r.category FROM receipts r WHERE r.transaction_id = t.id AND r.category IS NOT NULL ORDER BY r.id LIMIT 1) AS receipt_category
+         FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id WHERE ${where}`
+      )
       .all() as Row[];
     const update = db.prepare(
       `UPDATE bank_transactions SET category = ?, category_source = ?, status = ?, status_source = ?, kind = ?, kind_source = ?, transfer_id = ?, updated_at = ? WHERE id = ?`
@@ -267,9 +271,10 @@ export function createBankStore(db: DatabaseSync) {
       let { category, category_source: categorySource, status, status_source: statusSource, kind, kind_source: kindSource, transfer_id: transferId } = row;
       if (categorySource !== 'user') {
         const ruled = pick('category');
-        const hint = ruled ? null : categoryHint(row.description, row.payee || '', row.amount);
-        category = ruled ?? hint;
-        categorySource = ruled ? 'rule' : hint ? 'payee' : null;
+        const fromReceipt = ruled ? null : row.receipt_category;
+        const hint = ruled || fromReceipt ? null : categoryHint(row.description, row.payee || '', row.amount);
+        category = ruled ?? fromReceipt ?? hint;
+        categorySource = ruled ? 'rule' : fromReceipt ? 'receipt' : hint ? 'payee' : null;
       }
       if (statusSource !== 'user') {
         const ruled = pick('status');
@@ -430,6 +435,11 @@ export function createBankStore(db: DatabaseSync) {
       return summary;
     }, Boolean(options.dryRun));
   }
+  function importAndNotify(...args: Parameters<typeof importTransactions>): ImportSummary {
+    const summary = importTransactions(...args);
+    if (!args[3]?.dryRun && summary.added) for (const listener of afterImport) listener();
+    return summary;
+  }
 
   const imports = (limit = 20, id: number | null = null) =>
     db
@@ -545,6 +555,7 @@ export function createBankStore(db: DatabaseSync) {
     statusSource: row.status_source,
     note: row.note,
     sources: row.sources ? String(row.sources).split(',') : [],
+    receiptId: row.receipt_id ?? null,
   });
 
   function listTransactions(filters: TxFilters, options: { sort?: string; direction?: 'asc' | 'desc'; limit?: number; offset?: number } = {}) {
@@ -559,6 +570,7 @@ export function createBankStore(db: DatabaseSync) {
     const rows = db
       .prepare(
         `SELECT t.*, a.name AS account_name, pa.name AS transfer_account,
+                (SELECT r.id FROM receipts r WHERE r.transaction_id = t.id ORDER BY r.id LIMIT 1) AS receipt_id,
                 (SELECT GROUP_CONCAT(DISTINCT s.source) FROM bank_tx_sources s WHERE s.transaction_id = t.id) AS sources
          ${base.replace('JOIN bank_accounts a ON a.id = t.account_id', 'JOIN bank_accounts a ON a.id = t.account_id LEFT JOIN bank_transactions p ON p.id = t.transfer_id LEFT JOIN bank_accounts pa ON pa.id = p.account_id')}
          ORDER BY ${column} ${order}, t.posted DESC, t.id DESC ${limit}`
@@ -651,7 +663,8 @@ export function createBankStore(db: DatabaseSync) {
     deleteRule,
     applyRules,
     detectTransfers,
-    importTransactions,
+    importTransactions: importAndNotify,
+    onImport: (listener: () => void) => afterImport.push(listener),
     imports,
     importById,
     csvLayout,

@@ -15,7 +15,7 @@ export interface IncomingTransaction {
 
 export type AccountKind = 'checking' | 'savings' | 'credit' | 'other';
 export type Owner = 'business' | 'personal' | 'mixed';
-export type Source = 'simplefin' | 'ofx' | 'csv';
+export type Source = 'simplefin' | 'ofx' | 'csv' | 'receipt';
 
 export const ACCOUNT_KINDS: AccountKind[] = ['checking', 'savings', 'credit', 'other'];
 export const OWNERS: Owner[] = ['business', 'personal', 'mixed'];

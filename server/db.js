@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -237,6 +237,48 @@ const SCHEMA_V6 = `
   CREATE INDEX bank_import_rows_tx ON bank_import_rows (transaction_id);
 `;
 
+// Receipts (Phase 3): the photo or PDF lives in the data folder; what was read from
+// it, and the transaction it belongs to, live here.
+const SCHEMA_V7 = `
+  CREATE TABLE receipts (
+    id INTEGER PRIMARY KEY,
+    original_hash TEXT NOT NULL UNIQUE,
+    file_name TEXT,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    stored_path TEXT NOT NULL,
+    thumb_path TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    read_error TEXT,
+    read_at TEXT,
+    read_model TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    vendor TEXT,
+    receipt_date TEXT,
+    currency TEXT,
+    subtotal REAL,
+    tax REAL,
+    tip REAL,
+    total REAL,
+    card_last4 TEXT,
+    payment_method TEXT,
+    category TEXT,
+    items TEXT,
+    confidence TEXT,
+    reader_notes TEXT,
+    note TEXT,
+    checked INTEGER NOT NULL DEFAULT 0,
+    transaction_id INTEGER REFERENCES bank_transactions (id) ON DELETE SET NULL,
+    match_source TEXT,
+    uploaded_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX receipts_tx ON receipts (transaction_id);
+  CREATE INDEX receipts_date ON receipts (receipt_date);
+`;
+
 // Categories for bank and card spending that store orders don't cover.
 // name, Schedule C line, Schedule E line.
 const BANK_CATEGORIES = [
@@ -350,6 +392,7 @@ function migrate(db, file) {
       for (const [name, c, e] of BANK_CATEGORIES) insert.run(name, c, e);
     }
     if (version < 6) db.exec(SCHEMA_V6);
+    if (version < 7) db.exec(SCHEMA_V7);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

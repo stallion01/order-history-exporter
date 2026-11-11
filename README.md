@@ -115,6 +115,7 @@ Expense Hub works on a computer or a phone. On a phone, use your browser's **Add
 - **Dashboard:** bank and card totals, then store spending: tax, spending by month, category, store, payment method and delivery ZIP, your most-bought items, and each store's sync status.
 - **Transactions:** every bank and card transaction. Set its category, business or personal, or mark it a transfer or ignored. See below.
 - **Review:** transactions that still need a category or a business or personal decision, and your rules.
+- **Receipts:** take a photo or upload receipts; each is read and matched to its transaction. See below.
 - **Accounts:** your bank and card accounts, and the SimpleFIN connection.
 - **Import:** bring in a statement file.
 - **Orders:** every synced order.
@@ -138,6 +139,14 @@ Nothing is stored twice. Importing the same file again adds nothing, and when tw
 Money moving between your own accounts, such as paying a card from checking, is found and marked as a **transfer**, so it isn't counted as spending. Each transaction gets a payee name and, where the payee makes it clear, a category; charges from the stores the extension syncs are left for their orders to fill in. An account set to **Business** or **Personal** marks its transactions that way; **Mixed** leaves each one for you in **Review**. After an edit you're offered a **rule**, which applies to every matching transaction now and later. Your own edits always win over rules and guesses.
 
 **Transactions** downloads as CSV, or one account as OFX for Quicken, QuickBooks and other money programs. Loading that OFX back in adds nothing.
+
+### Receipts
+
+On a phone, **Receipts → Take a photo** opens the camera; on a computer, **Upload files** takes photos or PDFs, several at once. Photos are shrunk in the browser before upload, and each file is kept on your server. The same photo twice is stored once.
+
+Each receipt is read by Claude (model `claude-opus-5-5`), using your own Anthropic API key, added under **Settings → Reading receipts**; it costs roughly one or two cents a receipt. Only the receipt and your category names are sent to Anthropic. The key is stored encrypted like the SimpleFIN access, or can be set as `ANTHROPIC_API_KEY` in `/etc/expense-hub/env`. Without a key, receipts wait, and you can fill in their details yourself.
+
+A read receipt is matched to its card or bank transaction when the amount matches and the vendor or card agrees, within a few days of the receipt's date. Otherwise likely transactions are suggested, including a higher charge where a tip was added. A receipt uploaded before its charge reaches the bank is matched when the charge arrives. One paid in cash can be recorded as a cash purchase, in an account called Cash. A matched receipt's category is used for its transaction, after your own edits and rules. Receipts you haven't looked at are listed under **To check**.
 
 ### Categories
 
@@ -203,9 +212,9 @@ On Linux without Proxmox, follow `deploy/proxmox/setup-in-container.sh` by hand:
 
 ### Backups
 
-On Proxmox, a copy of the database is made every night into `/var/lib/expense-hub/backups`, and the last 14 are kept. Include the container in your Proxmox backups as well. On another machine, run `npm run backup -w server`, or stop the server and copy `server/data/`.
+On Proxmox, a copy of the database is made every night into `/var/lib/expense-hub/backups`, and the last 14 are kept. New receipt photos are copied there too, into `backups/receipts`. Include the container in your Proxmox backups as well. On another machine, run `npm run backup -w server`, or stop the server and copy `server/data/`.
 
-Upgrades that change the database make their own copy first, named `orders.db.before-v6.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
+Upgrades that change the database make their own copy first, named `orders.db.before-v7.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
 
 ### CSV only
 

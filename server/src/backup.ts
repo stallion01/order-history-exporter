@@ -26,7 +26,27 @@ export function backup(dataDir: string, keep = KEEP): string {
     .reverse()
     .slice(keep);
   for (const name of old) fs.rmSync(path.join(target, name));
+  copyReceipts(path.join(dataDir, 'receipts'), path.join(target, 'receipts'));
   return file;
+}
+
+// Receipt files never change once stored, so only new ones are copied. A receipt
+// deleted in the app stays in the backup.
+export function copyReceipts(from: string, to: string): number {
+  if (!fs.existsSync(from)) return 0;
+  let copied = 0;
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const source = path.join(from, entry.name);
+    const target = path.join(to, entry.name);
+    if (entry.isDirectory()) copied += copyReceipts(source, target);
+    else if (entry.isFile() && !fs.existsSync(target)) {
+      fs.mkdirSync(to, { recursive: true, mode: 0o700 });
+      fs.copyFileSync(source, target);
+      fs.chmodSync(target, 0o600);
+      copied++;
+    }
+  }
+  return copied;
 }
 
 if (require.main === module) {

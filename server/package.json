@@ -4,13 +4,16 @@
   "private": true,
   "type": "commonjs",
   "license": "GPL-3.0-or-later",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "build": "tsc -p .",
     "start": "node --disable-warning=ExperimentalWarning dist/index.js",
     "backup": "node --disable-warning=ExperimentalWarning dist/backup.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@fastify/cookie": "^11.1.5",
     "@fastify/static": "^10.1.10",
     "fastify": "^5.12.8",

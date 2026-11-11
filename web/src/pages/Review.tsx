@@ -24,6 +24,7 @@ export function Review({ meta }: { meta: Meta | null }) {
   const [offset, setOffset] = useState(0);
   const list = useApi<{ total: number; transactions: Transaction[] }>(`/api/bank/transactions?review=1&sort=date&dir=desc&limit=${PAGE}&offset=${offset}`);
   const rules = useApi<{ rules: Rule[]; accounts: { id: number; name: string }[] }>('/api/bank/rules');
+  const receipts = useApi<{ counts: { review: number } }>('/api/receipts?limit=1');
   const [selected, setSelected] = useState<number[]>([]);
   const categories = meta?.categories.map((c) => c.name) || [];
   useEffect(() => setSelected([]), [list.data]);
@@ -40,6 +41,14 @@ export function Review({ meta }: { meta: Meta | null }) {
         description="Transactions that need a category, or a business or personal decision. Choices you make here can become rules, so the next ones are done for you."
       />
       {list.error && <Banner>{list.error.message}</Banner>}
+      {receipts.data && receipts.data.counts.review > 0 && (
+        <Banner tone="warning">
+          {receipts.data.counts.review === 1 ? '1 receipt needs' : `${receipts.data.counts.review} receipts need`} checking.{' '}
+          <Link to="/receipts?view=review" className="font-medium underline">
+            Check receipts
+          </Link>
+        </Banner>
+      )}
       <Card title={data ? `${whole(data.total)} to review` : 'To review'} padded={false} className="mb-6">
         <BulkBar ids={selected} categories={categories} onDone={reload} />
         {!data && list.loading && <Loading />}

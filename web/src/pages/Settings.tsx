@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Copy, Eye, KeyRound, RefreshCw, ShieldCheck } from 'lucide-react';
-import { get, post } from '../api';
+import { Copy, Eye, KeyRound, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import { get, post, useApi } from '../api';
 import { Banner, Button, Card, Confirm, Field, Input, PageHeader } from '../ui';
 import type { SignedInUser } from './SignIn';
 
@@ -188,6 +188,71 @@ function ExtensionCard() {
   );
 }
 
+// The Anthropic API key used to read receipts.
+function ReceiptReaderCard() {
+  const status = useApi<{ set: boolean; fromEnvironment: boolean; endsWith: string | null; canStore: boolean }>('/api/settings/anthropic');
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function run(path: string, body: unknown = {}) {
+    setBusy(true);
+    setError('');
+    try {
+      await post(path, body);
+      setKey('');
+      status.reload();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    setBusy(false);
+  }
+  const s = status.data;
+  return (
+    <Card title="Reading receipts">
+      {error && <Banner>{error}</Banner>}
+      <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
+        Receipts are read by Claude, using your own Anthropic API key, at roughly one or two cents each. Each photo is sent to Anthropic to be read; nothing else from your books is sent.
+      </p>
+      {s?.set ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400">
+            <Sparkles className="size-4" aria-hidden />
+            Key set, ending {s.endsWith}
+            {s.fromEnvironment ? ' (from the server settings file)' : ''}
+          </span>
+          {!s.fromEnvironment && (
+            <Button variant="danger" busy={busy} onClick={() => run('/api/settings/anthropic/delete')}>
+              Remove key
+            </Button>
+          )}
+        </div>
+      ) : (
+        <form
+          className="space-y-3"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            run('/api/settings/anthropic', { apiKey: key });
+          }}
+        >
+          <Field label="Anthropic API key">
+            <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" placeholder="sk-ant-…" />
+          </Field>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Make one at{' '}
+            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" className="underline">
+              console.anthropic.com
+            </a>
+            . It's stored encrypted on your server and never shown again.
+          </p>
+          <Button type="submit" variant="primary" busy={busy} disabled={!key.trim() || s?.canStore === false}>
+            Save key
+          </Button>
+        </form>
+      )}
+    </Card>
+  );
+}
+
 export function Settings({ user, onUserChange, onSignedOut }: { user: SignedInUser; onUserChange: () => void; onSignedOut: () => void }) {
   return (
     <>
@@ -195,6 +260,7 @@ export function Settings({ user, onUserChange, onSignedOut }: { user: SignedInUs
       <div className="grid gap-5 lg:grid-cols-2">
         <TwoFactorCard user={user} onChange={onUserChange} />
         <ExtensionCard />
+        <ReceiptReaderCard />
         <PasswordCard onSignedOut={onSignedOut} />
       </div>
     </>

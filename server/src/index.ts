@@ -23,7 +23,10 @@ async function main() {
     webRoot: config.webRoot,
     tls: config.tls,
     secrets: fileSecretBox(config.dataDir),
+    dataDir: config.dataDir,
   });
+  // Receipts waiting from before a restart.
+  app.receipts.kick();
 
   try {
     await app.listen({ host: config.host, port: config.port });
@@ -57,7 +60,11 @@ async function main() {
       .then((r) => console.log(`SimpleFIN: ${r.accounts} accounts, ${r.added} new transactions${r.errors.length ? `, problems: ${r.errors.join('; ')}` : ''}`))
       .catch((err) => console.error('SimpleFIN sync failed:', err.message));
   };
-  const timer = setInterval(syncIfDue, SYNC_CHECK_MS);
+  const timer = setInterval(() => {
+    syncIfDue();
+    // Receipts that couldn't be read earlier (no key yet, or Anthropic busy).
+    app.receipts.kick().catch((err) => console.error('Reading receipts failed:', err.message));
+  }, SYNC_CHECK_MS);
   setTimeout(syncIfDue, 60 * 1000);
 
   const shutDown = async () => {

@@ -11,6 +11,11 @@ import { simplefinService } from './bank/simplefin';
 import type { SimplefinService } from './bank/simplefin';
 import { createBankStore } from './bank/store';
 import { bankRoutes } from './routes/bank';
+import { receiptRoutes } from './routes/receipts';
+import { claudeReader } from './receipts/reader';
+import type { ReceiptReader } from './receipts/reader';
+import { receiptService } from './receipts/service';
+import type { ReceiptService } from './receipts/service';
 import type { SecretBox } from './secrets';
 import type { User } from './auth';
 import type { OrdersDb } from './legacy';
@@ -40,11 +45,16 @@ export interface AppOptions {
   secrets?: SecretBox | null;
   // For tests, in place of the network.
   fetchImpl?: typeof fetch;
+  // Where receipt files are kept. Without it, receipts can't be uploaded.
+  dataDir?: string | null;
+  // For tests, in place of Claude.
+  receiptReader?: ReceiptReader;
 }
 
 declare module 'fastify' {
   interface FastifyInstance {
     simplefin: SimplefinService | null;
+    receipts: ReceiptService;
   }
 }
 
@@ -135,8 +145,23 @@ export function buildApp(options: AppOptions): FastifyInstance {
   const simplefin = options.secrets ? simplefinService(bank, options.secrets, options.fetchImpl) : null;
   app.decorate('simplefin', simplefin);
 
+  const categoryNames = () => db.categoryList().map((c) => c.name);
+  let receipts: ReceiptService | null = null;
+  receipts = receiptService({
+    db: db.raw,
+    bank,
+    dataDir: options.dataDir ?? null,
+    secrets: options.secrets ?? null,
+    reader: options.receiptReader ?? claudeReader(() => receipts!.apiKey()),
+    categoryNames,
+  });
+  // A receipt uploaded before its charge reached the bank is matched when it arrives.
+  bank.onImport(() => receipts!.matchUnlinked());
+  app.decorate('receipts', receipts);
+
   syncRoutes(app, db);
-  bankRoutes(app, bank, simplefin, () => db.categoryList().map((c) => c.name));
+  bankRoutes(app, bank, simplefin, categoryNames);
+  receiptRoutes(app, receipts, categoryNames);
   reportRoutes(app, db);
   authRoutes(app, store, tokens);
 

@@ -1,5 +1,7 @@
 // Pieces shared by the Transactions, Review and Accounts pages.
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Paperclip } from 'lucide-react';
 import { post } from './api';
 import { money } from './format';
 import { Button, cx } from './ui';
@@ -41,6 +43,7 @@ export interface Transaction {
   statusSource: string | null;
   note: string | null;
   sources: string[];
+  receiptId: number | null;
 }
 
 export interface SimplefinStatus {
@@ -54,7 +57,7 @@ export interface SimplefinStatus {
 export const KIND_LABELS = { checking: 'Checking', savings: 'Savings', credit: 'Credit card', other: 'Other' };
 export const OWNER_LABELS = { business: 'Business', personal: 'Personal', mixed: 'Mixed (decide each)' };
 export const SOURCE_LABELS: Record<string, string> = { simplefin: 'SimpleFIN', ofx: 'OFX/QFX file', csv: 'CSV file' };
-const WHY: Record<string, string> = { user: 'your choice', rule: 'from a rule', payee: 'guessed from the payee', account: "from the account's owner", auto: 'found automatically' };
+const WHY: Record<string, string> = { user: 'your choice', rule: 'from a rule', receipt: 'from its receipt', payee: 'guessed from the payee', account: "from the account's owner", auto: 'found automatically' };
 
 export const importLink = (id: number, outcome?: 'added' | 'merged' | 'skipped') => `/transactions?preset=all&kind=all&import=${id}${outcome ? `&outcome=${outcome}` : ''}`;
 
@@ -133,6 +136,12 @@ export function TxRow({
             <span>{tx.account}</span>
             {tx.payee && tx.payee !== tx.description && <span className="truncate">· {tx.description}</span>}
             {tx.kind === 'transfer' && <span>· Transfer{tx.transferAccount ? ` with ${tx.transferAccount}` : ''}</span>}
+            {tx.receiptId && (
+              <Link to={`/receipts/${tx.receiptId}`} className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline dark:text-emerald-400">
+                <Paperclip className="size-3" aria-hidden />
+                Receipt
+              </Link>
+            )}
             <SourceBadges sources={tx.sources} />
           </div>
         </div>
