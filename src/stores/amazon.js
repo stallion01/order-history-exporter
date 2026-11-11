@@ -4,13 +4,19 @@
   const ORIGIN = 'https://www.amazon.com';
   const ORDER_ID = /\b(\d{3}-\d{7}-\d{7}|D\d{2}-\d{7}-\d{7})\b/;
   const ITEM_LINK = 'a[href*="/dp/"], a[href*="/gp/product/"]';
+  // Recommendation carousels ("Customers also bought", "Inspired by your order") load
+  // into the order page after it opens, and are full of product links.
+  const NOT_PURCHASED = '[data-component="personalization"], [class*="carousel"], [cel_widget_id*="p13n"], [id^="CardInstance"]';
   const NOT_A_TITLE = /^(buy it again|view your item|write a product review|track package|return|problem with)/i;
 
   const listUrl = (year) => `${ORIGIN}/your-orders/orders?timeFilter=year-${year}`;
   const asinOf = (href) => (href.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i) || [])[1] || href;
 
   function readItems(root, withPrices) {
-    const links = [...root.querySelectorAll(ITEM_LINK)];
+    // A details page marks what was bought; anything else there is a suggestion.
+    const bought = [...root.querySelectorAll('[data-component="purchasedItems"]')];
+    const scopes = bought.length ? bought : [root];
+    const links = scopes.flatMap((scope) => [...scope.querySelectorAll(ITEM_LINK)]).filter((link) => !link.closest(NOT_PURCHASED));
     const isOtherItem = (el, self) => links.some((l) => l !== self && el.contains(l) && asinOf(l.href) !== asinOf(self.href));
     const items = new Map();
     for (const link of links) {

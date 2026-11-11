@@ -460,23 +460,42 @@ test('upgrading an older database keeps its orders, backs it up, and queues miss
   const add = old.prepare("INSERT INTO orders (store, order_id, order_date, total, detail_url, detail_fetched_at, first_seen_at, updated_at) VALUES (?, ?, '2024-01-01', 5, 'https://x/y', '2024-02-02', 'a', 'a')");
   add.run('samsclub', 'NOPRICE');
   add.run('samsclub', 'PRICED');
-  add.run('amazon', 'OTHER');
+  add.run('ebay', 'OTHER');
   old.prepare("INSERT INTO items (store, order_id, position, name) VALUES ('samsclub', 'NOPRICE', 0, 'Thing')").run();
   old.prepare("INSERT INTO items (store, order_id, position, name, price) VALUES ('samsclub', 'PRICED', 0, 'Thing', 5)").run();
   old.close();
 
   const upgraded = openDatabase(file);
   assert.equal(upgraded.listOrders({}).total, 3);
-  assert.ok(fs.existsSync(`${file}.before-v3.bak`), 'a backup was made first');
+  assert.ok(fs.existsSync(`${file}.before-v4.bak`), 'a backup was made first');
   const pending = upgraded.syncPlan('samsclub', { from: null, to: null }).pendingDetails.map((o) => o.orderId);
   assert.deepEqual(pending, ['NOPRICE'], 'only orders missing prices are read again');
-  assert.equal(upgraded.syncPlan('amazon', { from: null, to: null }).pendingDetails.length, 0);
+  assert.equal(upgraded.syncPlan('ebay', { from: null, to: null }).pendingDetails.length, 0);
   assert.ok(upgraded.categoryList().some((c) => c.name === 'Cleaning Supplies'));
   upgraded.close();
 
-  const backup = new DatabaseSync(`${file}.before-v3.bak`, { readOnly: true });
+  const backup = new DatabaseSync(`${file}.before-v4.bak`, { readOnly: true });
   assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 3);
   backup.close();
+});
+
+test('upgrading to v4 queues Amazon details to be read again', () => {
+  const file = path.join(dir, 'v3.db');
+  const first = openDatabase(file);
+  first.saveOrders('amazon', [{ orderId: 'A', date: '2026-01-01', detailRead: true, items: [{ name: 'Kettle' }, { name: 'Suggested PC' }] }]);
+  first.saveOrders('ebay', [{ orderId: 'E', date: '2026-01-01', detailRead: true }]);
+  first.close();
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA user_version = 3');
+  raw.close();
+  const second = openDatabase(file);
+  const pending = (store) => second.raw.prepare('SELECT detail_fetched_at FROM orders WHERE store = ?').get(store).detail_fetched_at;
+  assert.equal(pending('amazon'), null);
+  assert.ok(pending('ebay'), 'other stores are left alone');
+  // The next details read replaces the items.
+  second.saveOrders('amazon', [{ orderId: 'A', detailRead: true, items: [{ name: 'Kettle' }] }]);
+  assert.equal(second.raw.prepare('SELECT COUNT(*) n FROM items WHERE order_id = ?').get('A').n, 1);
+  second.close();
 });
 
 test('a new database file can be reopened, and keeps its data', () => {

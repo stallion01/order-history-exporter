@@ -158,7 +158,8 @@ test('amazon detail: summary rows and item prices', () => {
   assert.equal(patch.subtotal, 1012);
   assert.equal(patch.tax, 30.17);
   assert.equal(patch.shipping, 0);
-  assert.equal(patch.items.length, 2);
+  assert.equal(patch.items.length, 2, 'recommendations on the page are not items');
+  assert.ok(!patch.items.some((item) => /Suggested/.test(item.name)));
   assert.equal(patch.items[0].price, 500);
   assert.equal(patch.items[0].seller, 'Kettle Co');
 });

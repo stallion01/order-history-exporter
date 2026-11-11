@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -214,6 +214,11 @@ function migrate(db, file) {
                )`);
     }
     if (version < 3) db.exec(SCHEMA_V3);
+    // Earlier versions took Amazon's recommendation carousels for items bought, so
+    // Amazon details are read again; a details read replaces an order's items.
+    if (version >= 1 && version < 4) {
+      db.exec(`UPDATE orders SET detail_fetched_at = NULL, detail_attempts = 0 WHERE store = 'amazon'`);
+    }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
