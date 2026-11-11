@@ -6,15 +6,20 @@ import { useApi } from '../api';
 import { STATUS_LABELS, uploadReceipt } from '../receipts';
 import type { Receipt } from '../receipts';
 import { money, plural, whole } from '../format';
-import { Banner, Button, Card, Empty, Input, Loading, PageHeader, Pager, cx } from '../ui';
-import { useFilters } from '../filters';
+import { Banner, Button, Card, Empty, Field, Input, Loading, MultiSelect, PageHeader, Pager, Select, cx } from '../ui';
+import { PeriodFilter, useFilters } from '../filters';
 
 const PAGE = 60;
 type View = 'all' | 'review' | 'unmatched' | 'matched';
 
+type Grouping = 'month' | 'vendor' | 'category';
+type Choice = { name: string; count: number };
+
 interface ListData {
   total: number;
-  receipts: Receipt[];
+  receipts: (Receipt & { group: string })[];
+  groups: { key: string; label: string; count: number; total: number }[];
+  choices: { years: string[]; vendors: Choice[]; categories: Choice[] };
   counts: { total: number; review: number; unmatched: number; reading: number };
   reader: { set: boolean; canStore: boolean };
 }
@@ -31,7 +36,14 @@ export function Receipts() {
   const view = (filters.value('view') || 'all') as View;
   const offset = Number(filters.value('page')) || 0;
   const [search, setSearch] = useState(filters.value('q'));
-  const query = new URLSearchParams({ view, limit: String(PAGE), offset: String(offset), ...(filters.value('q') ? { q: filters.value('q') } : {}) });
+  const group = (filters.value('group') || 'month') as Grouping;
+  const query = new URLSearchParams({ view, group, limit: String(PAGE), offset: String(offset) });
+  const { from, to, years } = filters.range();
+  if (from) query.set('from', from);
+  if (to) query.set('to', to);
+  for (const y of years || []) query.append('years', y);
+  for (const key of ['vendor', 'category']) for (const v of filters.values(key)) query.append(key, v);
+  if (filters.value('q')) query.set('q', filters.value('q'));
   const list = useApi<ListData>(`/api/receipts?${query}`);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const camera = useRef<HTMLInputElement>(null);
@@ -145,11 +157,38 @@ export function Receipts() {
             </button>
           ))}
         </div>
-        <div className="relative w-full sm:w-64">
-          <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-slate-400" aria-hidden />
-          <Input type="search" className="pl-8" placeholder="Vendor, item or note" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search receipts" />
-        </div>
       </div>
+
+      <form className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6" onSubmit={(e) => e.preventDefault()} aria-label="Filters">
+        <PeriodFilter years={list.data?.choices.years || []} />
+        <MultiSelect
+          label="Vendor"
+          allLabel="All vendors"
+          options={(list.data?.choices.vendors || []).map((v): [string, string] => [v.name, `${v.name} (${v.count})`])}
+          selected={filters.values('vendor')}
+          onChange={(next) => filters.set({ vendor: next })}
+        />
+        <MultiSelect
+          label="Category"
+          allLabel="All categories"
+          options={[...(list.data?.choices.categories || []).map((c): [string, string] => [c.name, `${c.name} (${c.count})`]), ['none', 'No category']]}
+          selected={filters.values('category')}
+          onChange={(next) => filters.set({ category: next })}
+        />
+        <Field label="Group by">
+          <Select value={group} onChange={(e) => filters.set({ group: e.target.value === 'month' ? '' : e.target.value })}>
+            <option value="month">Month</option>
+            <option value="vendor">Vendor</option>
+            <option value="category">Category</option>
+          </Select>
+        </Field>
+        <Field label="Search" className="col-span-2 sm:col-span-1">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-slate-400" aria-hidden />
+            <Input type="search" className="pl-8" placeholder="Vendor, item or note" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+        </Field>
+      </form>
 
       {list.error && <Banner>{list.error.message}</Banner>}
       {!list.data && list.loading && <Loading />}
@@ -160,19 +199,41 @@ export function Receipts() {
       )}
       {list.data && list.data.receipts.length > 0 && (
         <>
-          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {list.data.receipts.map((r) => (
-              <li key={r.id}>
-                <ReceiptTile receipt={r} />
-              </li>
-            ))}
-          </ul>
+          {sections(list.data).map(({ group: g, receipts }) => (
+            <section key={g.key} className="mb-6" aria-label={g.label}>
+              <h2 className="mb-2 flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-200 pb-1.5 dark:border-slate-800">
+                <span className="text-base font-semibold">{g.label}</span>
+                <span className="text-sm text-slate-600 tabular-nums dark:text-slate-400">
+                  {plural(g.count, 'receipt')} · {money(g.total)}
+                </span>
+              </h2>
+              <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {receipts.map((r) => (
+                  <li key={r.id}>
+                    <ReceiptTile receipt={r} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
           <Pager offset={offset} pageSize={PAGE} total={list.data.total} onChange={(next) => filters.set({ page: String(next) })} />
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{plural(list.data.total, 'receipt')}</p>
         </>
       )}
     </>
   );
+}
+
+// This page's receipts, split into their groups (a group can carry over to the next page).
+function sections(data: ListData) {
+  const byKey = new Map(data.groups.map((g) => [g.key, g]));
+  const out: { group: ListData['groups'][number]; receipts: ListData['receipts'] }[] = [];
+  for (const r of data.receipts) {
+    const last = out[out.length - 1];
+    if (last && last.group.key === r.group) last.receipts.push(r);
+    else out.push({ group: byKey.get(r.group) || { key: r.group, label: '', count: 0, total: 0 }, receipts: [r] });
+  }
+  return out;
 }
 
 function ReceiptTile({ receipt: r }: { receipt: Receipt }) {

@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { HttpError, dateParam, queryOf } from '../params';
-import type { ReceiptService, ReceiptView } from '../receipts/service';
+import { RECEIPT_GROUPS } from '../receipts/service';
+import type { ReceiptGroup, ReceiptService, ReceiptView } from '../receipts/service';
 import type { AuthedRequest } from '../app';
 
 const VIEWS: ReceiptView[] = ['all', 'review', 'unmatched', 'matched'];
@@ -38,10 +39,32 @@ export function receiptRoutes(app: FastifyInstance, receipts: ReceiptService, ca
     const query = queryOf(request.query);
     const view = (query.get('view') || 'all') as ReceiptView;
     if (!VIEWS.includes(view)) throw new HttpError(400, 'Unknown view.');
+    const group = (query.get('group') || 'month') as ReceiptGroup;
+    if (!RECEIPT_GROUPS.includes(group)) throw new HttpError(400, 'Unknown grouping.');
+    const years = query.getAll('years').filter(Boolean);
+    if (years.some((y) => !/^\d{4}$/.test(y))) throw new HttpError(400, 'years must look like 2025.');
+    const several = (key: string) => {
+      const values = query.getAll(key).filter(Boolean).map((v) => v.slice(0, 120));
+      return values.length ? values.slice(0, 100) : null;
+    };
     const limit = Math.min(Math.max(Number(query.get('limit')) || 60, 1), 200);
     const offset = Math.max(Number(query.get('offset')) || 0, 0);
     return {
-      ...receipts.list({ view, from: dateParam(query.get('from'), 'from'), to: dateParam(query.get('to'), 'to'), q: query.get('q') || null }, limit, offset),
+      ...receipts.list(
+        {
+          view,
+          from: dateParam(query.get('from'), 'from'),
+          to: dateParam(query.get('to'), 'to'),
+          years: years.length ? years : null,
+          vendor: several('vendor'),
+          category: several('category'),
+          q: query.get('q') || null,
+          group,
+        },
+        limit,
+        offset
+      ),
+      choices: receipts.choices(),
       counts: receipts.counts(),
       reader: receipts.keyStatus(),
     };

@@ -33,6 +33,7 @@ async function fakeReader(file) {
   if (label === 'nokey') throw new ReaderError('Add an Anthropic API key in Settings to read receipts automatically, or fill in the details yourself.');
   if (label === 'blurry') throw new ReaderError('The receipt could not be read automatically. Fill in the details yourself.');
   const r = READINGS[label];
+  if (!r) throw new ReaderError('The receipt could not be read automatically. Fill in the details yourself.');
   return {
     model: 'claude-opus-5-5',
     inputTokens: 1500,
@@ -189,6 +190,39 @@ test('problems: no key waits, an unreadable receipt needs a person, edits by han
   app.receipts.matchUnlinked();
   assert.equal((await get(`/api/receipts/${blurry.id}`)).receipt.transactionId, null);
   assert.equal((await call(`/api/receipts/${waiting.id}`)).status, 404, 'deleted');
+});
+
+test('receipts are grouped by month, vendor or category, and filtered by each', async () => {
+  // Another Home Depot receipt, written differently, read in a different month.
+  await post('/api/receipts/1', { checked: true });
+  const extra = photo('hardware-april');
+  const { id } = await post('/api/receipts', { originalHash: sha(extra), data: extra.toString('base64') });
+  await post(`/api/receipts/${id}`, { vendor: 'THE HOME DEPOT #0456', date: '2026-04-02', total: 19.99, category: 'Tools & Hardware' });
+
+  const byMonth = await get('/api/receipts?group=month');
+  assert.deepEqual(byMonth.groups.map((g) => g.label).slice(0, 2), ['April 2026', 'March 2026']);
+  assert.equal(byMonth.receipts[0].id, id, 'newest month first');
+
+  const byVendor = await get('/api/receipts?group=vendor');
+  const depot = byVendor.groups.find((g) => g.label === 'Home Depot');
+  assert.equal(depot.count, 2, 'both spellings are one vendor');
+  assert.equal(depot.total, 104.09);
+  assert.deepEqual(byVendor.groups.map((g) => g.label), [...byVendor.groups.map((g) => g.label)].sort((a, b) => a.localeCompare(b)));
+
+  assert.equal((await get('/api/receipts?vendor=Home%20Depot')).total, 2);
+  assert.equal((await get('/api/receipts?vendor=Home%20Depot&years=2026&from=2026-04-01')).total, 1);
+  assert.equal((await get('/api/receipts?category=Meals')).total, 1);
+  assert.equal((await get('/api/receipts?category=Meals&category=Tools%20%26%20Hardware')).total, 2);
+  const uncategorised = await get('/api/receipts?category=none&group=category');
+  assert.ok(uncategorised.receipts.every((r) => r.category === null));
+  assert.equal(uncategorised.groups[0].label, 'No category');
+  assert.equal((await get('/api/receipts?years=2025')).total, 0);
+
+  const { choices } = byMonth;
+  assert.deepEqual(choices.years, ['2026']);
+  assert.equal(choices.vendors.find((v) => v.name === 'Home Depot').count, 2);
+  assert.ok(choices.categories.some((c) => c.name === 'Meals'));
+  assert.equal((await call('/api/receipts?group=size')).status, 400);
 });
 
 test('the nightly backup copies receipt files, once', () => {

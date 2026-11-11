@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { payeeFor } from '../bank/merchant';
 import { similarDescriptions } from '../bank/store';
 import type { BankStore } from '../bank/store';
 import { toCents } from '../bank/types';
@@ -36,12 +37,22 @@ export function sniff(data: Buffer): string | null {
 
 export type ReceiptView = 'all' | 'review' | 'unmatched' | 'matched';
 
+export type ReceiptGroup = 'month' | 'vendor' | 'category';
+export const RECEIPT_GROUPS: ReceiptGroup[] = ['month', 'vendor', 'category'];
+
 export interface ReceiptFilters {
   view?: ReceiptView;
   from?: string | null;
   to?: string | null;
+  years?: string[] | null;
+  vendor?: string[] | null; // tidied vendor names; 'none' for receipts without one
+  category?: string[] | null; // 'none' for receipts without one
   q?: string | null;
+  group?: ReceiptGroup;
 }
+
+// A vendor's tidy name, the same way bank payees are named.
+const vendorName = (vendor: string | null) => (vendor && vendor.trim() ? payeeFor(vendor) : null);
 
 export interface ReceiptEdit {
   vendor?: string | null;
@@ -136,29 +147,98 @@ export function receiptService(options: {
     return row ? toReceipt(row) : null;
   };
 
+  // The date a receipt is filed under: its own, or the day it was added if not read yet.
+  const filedDate = (r: { date: string | null; createdAt: string }) => r.date || r.createdAt.slice(0, 10);
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const groupOf = (r: ReturnType<typeof toReceipt>, by: ReceiptGroup): { key: string; label: string } => {
+    if (by === 'vendor') {
+      const name = vendorName(r.vendor);
+      return name ? { key: 'v:' + name.toLowerCase(), label: name } : { key: 'v:', label: 'No vendor yet' };
+    }
+    if (by === 'category') return r.category ? { key: 'c:' + r.category, label: r.category } : { key: 'c:', label: 'No category' };
+    if (!r.date) return { key: 'm:', label: 'No date yet' };
+    return { key: 'm:' + r.date.slice(0, 7), label: MONTHS[Number(r.date.slice(5, 7)) - 1] + ' ' + r.date.slice(0, 4) };
+  };
+
   function list(filters: ReceiptFilters = {}, limit = 60, offset = 0) {
     const clauses: string[] = [];
     const params: (string | number)[] = [];
-    if (filters.view === 'review') clauses.push(`(r.status = 'failed' OR (r.status = 'pending' AND r.read_error IS NOT NULL) OR (r.status = 'read' AND r.checked = 0))`);
-    if (filters.view === 'unmatched') clauses.push(`r.transaction_id IS NULL AND r.status = 'read'`);
+    const filed = 'COALESCE(r.receipt_date, substr(r.created_at, 1, 10))';
+    const marks = (n: number) => new Array(n).fill('?').join(', ');
+    if (filters.view === 'review') clauses.push("(r.status = 'failed' OR (r.status = 'pending' AND r.read_error IS NOT NULL) OR (r.status = 'read' AND r.checked = 0))");
+    if (filters.view === 'unmatched') clauses.push("r.transaction_id IS NULL AND r.status = 'read'");
     if (filters.view === 'matched') clauses.push('r.transaction_id IS NOT NULL');
     if (filters.from) {
-      clauses.push('r.receipt_date >= ?');
+      clauses.push(filed + ' >= ?');
       params.push(filters.from);
     }
     if (filters.to) {
-      clauses.push('r.receipt_date <= ?');
+      clauses.push(filed + ' <= ?');
       params.push(filters.to);
     }
+    if (filters.years?.length) {
+      clauses.push('substr(' + filed + ', 1, 4) IN (' + marks(filters.years.length) + ')');
+      params.push(...filters.years);
+    }
+    if (filters.category?.length) {
+      const named = filters.category.filter((c) => c !== 'none');
+      const parts = named.length ? ['r.category IN (' + marks(named.length) + ')'] : [];
+      params.push(...named);
+      if (filters.category.includes('none')) parts.push('r.category IS NULL');
+      clauses.push('(' + parts.join(' OR ') + ')');
+    }
     if (filters.q) {
-      const like = `%${filters.q.replace(/[\\%_]/g, '\\$&')}%`;
-      clauses.push(`(r.vendor LIKE ? ESCAPE '\\' OR r.file_name LIKE ? ESCAPE '\\' OR r.note LIKE ? ESCAPE '\\' OR r.items LIKE ? ESCAPE '\\')`);
+      const like = '%' + filters.q.replace(/[\\%_]/g, '\\$&') + '%';
+      clauses.push("(r.vendor LIKE ? ESCAPE '\\' OR r.file_name LIKE ? ESCAPE '\\' OR r.note LIKE ? ESCAPE '\\' OR r.items LIKE ? ESCAPE '\\')");
       params.push(like, like, like, like);
     }
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const total = (db.prepare(`SELECT COUNT(*) AS n FROM receipts r ${where}`).get(...params) as Row).n as number;
-    const rows = db.prepare(`${SELECT} ${where} ORDER BY COALESCE(r.receipt_date, substr(r.created_at, 1, 10)) DESC, r.id DESC LIMIT ? OFFSET ?`).all(...params, limit, offset) as Row[];
-    return { total, receipts: rows.map(toReceipt) };
+    const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
+    let all = (db.prepare(SELECT + ' ' + where + ' ORDER BY ' + filed + ' DESC, r.id DESC').all(...params) as Row[]).map(toReceipt);
+    // Vendors are compared by their tidied name, so "THE HOME DEPOT #2345" is Home Depot.
+    if (filters.vendor?.length) {
+      const wanted = new Set(filters.vendor.map((v) => v.toLowerCase()));
+      all = all.filter((r) => wanted.has((vendorName(r.vendor) || 'none').toLowerCase()));
+    }
+
+    // Groups in order: months newest first; vendors and categories A to Z, with the
+    // "not known yet" group last. Within a group, newest first.
+    const by = filters.group || 'month';
+    const groups = new Map<string, { key: string; label: string; count: number; total: number }>();
+    for (const r of all) {
+      const g = groupOf(r, by);
+      const entry = groups.get(g.key) || { ...g, count: 0, total: 0 };
+      entry.count++;
+      entry.total = Math.round((entry.total + (r.total ?? 0)) * 100) / 100;
+      groups.set(g.key, entry);
+    }
+    const order = [...groups.values()].sort((a, b) => {
+      const blankA = a.key.endsWith(':');
+      const blankB = b.key.endsWith(':');
+      if (blankA !== blankB) return blankA ? 1 : -1;
+      return by === 'month' ? b.key.localeCompare(a.key) : a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+    });
+    const rank = new Map(order.map((g, i) => [g.key, i]));
+    all.sort((a, b) => rank.get(groupOf(a, by).key)! - rank.get(groupOf(b, by).key)! || filedDate(b).localeCompare(filedDate(a)) || b.id - a.id);
+    return {
+      total: all.length,
+      receipts: all.slice(offset, offset + limit).map((r) => ({ ...r, group: groupOf(r, by).key })),
+      groups: order,
+    };
+  }
+
+  // Everything that can be filtered on, with how many receipts each has.
+  function choices() {
+    const rows = db.prepare('SELECT vendor, category, COALESCE(receipt_date, substr(created_at, 1, 10)) AS filed FROM receipts').all() as Row[];
+    const tally = (values: (string | null)[]) => {
+      const map = new Map<string, number>();
+      for (const v of values) if (v) map.set(v, (map.get(v) || 0) + 1);
+      return [...map.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    };
+    return {
+      years: [...new Set(rows.map((r) => String(r.filed).slice(0, 4)))].sort().reverse(),
+      vendors: tally(rows.map((r) => vendorName(r.vendor))),
+      categories: tally(rows.map((r) => r.category)),
+    };
   }
 
   const counts = () => {
@@ -454,7 +534,7 @@ export function receiptService(options: {
     return txId as number;
   }
 
-  return { add, get, list, counts, update, remove, filePath, thumbPath, readAgain, kick, suggestions, autoMatch, matchUnlinked, link, unlink, recordCash, keyStatus, setApiKey, apiKey };
+  return { add, get, list, choices, counts, update, remove, filePath, thumbPath, readAgain, kick, suggestions, autoMatch, matchUnlinked, link, unlink, recordCash, keyStatus, setApiKey, apiKey };
 }
 
 export type ReceiptService = ReturnType<typeof receiptService>;
