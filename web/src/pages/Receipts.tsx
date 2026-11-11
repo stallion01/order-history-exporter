@@ -1,9 +1,9 @@
 // Receipts: take a photo or upload files, and see what's been read and matched.
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Camera, CheckCircle2, FileText, Link2, Loader2, Search, Upload } from 'lucide-react';
 import { useApi } from '../api';
-import { STATUS_LABELS, uploadReceipt } from '../receipts';
+import { STATUS_LABELS, receiptQuery, uploadReceipt } from '../receipts';
 import type { Receipt } from '../receipts';
 import { money, plural, whole } from '../format';
 import { Banner, Button, Card, Empty, Field, Input, Loading, MultiSelect, PageHeader, Pager, Select, cx } from '../ui';
@@ -37,18 +37,19 @@ export function Receipts() {
   const offset = Number(filters.value('page')) || 0;
   const [search, setSearch] = useState(filters.value('q'));
   const group = (filters.value('group') || 'month') as Grouping;
-  const query = new URLSearchParams({ view, group, limit: String(PAGE), offset: String(offset) });
-  const { from, to, years } = filters.range();
-  if (from) query.set('from', from);
-  if (to) query.set('to', to);
-  for (const y of years || []) query.append('years', y);
-  for (const key of ['vendor', 'category']) for (const v of filters.values(key)) query.append(key, v);
-  if (filters.value('q')) query.set('q', filters.value('q'));
+  const query = receiptQuery(filters);
+  query.set('limit', String(PAGE));
+  query.set('offset', String(offset));
   const list = useApi<ListData>(`/api/receipts?${query}`);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const camera = useRef<HTMLInputElement>(null);
   const files = useRef<HTMLInputElement>(null);
   const counts = list.data?.counts;
+  const flash = (useLocation().state as { flash?: string } | null)?.flash;
+  // Opened receipts keep the list's filters, so they can step to the next one.
+  const listParams = new URLSearchParams(filters.params);
+  listParams.delete('page');
+  const listSearch = listParams.size ? `?${listParams}` : '';
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -97,6 +98,7 @@ export function Receipts() {
   return (
     <>
       <PageHeader title="Receipts" description="Photograph or upload receipts. Each is read, then matched to its card or bank transaction." />
+      {flash && <Banner tone="info">{flash}</Banner>}
 
       <div className="mb-5 grid grid-cols-2 gap-3 sm:flex">
         <Button variant="primary" className="min-h-12 sm:min-h-9" onClick={() => camera.current?.click()}>
@@ -210,7 +212,7 @@ export function Receipts() {
               <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                 {receipts.map((r) => (
                   <li key={r.id}>
-                    <ReceiptTile receipt={r} />
+                    <ReceiptTile receipt={r} search={listSearch} />
                   </li>
                 ))}
               </ul>
@@ -236,11 +238,11 @@ function sections(data: ListData) {
   return out;
 }
 
-function ReceiptTile({ receipt: r }: { receipt: Receipt }) {
+function ReceiptTile({ receipt: r, search }: { receipt: Receipt; search: string }) {
   const needsLook = r.status === 'failed' || (r.status === 'pending' && r.readError) || (r.status === 'read' && !r.checked);
   return (
     <Link
-      to={`/receipts/${r.id}`}
+      to={`/receipts/${r.id}${search}`}
       className="block overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm hover:border-emerald-500 dark:border-slate-800 dark:bg-slate-900"
     >
       <div className="flex aspect-[4/3] items-center justify-center overflow-hidden bg-slate-100 dark:bg-slate-800">

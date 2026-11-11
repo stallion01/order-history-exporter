@@ -1,12 +1,14 @@
 // One receipt: the photo, what was read from it (editable), and its transaction.
-import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ExternalLink, Link2, RefreshCw, Trash2, Unlink, Wallet } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { TouchEvent } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Link2, RefreshCw, Trash2, Unlink, Wallet } from 'lucide-react';
 import { post, useApi } from '../api';
 import { Amount } from '../bank';
+import { useFilters } from '../filters';
 import type { Meta } from '../filters';
-import { money } from '../format';
-import { STATUS_LABELS } from '../receipts';
+import { money, plural } from '../format';
+import { STATUS_LABELS, receiptQuery } from '../receipts';
 import type { Receipt, Suggestion } from '../receipts';
 import { Banner, Button, Card, Confirm, Empty, Field, Input, Loading, Select, TD, TH, TR } from '../ui';
 
@@ -32,21 +34,106 @@ const toForm = (r: Receipt): Form => ({
   note: r.note || '',
 });
 const number = (text: string) => (text.trim() === '' ? null : Number(text.replace(/[$,\s]/g, '')));
+const same = (a: Form, b: Form) => JSON.stringify(a) === JSON.stringify(b);
+const typing = (target: EventTarget | null) => target instanceof HTMLElement && Boolean(target.closest('input, select, textarea, [contenteditable="true"]'));
+
+interface Nav {
+  position: number | null;
+  total: number;
+  prev: number | null;
+  next: number | null;
+  nextToCheck: number | null;
+  toCheck: number;
+}
 
 export function ReceiptDetail({ meta }: { meta: Meta | null }) {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const filters = useFilters();
+  // The list this receipt was opened from, kept in the address so Back, Close and the
+  // arrows all return to (or step through) the same receipts.
+  const search = location.search;
+  const listUrl = `/receipts${search}`;
   const { data, error, loading, reload } = useApi<{ receipt: Receipt; suggestions: Suggestion[] }>(`/api/receipts/${encodeURIComponent(id || '')}`);
+  const nav = useApi<Nav>(`/api/receipts/${encodeURIComponent(id || '')}/nav?${receiptQuery(filters)}`);
   const [form, setForm] = useState<Form | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
+  const flash = (location.state as { flash?: string } | null)?.flash;
+  const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(flash ? { tone: 'info', text: flash } : null);
   const [confirm, setConfirm] = useState(false);
   const receipt = data?.receipt;
   const reading = receipt && (receipt.status === 'reading' || (receipt.status === 'pending' && !receipt.readError));
+  const dirty = Boolean(form && receipt && receipt.id === Number(id) && !same(form, toForm(receipt)));
 
   useEffect(() => {
     if (receipt) setForm(toForm(receipt));
   }, [receipt]);
+  // A new receipt opened in place: start at the top, with only its own message.
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+    setMessage(flash ? { tone: 'info', text: flash } : null);
+    setConfirm(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  const open = useCallback(
+    (target: number | null, state?: { flash: string }) => {
+      if (!target) return;
+      if (!state && dirty && !window.confirm('Leave without saving your changes?')) return;
+      navigate(`/receipts/${target}${search}`, { state });
+    },
+    [dirty, navigate, search]
+  );
+  const close = useCallback(() => {
+    if (dirty && !window.confirm('Leave without saving your changes?')) return;
+    navigate(listUrl);
+  }, [dirty, navigate, listUrl]);
+
+  // Arrow keys step through the list on a keyboard, as long as you're not typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey || e.ctrlKey || e.metaKey || typing(e.target) || confirm) return;
+      if (e.key === 'ArrowLeft') open(nav.data?.prev ?? null);
+      if (e.key === 'ArrowRight') open(nav.data?.next ?? null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, nav.data, confirm]);
+
+  // On a phone, swipe left for the next receipt and right for the one before. Only a
+  // clearly sideways swipe counts, so scrolling and pinch-zooming the photo still work.
+  const touch = useRef<{ x: number; y: number; t: number } | null>(null);
+  const onTouchStart = (e: TouchEvent) => {
+    touch.current = e.touches.length === 1 && !typing(e.target) ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() } : null;
+  };
+  const onTouchEnd = (e: TouchEvent) => {
+    const start = touch.current;
+    touch.current = null;
+    if (!start || confirm || (window.visualViewport && window.visualViewport.scale > 1.05)) return;
+    const dx = e.changedTouches[0].clientX - start.x;
+    const dy = e.changedTouches[0].clientY - start.y;
+    if (Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) / 2 || Date.now() - start.t > 800) return;
+    open(dx < 0 ? (nav.data?.next ?? null) : (nav.data?.prev ?? null));
+  };
+
+  // Saving marks the receipt checked and moves on to the next one still to check, or
+  // back to the list when there are none left.
+  async function save(body: unknown) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await post(`/api/receipts/${id}`, body);
+      const left = nav.data?.toCheck ?? 0;
+      setBusy(false);
+      if (nav.data?.nextToCheck) open(nav.data.nextToCheck, { flash: `Saved. ${left ? `${plural(left, 'receipt')} left to check.` : ''}` });
+      else navigate(listUrl, { state: { flash: 'Saved. Nothing left to check here.' } });
+      return;
+    } catch (e) {
+      setMessage({ tone: 'error', text: (e as Error).message });
+    }
+    setBusy(false);
+  }
   // While it's being read, check back every few seconds.
   useEffect(() => {
     if (!reading) return;
@@ -61,6 +148,7 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
       await post(path, body);
       if (done) setMessage({ tone: 'info', text: done });
       reload();
+      nav.reload();
     } catch (e) {
       setMessage({ tone: 'error', text: (e as Error).message });
     }
@@ -72,12 +160,36 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
   const isPdf = r.mime === 'application/pdf';
   const invalid = form && [form.total, form.tax, form.tip].some((v) => v.trim() !== '' && !Number.isFinite(number(v)));
 
+  const n = nav.data;
+
   return (
-    <>
+    <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Link to="/receipts" className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
-          <ArrowLeft className="size-4" aria-hidden /> All receipts
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            to={listUrl}
+            onClick={(e) => {
+              e.preventDefault();
+              close();
+            }}
+            className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+          >
+            <ArrowLeft className="size-4" aria-hidden /> All receipts
+          </Link>
+          {n && n.position !== null && n.total > 1 && (
+            <div className="flex items-center gap-1">
+              <Button className="min-h-8 px-2" disabled={!n.prev} onClick={() => open(n.prev)} aria-label="Previous receipt" title="Previous receipt">
+                <ChevronLeft className="size-4" aria-hidden />
+              </Button>
+              <span className="min-w-14 text-center text-xs text-slate-600 tabular-nums dark:text-slate-400">
+                {n.position} of {n.total}
+              </span>
+              <Button className="min-h-8 px-2" disabled={!n.next} onClick={() => open(n.next)} aria-label="Next receipt" title="Next receipt">
+                <ChevronRight className="size-4" aria-hidden />
+              </Button>
+            </div>
+          )}
+        </div>
         <div className="flex gap-2">
           <Button disabled={busy || Boolean(reading)} onClick={() => act(`/api/receipts/${r.id}/read`, {}, 'Reading it again.')}>
             <RefreshCw className="size-4" aria-hidden />
@@ -124,9 +236,7 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
                 className="grid grid-cols-2 gap-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  act(
-                    `/api/receipts/${r.id}`,
-                    {
+                  save({
                       vendor: form.vendor || null,
                       date: form.date || null,
                       total: number(form.total),
@@ -136,9 +246,7 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
                       category: form.category || null,
                       note: form.note || null,
                       checked: true,
-                    },
-                    'Saved.'
-                  );
+                  });
                 }}
               >
                 <Field label="Vendor" className="col-span-2">
@@ -173,6 +281,10 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
                 <div className="col-span-2 flex flex-wrap items-center gap-3">
                   <Button type="submit" variant="primary" busy={busy} disabled={Boolean(invalid)}>
                     {r.checked ? 'Save' : 'Looks right, save'}
+                    {n?.nextToCheck ? ' & next' : ''}
+                  </Button>
+                  <Button onClick={close} disabled={busy}>
+                    Close
                   </Button>
                   {invalid && <span className="text-xs text-red-700 dark:text-red-400">Amounts must be numbers.</span>}
                   {r.paymentMethod && <span className="text-xs text-slate-500">Paid by {r.paymentMethod}</span>}
@@ -218,7 +330,10 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
           setBusy(true);
           try {
             await post(`/api/receipts/${r.id}/delete`);
-            navigate('/receipts');
+            setBusy(false);
+            const after = n?.next ?? n?.prev ?? null;
+            if (after) open(after, { flash: 'Receipt deleted.' });
+            else navigate(listUrl);
           } catch (e) {
             setMessage({ tone: 'error', text: (e as Error).message });
             setBusy(false);
@@ -228,7 +343,7 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
       >
         The photo and what was read from it are deleted from your server. A transaction it was matched to is kept.
       </Confirm>
-    </>
+    </div>
   );
 }
 

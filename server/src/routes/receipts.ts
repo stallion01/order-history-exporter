@@ -35,8 +35,7 @@ export function receiptRoutes(app: FastifyInstance, receipts: ReceiptService, ca
     throw new HttpError(400, (err as Error).message);
   };
 
-  app.get('/api/receipts', async (request) => {
-    const query = queryOf(request.query);
+  const filtersOf = (query: URLSearchParams) => {
     const view = (query.get('view') || 'all') as ReceiptView;
     if (!VIEWS.includes(view)) throw new HttpError(400, 'Unknown view.');
     const group = (query.get('group') || 'month') as ReceiptGroup;
@@ -47,23 +46,24 @@ export function receiptRoutes(app: FastifyInstance, receipts: ReceiptService, ca
       const values = query.getAll(key).filter(Boolean).map((v) => v.slice(0, 120));
       return values.length ? values.slice(0, 100) : null;
     };
+    return {
+      view,
+      from: dateParam(query.get('from'), 'from'),
+      to: dateParam(query.get('to'), 'to'),
+      years: years.length ? years : null,
+      vendor: several('vendor'),
+      category: several('category'),
+      q: query.get('q') || null,
+      group,
+    };
+  };
+
+  app.get('/api/receipts', async (request) => {
+    const query = queryOf(request.query);
     const limit = Math.min(Math.max(Number(query.get('limit')) || 60, 1), 200);
     const offset = Math.max(Number(query.get('offset')) || 0, 0);
     return {
-      ...receipts.list(
-        {
-          view,
-          from: dateParam(query.get('from'), 'from'),
-          to: dateParam(query.get('to'), 'to'),
-          years: years.length ? years : null,
-          vendor: several('vendor'),
-          category: several('category'),
-          q: query.get('q') || null,
-          group,
-        },
-        limit,
-        offset
-      ),
+      ...receipts.list(filtersOf(query), limit, offset),
       choices: receipts.choices(),
       counts: receipts.counts(),
       reader: receipts.keyStatus(),
@@ -99,6 +99,9 @@ export function receiptRoutes(app: FastifyInstance, receipts: ReceiptService, ca
     const id = idOf(request);
     return { receipt: receipts.get(id), suggestions: receipts.suggestions(id) };
   });
+
+  // The receipts either side of this one in the list it was opened from.
+  app.get('/api/receipts/:id/nav', async (request) => receipts.neighbours(filtersOf(queryOf(request.query)), idOf(request)));
 
   // The stored file. Served only to signed-in users, never cached by shared caches.
   app.get('/api/receipts/:id/file', async (request, reply) => {

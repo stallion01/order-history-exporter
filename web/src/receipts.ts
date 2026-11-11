@@ -2,6 +2,7 @@
 // JPEG (phone photos are often 5–10 MB; a receipt reads fine at 2000 pixels), and a
 // small preview is made. PDFs are sent as they are.
 import { post } from './api';
+import type { useFilters } from './filters';
 
 const MAX_SIDE = 2000;
 const THUMB_SIDE = 360;
@@ -98,6 +99,20 @@ export async function uploadReceipt(file: File): Promise<{ id: number; duplicate
     bitmap.close();
   }
   return post('/api/receipts', { fileName: file.name, originalHash, data: toBase64(data), thumb: thumb ? toBase64(thumb) : null });
+}
+
+// The receipt list's filters (view, period, vendor, category, search, grouping) as an
+// API query. The list and a receipt opened from it share these, so the receipt page
+// can step to the ones either side in the same order.
+export function receiptQuery(filters: ReturnType<typeof useFilters>) {
+  const query = new URLSearchParams({ view: filters.value('view') || 'all', group: filters.value('group') || 'month' });
+  const { from, to, years } = filters.range();
+  if (from) query.set('from', from);
+  if (to) query.set('to', to);
+  for (const y of years || []) query.append('years', y);
+  for (const key of ['vendor', 'category']) for (const v of filters.values(key)) query.append(key, v);
+  if (filters.value('q')) query.set('q', filters.value('q'));
+  return query;
 }
 
 export const STATUS_LABELS: Record<string, string> = {

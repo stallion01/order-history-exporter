@@ -225,6 +225,34 @@ test('receipts are grouped by month, vendor or category, and filtered by each', 
   assert.equal((await call('/api/receipts?group=size')).status, 400);
 });
 
+test('a receipt knows its neighbours in the list, and the next one still to check', async () => {
+  const { receipts: list } = await get('/api/receipts?group=month&limit=200');
+  assert.ok(list.length >= 3);
+  const ids = list.map((r) => r.id);
+  const middle = await get(`/api/receipts/${ids[1]}/nav?group=month`);
+  assert.deepEqual([middle.position, middle.total, middle.prev, middle.next], [2, ids.length, ids[0], ids[2]]);
+
+  // The next unchecked one after this, wrapping round to the start.
+  const unchecked = list.filter((r) => !r.checked && r.id !== ids[1]);
+  const after = [...list.slice(2), ...list.slice(0, 1)].find((r) => !r.checked);
+  assert.equal(middle.toCheck, unchecked.length);
+  assert.equal(middle.nextToCheck, after ? after.id : null);
+
+  const first = await get(`/api/receipts/${ids[0]}/nav?group=month`);
+  assert.equal(first.prev, null);
+  const last = await get(`/api/receipts/${ids.at(-1)}/nav?group=month`);
+  assert.equal(last.next, null);
+
+  // Opened from a filtered list it isn't in: no position, start from the top.
+  const outside = await get(`/api/receipts/${ids[0]}/nav?years=2025`);
+  assert.deepEqual([outside.position, outside.total, outside.prev, outside.next, outside.nextToCheck], [null, 0, null, null, null]);
+
+  // Once everything is checked there is nothing left to go to.
+  for (const r of list) if (!r.checked) await post(`/api/receipts/${r.id}`, { checked: true });
+  assert.deepEqual(await get(`/api/receipts/${ids[1]}/nav?group=month`).then((n) => [n.nextToCheck, n.toCheck]), [null, 0]);
+  for (const r of list) if (!r.checked) await post(`/api/receipts/${r.id}`, { checked: false });
+});
+
 test('the nightly backup copies receipt files, once', () => {
   const { backup } = require('../server/dist/backup');
   const { copyReceipts } = require('../server/dist/backup');

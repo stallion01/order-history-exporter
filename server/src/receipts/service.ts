@@ -534,7 +534,24 @@ export function receiptService(options: {
     return txId as number;
   }
 
-  return { add, get, list, choices, counts, update, remove, filePath, thumbPath, readAgain, kick, suggestions, autoMatch, matchUnlinked, link, unlink, recordCash, keyStatus, setApiKey, apiKey };
+  // Where a receipt sits in a filtered list, for stepping through them one by one:
+  // the ones either side, and the next one not checked yet (wrapping round to the
+  // start). A receipt that isn't in the list starts from the top.
+  function neighbours(filters: ReceiptFilters, id: number) {
+    const { receipts: all } = list(filters, Number.MAX_SAFE_INTEGER, 0);
+    const at = all.findIndex((r) => r.id === id);
+    const others = at < 0 ? all : [...all.slice(at + 1), ...all.slice(0, at)];
+    return {
+      position: at < 0 ? null : at + 1,
+      total: all.length,
+      prev: at > 0 ? all[at - 1].id : null,
+      next: at >= 0 && at < all.length - 1 ? all[at + 1].id : null,
+      nextToCheck: others.find((r) => !r.checked)?.id ?? null,
+      toCheck: all.filter((r) => !r.checked && r.id !== id).length,
+    };
+  }
+
+  return { add, get, list, neighbours, choices, counts, update, remove, filePath, thumbPath, readAgain, kick, suggestions, autoMatch, matchUnlinked, link, unlink, recordCash, keyStatus, setApiKey, apiKey };
 }
 
 export type ReceiptService = ReturnType<typeof receiptService>;
