@@ -248,6 +248,38 @@ test('report totals, filters, and CSV come from the database', async () => {
   assert.equal((await (await call('/api/export.csv?store=homedepot&layout=orders')).text()).trim().split('\r\n').length, 4);
 });
 
+test('filters take several values each, and any of them matches', async () => {
+  await post('/api/orders', {
+    store: 'multimart',
+    orders: [
+      { orderId: 'W1', storeName: 'Multi Mart', date: '2024-06-01', total: 30, payment: 'Amex ending 9876', items: [{ name: 'Paper Towels' }] },
+      { orderId: 'W2', storeName: 'Multi Mart', date: '2026-02-01', total: 50, payment: 'Visa ending 1234', items: [{ name: 'Bath Towels' }] },
+    ],
+  });
+  const orders = async (query) => (await get(`/api/orders?${query}`)).total;
+  assert.equal(await orders('store=homedepot&store=multimart'), 5);
+  assert.equal(await orders('store=multimart&years=2024&years=2026'), 2);
+  assert.equal(await orders('store=homedepot&store=multimart&years=2025'), 3);
+  assert.equal(await orders('store=homedepot&store=multimart&years=2024&years=2025&from=2025-02-01'), 2, 'years and dates both apply');
+  assert.equal(await orders('store=homedepot&store=multimart&payment=Amex%20ending%209876&payment=none'), 2, 'a method or none recorded');
+  assert.equal(await orders('store=multimart&payment=Visa%20ending%201234&payment=Amex%20ending%209876'), 2);
+
+  const report = await get('/api/report?store=homedepot&store=multimart&years=2024&years=2026');
+  assert.equal(report.totals.orders, 2);
+  assert.equal(report.totals.spend, 80);
+
+  const categories = (await get('/api/items?store=multimart')).items.map((item) => item.category);
+  const both = (await get(`/api/items?store=multimart&${categories.map((c) => `category=${encodeURIComponent(c)}`).join('&')}`)).total;
+  assert.equal(both, 2);
+  assert.equal((await call('/api/orders?years=20x6')).status, 400);
+  assert.equal((await call('/api/orders?store=multimart&store=bad%20store')).status, 400);
+
+  // Bulk marking by filters keeps every value of a list.
+  const marked = await post('/api/items/status', { status: 'personal', filters: { store: ['multimart'], years: ['2024', '2026'] } });
+  assert.equal(marked.changed, 2);
+  await post('/api/items/status', { status: null, filters: { store: ['multimart'] } });
+});
+
 test('categories: rules, phrases beating single words, and store hints', () => {
   const classify = createClassifier([]);
   const category = (name, store) => classify(name, store).category;

@@ -467,10 +467,36 @@ function openDatabase(file) {
 
   /* ---------- Reading orders and items ---------- */
 
+  // Store, payment, ZIP, category and year filters can each hold several values (any
+  // of them matches). A single string still works. An empty list means no filter.
+  const LIST_FILTERS = ['store', 'payment', 'zip', 'category', 'years'];
+  function normalize(filters = {}) {
+    const out = { ...filters };
+    for (const key of LIST_FILTERS) {
+      const raw = filters[key];
+      const values = (Array.isArray(raw) ? raw : [raw]).filter((v) => v !== null && v !== undefined && v !== '').map(String);
+      out[key] = values.length ? [...new Set(values)] : null;
+    }
+    return out;
+  }
+
   // Shared WHERE clause, built only from fixed text and bound parameters.
-  function whereFor(filters = {}) {
+  function whereFor(raw = {}) {
+    const filters = normalize(raw);
     const clauses = [];
     const params = [];
+    // column IN (...), plus IS NULL when the "none recorded" choice is picked.
+    const anyOf = (column, values, none) => {
+      if (!values) return;
+      const real = values.filter((v) => v !== none);
+      const parts = [];
+      if (real.length) {
+        parts.push(`${column} IN (${real.map(() => '?').join(', ')})`);
+        params.push(...real);
+      }
+      if (none && values.includes(none)) parts.push(`${column} IS NULL`);
+      clauses.push(parts.length > 1 ? `(${parts.join(' OR ')})` : parts[0]);
+    };
     if (filters.from) {
       clauses.push('o.order_date >= ?');
       params.push(filters.from);
@@ -479,22 +505,10 @@ function openDatabase(file) {
       clauses.push('o.order_date <= ?');
       params.push(filters.to);
     }
-    if (filters.store) {
-      clauses.push('o.store = ?');
-      params.push(filters.store);
-    }
-    if (filters.payment === NO_PAYMENT) {
-      clauses.push('o.payment IS NULL');
-    } else if (filters.payment) {
-      clauses.push('o.payment = ?');
-      params.push(filters.payment);
-    }
-    if (filters.zip === NO_ZIP) {
-      clauses.push('o.delivery_zip IS NULL');
-    } else if (filters.zip) {
-      clauses.push('o.delivery_zip = ?');
-      params.push(filters.zip);
-    }
+    anyOf('substr(o.order_date, 1, 4)', filters.years);
+    anyOf('o.store', filters.store);
+    anyOf('o.payment', filters.payment, NO_PAYMENT);
+    anyOf('o.delivery_zip', filters.zip, NO_ZIP);
     if (filters.q) {
       const like = `%${String(filters.q).replace(/[\\%_]/g, '\\$&')}%`;
       clauses.push(
@@ -528,7 +542,8 @@ function openDatabase(file) {
   // Every item matching the filters, with its category, share of the order's
   // total, and business or personal status. Worked out on each read, so an improved
   // rule or a new correction applies to everything straight away.
-  function enrichedItems(filters = {}) {
+  function enrichedItems(raw = {}) {
+    const filters = normalize(raw);
     const { sql, params } = whereFor(filters);
     const orders = db.prepare(`SELECT o.* FROM orders o ${sql}`).all(...params);
     const byOrder = allItemsByOrder();
@@ -568,7 +583,7 @@ function openDatabase(file) {
         const resolved = tax.resolveStatus(item, mark, rules);
         item.status = resolved.status;
         item.statusSource = resolved.source;
-        if (filters.category && item.category !== filters.category) return;
+        if (filters.category && !filters.category.includes(item.category)) return;
         if (filters.status && item.status !== filters.status) return;
         out.push(item);
       });
@@ -596,7 +611,8 @@ function openDatabase(file) {
       .map(({ label, key, spend, orderKeys }) => ({ label, key, spend: tax.cents(spend), orders: orderKeys.size }))
       .sort((a, b) => b.spend - a.spend);
 
-  function report(filters = {}) {
+  function report(raw = {}) {
+    const filters = normalize(raw);
     const { sql, params } = whereFor(filters);
     const orders = db.prepare(`SELECT o.* FROM orders o ${sql}`).all(...params);
     const items = enrichedItems(filters);
@@ -668,7 +684,8 @@ function openDatabase(file) {
     };
   }
 
-  function listOrders(filters = {}, { sort = 'date', direction = 'desc', limit, offset = 0 } = {}) {
+  function listOrders(raw = {}, { sort = 'date', direction = 'desc', limit, offset = 0 } = {}) {
+    const filters = normalize(raw);
     const { sql, params } = whereFor(filters);
     const column = ORDER_SORTS[sort] || ORDER_SORTS.date;
     const order = direction === 'asc' ? 'ASC' : 'DESC';

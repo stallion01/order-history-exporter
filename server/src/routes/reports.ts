@@ -113,7 +113,7 @@ export function reportRoutes(app: FastifyInstance, db: OrdersDb) {
     let items: { store: string; orderId: string; name: string }[];
     if (body.filters && typeof body.filters === 'object') {
       const entries = Object.entries(body.filters).filter(([, v]) => v !== null && v !== undefined && v !== '');
-      items = db.enrichedItems(filtersFrom(new URLSearchParams(entries as [string, string][])));
+      items = db.enrichedItems(filtersFrom(queryOf(Object.fromEntries(entries))));
     } else if (Array.isArray(body.items)) {
       items = body.items.map((item: Record<string, unknown>) => ({
         store: storeParam(item.store),

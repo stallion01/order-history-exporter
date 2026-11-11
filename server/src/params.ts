@@ -17,8 +17,11 @@ export const STATUSES = ['business', 'personal'];
 export const RULE_FIELDS = ['zip', 'payment', 'store', 'category'];
 
 export type Query = URLSearchParams;
+// A repeated key (?store=a&store=b) arrives as an array; keep each value.
 export const queryOf = (raw: unknown): Query =>
-  new URLSearchParams(Object.entries((raw as Record<string, unknown>) || {}).map(([k, v]) => [k, String(v)]));
+  new URLSearchParams(
+    Object.entries((raw as Record<string, unknown>) || {}).flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((one) => [k, String(one)] as [string, string]))
+  );
 
 export function dateParam(value: unknown, name: string): string | null {
   if (value === null || value === undefined || value === '') return null;
@@ -37,17 +40,29 @@ export function textParam(value: unknown, name: string, max = 200): string {
   return text;
 }
 
+const MAX_CHOICES = 100;
+
+// Every non-empty value of a key, or null when there are none.
+function listParam(query: Query, key: string, check?: (value: string) => string): string[] | null {
+  const values = query.getAll(key).filter(Boolean);
+  if (values.length > MAX_CHOICES) throw new HttpError(400, `Too many ${key} choices.`);
+  return values.length ? values.map((v) => (check ? check(v) : v)) : null;
+}
+
 export function filtersFrom(query: Query): Filters {
-  const store = query.get('store');
   const status = query.get('status') || null;
   if (status && ![...STATUSES, 'unreviewed'].includes(status)) throw new HttpError(400, 'Unknown status.');
   return {
     from: dateParam(query.get('from'), 'from'),
     to: dateParam(query.get('to'), 'to'),
-    store: store ? storeParam(store) : null,
-    payment: query.get('payment') || null,
-    zip: query.get('zip') || null,
-    category: query.get('category') || null,
+    years: listParam(query, 'years', (v) => {
+      if (!YEAR.test(v)) throw new HttpError(400, 'years must look like 2025.');
+      return v;
+    }),
+    store: listParam(query, 'store', storeParam),
+    payment: listParam(query, 'payment'),
+    zip: listParam(query, 'zip'),
+    category: listParam(query, 'category'),
     q: query.get('q') || null,
     status,
   };

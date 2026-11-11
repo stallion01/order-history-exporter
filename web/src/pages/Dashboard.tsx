@@ -11,12 +11,13 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
   const { query, params } = useFilters();
   const navigate = useNavigate();
 
-  // A page link that keeps the dashboard's filters and adds one more.
+  // A page link that keeps the dashboard's filters, with the clicked one replacing
+  // whatever was ticked for that filter.
   const linkTo = (path: string, changes: Record<string, string>) => {
     const next = new URLSearchParams();
-    for (const key of ['preset', 'from', 'to', 'store', 'category', 'zip', 'payment', 'q']) {
-      const value = changes[key] ?? params.get(key);
-      if (value) next.set(key, value);
+    for (const key of ['preset', 'from', 'to', 'years', 'store', 'category', 'zip', 'payment', 'q']) {
+      const chosen = key in changes ? [changes[key]] : params.getAll(key);
+      for (const value of chosen) if (value) next.append(key, value);
     }
     return `${path}?${next}`;
   };

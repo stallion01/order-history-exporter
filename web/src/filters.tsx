@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { isoDaysAgo } from './format';
-import { Field, Input, Select } from './ui';
+import { Field, Input, MultiSelect, Select } from './ui';
 
 export interface Meta {
   stores: { store: string; name: string }[];
@@ -14,11 +14,17 @@ export interface Meta {
   categories: { name: string; scheduleC: string | null; scheduleE: string | null }[];
 }
 
-const KEYS = ['preset', 'from', 'to', 'store', 'category', 'zip', 'payment', 'q'] as const;
+const KEYS = ['preset', 'from', 'to', 'years', 'store', 'category', 'zip', 'payment', 'q'] as const;
+// Filters that can hold several values, as repeated keys: ?store=ebay&store=amazon.
+export const LIST_KEYS = ['years', 'store', 'category', 'zip', 'payment'];
+
+// With no period in the address, reports cover this year. 'all' is All time.
+const DEFAULT_PRESET = 'this-year';
 
 export function useFilters() {
   const [params, setParams] = useSearchParams();
-  const value = (key: string) => params.get(key) || '';
+  const value = (key: string) => (key === 'preset' ? params.get(key) || DEFAULT_PRESET : params.get(key) || '');
+  const values = (key: string) => params.getAll(key).filter(Boolean);
 
   function dateRange() {
     const year = new Date().getFullYear();
@@ -31,47 +37,53 @@ export function useFilters() {
         return { from: isoDaysAgo(90), to: '' };
       case 'custom':
         return { from: value('from'), to: value('to') };
+      case 'years':
+        return { from: '', to: '', years: values('years') };
       default:
         return { from: '', to: '' };
     }
   }
+  const range = (): { from: string; to: string; years?: string[] } => dateRange();
 
   // The query string for the API, from the filters plus anything extra.
   function query(extra: Record<string, string | number | undefined> = {}) {
     const out = new URLSearchParams();
-    const values: Record<string, string | number | undefined> = {
-      ...dateRange(),
-      store: value('store'),
-      category: value('category'),
-      zip: value('zip'),
-      payment: value('payment'),
+    const all: Record<string, string | number | string[] | undefined> = {
+      ...range(),
+      store: values('store'),
+      category: values('category'),
+      zip: values('zip'),
+      payment: values('payment'),
       q: value('q'),
       ...extra,
     };
-    for (const [key, v] of Object.entries(values)) if (v !== '' && v !== undefined) out.set(key, String(v));
+    for (const [key, v] of Object.entries(all)) {
+      for (const one of Array.isArray(v) ? v : [v]) if (one !== '' && one !== undefined) out.append(key, String(one));
+    }
     return out.toString();
   }
 
-  function set(changes: Record<string, string>) {
+  function set(changes: Record<string, string | string[]>) {
     const next = new URLSearchParams(params);
     for (const [key, v] of Object.entries(changes)) {
-      if (v) next.set(key, v);
-      else next.delete(key);
+      next.delete(key);
+      for (const one of Array.isArray(v) ? v : [v]) if (one) next.append(key, one);
     }
     if (!('page' in changes)) next.delete('page');
     setParams(next, { replace: true });
   }
 
   const periodLabel = () => {
-    const { from, to } = dateRange();
+    const { from, to, years } = range();
+    if (years?.length) return `years_${[...years].sort().join('_')}`;
     return from || to ? `${from || 'start'}_to_${to || 'today'}` : 'all-time';
   };
 
-  return { value, set, query, periodLabel, params };
+  return { value, values, set, query, periodLabel, params };
 }
 
 export function FilterBar({ meta, show = KEYS as unknown as string[] }: { meta: Meta | null; show?: string[] }) {
-  const { value, set } = useFilters();
+  const { value, values, set } = useFilters();
   const [search, setSearch] = useState(value('q'));
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -87,13 +99,17 @@ export function FilterBar({ meta, show = KEYS as unknown as string[] }: { meta: 
     <form className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(0,1.5fr)]" onSubmit={(e) => e.preventDefault()} aria-label="Filters">
       <Field label="Period">
         <Select value={value('preset')} onChange={(e) => set({ preset: e.target.value })}>
-          <option value="">All time</option>
+          <option value="all">All time</option>
           <option value="this-year">This year</option>
           <option value="last-year">Last year</option>
           <option value="last-90">Last 90 days</option>
+          <option value="years">Pick years</option>
           <option value="custom">Custom dates</option>
         </Select>
       </Field>
+      {value('preset') === 'years' && (
+        <MultiSelect label="Years" allLabel="All years" options={(meta?.years || []).map((y) => [y, y])} selected={values('years')} onChange={(next) => set({ years: next })} />
+      )}
       {value('preset') === 'custom' && (
         <>
           <Field label="From">
@@ -105,54 +121,28 @@ export function FilterBar({ meta, show = KEYS as unknown as string[] }: { meta: 
         </>
       )}
       {has('store') && (
-        <Field label="Store">
-          <Select value={value('store')} onChange={(e) => set({ store: e.target.value })}>
-            <option value="">All stores</option>
-            {meta?.stores.map((s) => (
-              <option key={s.store} value={s.store}>
-                {s.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        <MultiSelect label="Store" allLabel="All stores" options={(meta?.stores || []).map((st) => [st.store, st.name])} selected={values('store')} onChange={(next) => set({ store: next })} />
       )}
       {has('category') && (
-        <Field label="Category">
-          <Select value={value('category')} onChange={(e) => set({ category: e.target.value })}>
-            <option value="">All categories</option>
-            {meta?.categories.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        <MultiSelect label="Category" allLabel="All categories" options={(meta?.categories || []).map((c) => [c.name, c.name])} selected={values('category')} onChange={(next) => set({ category: next })} />
       )}
       {has('zip') && (
-        <Field label="Delivery ZIP">
-          <Select value={value('zip')} onChange={(e) => set({ zip: e.target.value })}>
-            <option value="">All ZIPs</option>
-            {meta?.zips.map((z) => (
-              <option key={z} value={z}>
-                {z}
-              </option>
-            ))}
-            <option value="none">No delivery ZIP</option>
-          </Select>
-        </Field>
+        <MultiSelect
+          label="Delivery ZIP"
+          allLabel="All ZIPs"
+          options={[...(meta?.zips || []).map((z): [string, string] => [z, z]), ['none', 'No delivery ZIP']]}
+          selected={values('zip')}
+          onChange={(next) => set({ zip: next })}
+        />
       )}
       {has('payment') && (
-        <Field label="Payment">
-          <Select value={value('payment')} onChange={(e) => set({ payment: e.target.value })}>
-            <option value="">All payment methods</option>
-            {meta?.payments.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-            <option value="none">Not recorded</option>
-          </Select>
-        </Field>
+        <MultiSelect
+          label="Payment"
+          allLabel="All payment methods"
+          options={[...(meta?.payments || []).map((p): [string, string] => [p, p]), ['none', 'Not recorded']]}
+          selected={values('payment')}
+          onChange={(next) => set({ payment: next })}
+        />
       )}
       {has('q') && (
         <Field label="Search" className="col-span-2 sm:col-span-3 xl:col-span-1">

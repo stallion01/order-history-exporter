@@ -44,7 +44,9 @@ export function Items({ meta, onMetaChange }: { meta: Meta | null; onMetaChange:
     if (!bulk) return;
     setBusy(true);
     await act(async () => {
-      const filterObject = Object.fromEntries(new URLSearchParams(filters.query({ status })));
+      // Each key keeps all its values, since a filter can have several.
+      const chosen = new URLSearchParams(filters.query({ status }));
+      const filterObject = Object.fromEntries([...new Set(chosen.keys())].map((key) => [key, chosen.getAll(key)]));
       const { changed } = await post<{ changed: number }>('/api/items/status', { status: bulk, filters: filterObject });
       setNote(`${plural(changed, 'item')} marked ${bulk}.`);
       onMetaChange();

@@ -1,7 +1,7 @@
 // Small shared building blocks, so every page looks and behaves the same.
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
-import { AlertCircle, ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { AlertCircle, ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 
 export const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(' ');
 
@@ -42,6 +42,81 @@ export function Select({ children, ...props }: SelectHTMLAttributes<HTMLSelectEl
     <select {...props} className={cx(FIELD, 'pr-8', props.className)}>
       {children}
     </select>
+  );
+}
+
+// A dropdown of checkboxes. Nothing ticked means "all". Not wrapped in a <label>,
+// since the ticks inside are labels of their own.
+export function MultiSelect({
+  label,
+  allLabel,
+  options,
+  selected,
+  onChange,
+  className,
+}: {
+  label: string;
+  allLabel: string;
+  options: [value: string, text: string][];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const id = useId();
+  useEffect(() => {
+    if (!open) return;
+    const outside = (e: PointerEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
+
+  const text = (value: string) => options.find(([v]) => v === value)?.[1] ?? value;
+  const summary = !selected.length ? allLabel : selected.length === 1 ? text(selected[0]) : `${text(selected[0])} +${selected.length - 1}`;
+  const toggle = (value: string) => onChange(selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value]);
+  const row = 'flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-slate-800 hover:bg-slate-100 dark:text-slate-100 dark:hover:bg-slate-800';
+
+  return (
+    <div ref={box} className={cx('relative flex min-w-0 flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-400', className)}>
+      <span id={`${id}-label`}>{label}</span>
+      <button
+        type="button"
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-labelledby={`${id}-label ${id}-value`}
+        onClick={() => setOpen(!open)}
+        className={cx(FIELD, 'flex items-center justify-between gap-2 text-left font-normal')}
+      >
+        <span id={`${id}-value`} className="truncate">
+          {summary}
+        </span>
+        <ChevronDown className="size-4 shrink-0 text-slate-500" aria-hidden />
+      </button>
+      {open && (
+        <div role="group" aria-labelledby={`${id}-label`} className="absolute top-full right-0 left-0 z-30 mt-1 max-h-72 min-w-48 overflow-auto rounded-md border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+          <button type="button" className={cx(row, 'w-full font-medium')} onClick={() => onChange([])}>
+            <Check className={cx('size-4', selected.length ? 'invisible' : 'text-emerald-600')} aria-hidden />
+            {allLabel}
+          </button>
+          {options.map(([value, optionText]) => (
+            <label key={value} className={row}>
+              <input type="checkbox" className="size-4 accent-emerald-700" checked={selected.includes(value)} onChange={() => toggle(value)} />
+              <span className="min-w-0 break-words">{optionText}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

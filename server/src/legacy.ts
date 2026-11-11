@@ -8,10 +8,12 @@ type Any = any;
 export interface Filters {
   from: string | null;
   to: string | null;
-  store: string | null;
-  payment: string | null;
-  zip: string | null;
-  category: string | null;
+  // Each list matches any of its values; a single string is also accepted.
+  years?: string[] | string | null;
+  store: string[] | string | null;
+  payment: string[] | string | null;
+  zip: string[] | string | null;
+  category: string[] | string | null;
   q: string | null;
   status: string | null;
 }
