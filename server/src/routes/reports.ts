@@ -64,6 +64,18 @@ export function reportRoutes(app: FastifyInstance, db: OrdersDb) {
 
   app.get('/api/report', async (request) => db.report(filtersFrom(queryOf(request.query))));
 
+  // Each delivery ZIP's place name: found from its addresses, or named by the user.
+  app.get('/api/places', async () => ({ places: db.places() }));
+
+  app.post('/api/places', async (request) => {
+    const body = (request.body || {}) as Record<string, unknown>;
+    const zip = textParam(body.zip, 'ZIP', 20);
+    const name = typeof body.name === 'string' && body.name.trim() ? textParam(body.name, 'Name', 60) : null;
+    db.nameZip(zip, name);
+    audit(request, 'place.name', { zip, name });
+    return { places: db.places() };
+  });
+
   app.get('/api/orders', async (request) => {
     const query = queryOf(request.query);
     return db.listOrders(filtersFrom(query), { ...sortFrom(query), ...pageFrom(query) });

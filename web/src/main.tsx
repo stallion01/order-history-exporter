@@ -43,7 +43,7 @@ function App() {
   const loadMeta = useCallback(async () => {
     try {
       const [status, categories] = await Promise.all([get<any>('/api/status'), get<{ categories: Meta['categories']; forms: Forms }>('/api/categories')]);
-      setMeta({ stores: status.stores, payments: status.payments, zips: status.zips, years: status.years, categories: categories.categories });
+      setMeta({ stores: status.stores, payments: status.payments, zips: status.zips, places: status.places || [], years: status.years, categories: categories.categories });
       setForms(categories.forms);
     } catch (e) {
       setError((e as Error).message);
@@ -89,7 +89,7 @@ function App() {
         <Route path="/orders" element={<Orders meta={meta} />} />
         <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
         <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />
-        <Route path="/settings" element={<Settings user={auth.user} onUserChange={loadAuth} onSignedOut={() => setAuth({ loading: false, setupNeeded: false, user: null })} />} />
+        <Route path="/settings" element={<Settings user={auth.user} onUserChange={loadAuth} onSignedOut={() => setAuth({ loading: false, setupNeeded: false, user: null })} onMetaChange={loadMeta} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

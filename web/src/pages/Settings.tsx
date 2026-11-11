@@ -188,6 +188,75 @@ function ExtensionCard() {
   );
 }
 
+// Delivery ZIPs and their place names: found from addresses, or named here.
+function PlacesCard({ onChange }: { onChange: () => void }) {
+  const list = useApi<{ places: { zip: string; city: string | null; name: string | null; label: string; orders: number }[] }>('/api/places');
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [error, setError] = useState('');
+  async function save(zip: string, name: string) {
+    setError('');
+    try {
+      await post('/api/places', { zip, name });
+      setDrafts((d) => {
+        const { [zip]: _gone, ...rest } = d;
+        return rest;
+      });
+      list.reload();
+      onChange();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  return (
+    <Card title="Places" className="lg:col-span-2">
+      <div id="places" />
+      <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
+        Orders are grouped by where they were delivered. Each ZIP shows the city found in its delivery addresses. Give it a name of your own, such as a property, to group several ZIPs together or to fix a city that was read wrongly.
+      </p>
+      {error && <Banner>{error}</Banner>}
+      {!list.data?.places.length ? (
+        <p className="text-sm text-slate-500">No delivery addresses yet.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-600 dark:text-slate-400">
+                <th className="px-2 py-1.5 font-medium">ZIP</th>
+                <th className="px-2 py-1.5 font-medium">City from addresses</th>
+                <th className="px-2 py-1.5 font-medium">Your name for it</th>
+                <th className="px-2 py-1.5 text-right font-medium">Orders</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data.places.map((p) => {
+                const draft = drafts[p.zip] ?? p.name ?? '';
+                return (
+                  <tr key={p.zip} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="px-2 py-1.5 tabular-nums">{p.zip}</td>
+                    <td className="px-2 py-1.5">{p.city || <span className="text-slate-400">Not found</span>}</td>
+                    <td className="px-2 py-1.5">
+                      <Input
+                        aria-label={`Name for ${p.zip}`}
+                        value={draft}
+                        placeholder={p.city || p.zip}
+                        maxLength={60}
+                        onChange={(e) => setDrafts((d) => ({ ...d, [p.zip]: e.target.value }))}
+                        onBlur={() => draft.trim() !== (p.name ?? '') && save(p.zip, draft.trim())}
+                        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+                      />
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{p.orders}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // The Anthropic API key used to read receipts.
 function ReceiptReaderCard() {
   const status = useApi<{ set: boolean; fromEnvironment: boolean; endsWith: string | null; canStore: boolean }>('/api/settings/anthropic');
@@ -253,7 +322,7 @@ function ReceiptReaderCard() {
   );
 }
 
-export function Settings({ user, onUserChange, onSignedOut }: { user: SignedInUser; onUserChange: () => void; onSignedOut: () => void }) {
+export function Settings({ user, onUserChange, onSignedOut, onMetaChange }: { user: SignedInUser; onUserChange: () => void; onSignedOut: () => void; onMetaChange: () => void }) {
   return (
     <>
       <PageHeader title="Settings" description={`Signed in as ${user.username}.`} />
@@ -262,6 +331,7 @@ export function Settings({ user, onUserChange, onSignedOut }: { user: SignedInUs
         <ExtensionCard />
         <ReceiptReaderCard />
         <PasswordCard onSignedOut={onSignedOut} />
+        <PlacesCard onChange={onMetaChange} />
       </div>
     </>
   );

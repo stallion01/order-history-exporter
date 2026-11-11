@@ -8,7 +8,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
 const OHE = require('../server/core');
-const { openDatabase, SCHEMA_V1 } = require('../server/db');
+const { openDatabase, SCHEMA_V1, cityFromAddress, zip5 } = require('../server/db');
 const { buildApp } = require('../server/dist/app');
 const { isPrivateAddress } = require('../server/dist/security');
 const { createClassifier } = require('../server/categories');
@@ -246,6 +246,54 @@ test('report totals, filters, and CSV come from the database', async () => {
   assert.ok(csv.includes("'=Paint"), 'formula text stays neutralised');
   assert.ok(csv.includes(',02134,'), 'ZIP intact');
   assert.equal((await (await call('/api/export.csv?store=homedepot&layout=orders')).text()).trim().split('\r\n').length, 4);
+});
+
+test('city names are read from one-line delivery addresses', () => {
+  const cases = {
+    '12 Oak Road Apt 4 Bentonville, AR 72712': 'Bentonville, AR',
+    'PO Box 9 Boston, MA 02134': 'Boston, MA',
+    '12 Court St Boston, MA 02108': 'Boston, MA',
+    '45 ELM STREET NORTH ANDOVER, MA 01845-1234': 'North Andover, MA',
+    '9 Main St N Fargo, ND 58102': 'Fargo, ND',
+    '100 Main St, Springfield, IL 62701': 'Springfield, IL',
+    '7 Harbor Way #12 Cape Coral, FL 33904': 'Cape Coral, FL',
+    '12 Oak Road Apt 4 Boston,MA 02134-1234': 'Boston, MA',
+    '1 Broadway Cambridge, MA 02142': null, // no way to tell street from city
+    'somewhere without a state': null,
+  };
+  for (const [address, city] of Object.entries(cases)) assert.equal(cityFromAddress(address), city, address);
+  assert.deepEqual([zip5('02134-1234'), zip5('021341234'), zip5('02134'), zip5('K1A 0B1')], ['02134', '02134', '02134', 'K1A 0B1']);
+});
+
+test('ZIP+4 is kept as five digits, and spending is shown by city', async () => {
+  await post('/api/orders', {
+    store: 'placemart',
+    orders: [
+      { orderId: 'P1', storeName: 'Place Mart', date: '2026-05-01', total: 10, deliveryZip: '01845-1234', deliveryAddress: '45 Elm Street North Andover, MA 01845-1234' },
+      { orderId: 'P2', storeName: 'Place Mart', date: '2026-05-02', total: 20, deliveryZip: '01845', deliveryAddress: '45 Elm Street North Andover, MA 01845' },
+      { orderId: 'P3', storeName: 'Place Mart', date: '2026-05-03', total: 5, deliveryZip: '01810-0001', deliveryAddress: '9 Main St Andover, MA 01810-0001' },
+      { orderId: 'P4', storeName: 'Place Mart', date: '2026-05-04', total: 7, deliveryZip: '01810', deliveryAddress: '1 Broadway Andover, MA 01810' },
+    ],
+  });
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM orders WHERE delivery_zip LIKE '%-%'").get().n, 0);
+  assert.equal((await get('/api/orders?store=placemart&zip=01845-9999')).total, 2, 'a ZIP+4 filter matches its ZIP');
+
+  const report = await get('/api/report?store=placemart');
+  assert.deepEqual(report.byCity.map((c) => [c.label, c.spend, c.keys]), [
+    ['North Andover, MA', 30, ['01845']],
+    ['Andover, MA', 12, ['01810']],
+  ]);
+  const meta = await get('/api/status');
+  assert.equal(meta.places.find((p) => p.zip === '01845').label, 'North Andover, MA');
+
+  // A name given by the user wins, and two ZIPs given the same name are one place.
+  await post('/api/places', { zip: '01845', name: 'Elm St rental' });
+  await post('/api/places', { zip: '01810', name: 'Elm St rental' });
+  const named = await get('/api/report?store=placemart');
+  assert.deepEqual(named.byCity.map((c) => [c.label, c.spend, c.keys]), [['Elm St rental', 42, ['01810', '01845']]]);
+  await post('/api/places', { zip: '01845', name: '' });
+  await post('/api/places', { zip: '01810', name: '' });
+  assert.equal((await get('/api/places')).places.find((p) => p.zip === '01845').label, 'North Andover, MA');
 });
 
 test('filters take several values each, and any of them matches', async () => {
@@ -499,16 +547,32 @@ test('upgrading an older database keeps its orders, backs it up, and queues miss
 
   const upgraded = openDatabase(file);
   assert.equal(upgraded.listOrders({}).total, 3);
-  assert.ok(fs.existsSync(`${file}.before-v7.bak`), 'a backup was made first');
+  assert.ok(fs.existsSync(`${file}.before-v8.bak`), 'a backup was made first');
   const pending = upgraded.syncPlan('samsclub', { from: null, to: null }).pendingDetails.map((o) => o.orderId);
   assert.deepEqual(pending, ['NOPRICE'], 'only orders missing prices are read again');
   assert.equal(upgraded.syncPlan('ebay', { from: null, to: null }).pendingDetails.length, 0);
   assert.ok(upgraded.categoryList().some((c) => c.name === 'Cleaning Supplies'));
   upgraded.close();
 
-  const backup = new DatabaseSync(`${file}.before-v7.bak`, { readOnly: true });
+  const backup = new DatabaseSync(`${file}.before-v8.bak`, { readOnly: true });
   assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 3);
   backup.close();
+});
+
+test('upgrading to v8 trims ZIP+4 in orders and rules', () => {
+  const file = path.join(dir, 'v7.db');
+  const first = openDatabase(file);
+  first.saveOrders('ebay', [{ orderId: 'Z', date: '2026-01-01' }]);
+  first.close();
+  const raw = new DatabaseSync(file);
+  raw.exec("UPDATE orders SET delivery_zip = '02134-1234'");
+  raw.exec("INSERT INTO tax_rules (field, value, status) VALUES ('zip', '02134-1234', 'business')");
+  raw.exec('DROP TABLE zip_names; PRAGMA user_version = 7');
+  raw.close();
+  const second = openDatabase(file);
+  assert.equal(second.raw.prepare('SELECT delivery_zip FROM orders').get().delivery_zip, '02134');
+  assert.equal(second.raw.prepare("SELECT value FROM tax_rules WHERE field = 'zip'").get().value, '02134');
+  second.close();
 });
 
 test('upgrading to v4 queues Amazon details to be read again', () => {
@@ -519,7 +583,7 @@ test('upgrading to v4 queues Amazon details to be read again', () => {
   first.close();
   const raw = new DatabaseSync(file);
   // Back to how a version 3 database looked, without the later bank tables.
-  raw.exec('DROP TABLE receipts; DROP TABLE bank_import_rows; DROP TABLE bank_tx_sources; DROP TABLE bank_rules; DROP TABLE bank_imports; DROP TABLE bank_transactions; DROP TABLE bank_accounts; DROP TABLE csv_layouts; DROP TABLE app_settings;');
+  raw.exec('DROP TABLE zip_names; DROP TABLE receipts; DROP TABLE bank_import_rows; DROP TABLE bank_tx_sources; DROP TABLE bank_rules; DROP TABLE bank_imports; DROP TABLE bank_transactions; DROP TABLE bank_accounts; DROP TABLE csv_layouts; DROP TABLE app_settings;');
   raw.exec('PRAGMA user_version = 3');
   raw.close();
   const second = openDatabase(file);

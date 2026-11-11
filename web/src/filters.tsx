@@ -10,6 +10,8 @@ export interface Meta {
   stores: { store: string; name: string }[];
   payments: string[];
   zips: string[];
+  // Each ZIP's place name (its city, or a name you gave it).
+  places: { zip: string; city: string | null; name: string | null; label: string; orders: number }[];
   years: string[];
   categories: { name: string; scheduleC: string | null; scheduleE: string | null }[];
 }
@@ -112,6 +114,10 @@ export function PeriodFilter({ years }: { years: string[] }) {
   );
 }
 
+// "North Andover, MA (01845)", or just the ZIP when no place is known.
+export const placeOptions = (meta: Meta | null): [string, string][] =>
+  (meta?.places || []).map((p) => [p.zip, p.label === p.zip ? p.zip : `${p.label} (${p.zip})`]);
+
 export function FilterBar({ meta, show = KEYS as unknown as string[] }: { meta: Meta | null; show?: string[] }) {
   const { value, values, set } = useFilters();
   const [search, setSearch] = useState(value('q'));
@@ -158,9 +164,9 @@ export function FilterBar({ meta, show = KEYS as unknown as string[] }: { meta: 
       )}
       {has('zip') && (
         <MultiSelect
-          label="Delivery ZIP"
-          allLabel="All ZIPs"
-          options={[...(meta?.zips || []).map((z): [string, string] => [z, z]), ['none', 'No delivery ZIP']]}
+          label="Delivered to"
+          allLabel="All places"
+          options={[...placeOptions(meta), ['none', 'No delivery address']]}
           selected={values('zip')}
           onChange={(next) => set({ zip: next })}
         />

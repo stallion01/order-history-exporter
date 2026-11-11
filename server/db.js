@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -279,6 +279,64 @@ const SCHEMA_V7 = `
   CREATE INDEX receipts_date ON receipts (receipt_date);
 `;
 
+// ZIP codes are kept as five digits (ZIP+4 is trimmed), and each can be given a name.
+const SCHEMA_V8 = `
+  CREATE TABLE zip_names (
+    zip TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+  );
+  UPDATE orders SET delivery_zip = substr(delivery_zip, 1, 5) WHERE delivery_zip GLOB '[0-9][0-9][0-9][0-9][0-9]-*';
+  UPDATE OR IGNORE tax_rules SET value = substr(value, 1, 5) WHERE field = 'zip' AND value GLOB '[0-9][0-9][0-9][0-9][0-9]-*';
+  DELETE FROM tax_rules WHERE field = 'zip' AND value GLOB '[0-9][0-9][0-9][0-9][0-9]-*';
+`;
+
+// "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
+function zip5(value) {
+  if (value === null || value === undefined || value === '') return value;
+  const match = String(value).trim().match(/^(\d{5})(?:-?\d{4})?$/);
+  return match ? match[1] : String(value).trim();
+}
+
+const STREET_WORDS = new Set(
+  'st street rd road ave avenue av blvd boulevard dr drive ln lane ct court way pl place cir circle ter terrace pkwy parkway hwy highway trl trail sq square loop row pike path aly alley xing crossing cv cove pt point walk plz plaza hts heights tpke turnpike expy expressway'.split(' ')
+);
+// Only short forms: a full word after the street is usually the city (North Andover).
+const DIRECTIONS = new Set('n s e w ne nw se sw'.split(' '));
+const UNIT_WORDS = new Set('apt apartment unit ste suite bldg building fl floor rm room lot spc space dept'.split(' '));
+const plainWord = (token) => token.toLowerCase().replace(/[.,]/g, '');
+
+// The city in a one-line address such as "12 Oak Road Apt 4 Bentonville, AR 72712":
+// the words after the street type (Road) and any unit (Apt 4), before the state.
+// Null when it can't be told apart from the street.
+function cityFromAddress(address) {
+  const match = String(address || '').match(/^(.*?)[\s,]+([A-Z]{2})[\s,]+\d{5}(?:-\d{4})?\s*$/);
+  if (!match) return null;
+  const state = match[2];
+  const before = match[1].trim().replace(/,$/, '');
+  let city = null;
+  if (before.includes(',')) {
+    city = before.slice(before.lastIndexOf(',') + 1).trim();
+  } else {
+    const tokens = before.split(/\s+/);
+    for (let i = 1; i < tokens.length - 1; i++) {
+      const word = plainWord(tokens[i]);
+      const box = word === 'box' && /^\d+$/.test(tokens[i + 1]);
+      // The street type is the last of a run: "12 Court St Boston" ends at "St".
+      if (!box && !(STREET_WORDS.has(word) && !STREET_WORDS.has(plainWord(tokens[i + 1])))) continue;
+      let j = box ? i + 2 : i + 1;
+      if (j < tokens.length && DIRECTIONS.has(plainWord(tokens[j]))) j++;
+      while (j < tokens.length && (UNIT_WORDS.has(plainWord(tokens[j])) || /^#/.test(tokens[j]))) {
+        j += /^#\S+/.test(tokens[j]) ? 1 : 2;
+      }
+      city = tokens.slice(j).join(' ');
+      break;
+    }
+  }
+  if (!city || /\d/.test(city) || city.split(/\s+/).length > 4 || city.length < 2) return null;
+  const tidy = city === city.toUpperCase() ? city.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()) : city;
+  return `${tidy}, ${state}`;
+}
+
 // Categories for bank and card spending that store orders don't cover.
 // name, Schedule C line, Schedule E line.
 const BANK_CATEGORIES = [
@@ -393,6 +451,7 @@ function migrate(db, file) {
     }
     if (version < 6) db.exec(SCHEMA_V6);
     if (version < 7) db.exec(SCHEMA_V7);
+    if (version < 8) db.exec(SCHEMA_V8);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
@@ -466,7 +525,7 @@ function openDatabase(file) {
         const stamp = now();
         const columns = {};
         for (const [key, column] of Object.entries(ORDER_COLUMNS)) {
-          if (present(order[key])) columns[column] = order[key];
+          if (present(order[key])) columns[column] = key === 'deliveryZip' ? zip5(order[key]) : order[key];
         }
         if (order.fromList) columns.list_fingerprint = OHE.listFingerprint(order);
         if (order.detailRead) columns.detail_fetched_at = stamp;
@@ -620,7 +679,7 @@ function openDatabase(file) {
   function saveTaxRule({ field, value, status }) {
     db.prepare(
       'INSERT INTO tax_rules (field, value, status) VALUES (?, ?, ?) ON CONFLICT (field, value) DO UPDATE SET status = excluded.status'
-    ).run(field, value, status);
+    ).run(field, field === 'zip' ? zip5(value) : value, status);
   }
   const deleteTaxRule = (id) => db.prepare('DELETE FROM tax_rules WHERE id = ?').run(id);
 
@@ -649,9 +708,37 @@ function openDatabase(file) {
     for (const key of LIST_FILTERS) {
       const raw = filters[key];
       const values = (Array.isArray(raw) ? raw : [raw]).filter((v) => v !== null && v !== undefined && v !== '').map(String);
-      out[key] = values.length ? [...new Set(values)] : null;
+      out[key] = values.length ? [...new Set(key === 'zip' ? values.map(zip5) : values)] : null;
     }
     return out;
+  }
+
+  /* ---------- Places ---------- */
+
+  function places() {
+    const names = new Map(db.prepare('SELECT zip, name FROM zip_names').all().map((r) => [r.zip, r.name]));
+    const found = new Map();
+    for (const row of db.prepare('SELECT delivery_zip AS zip, delivery_address AS address, COUNT(*) AS n FROM orders WHERE delivery_zip IS NOT NULL GROUP BY delivery_zip, delivery_address').all()) {
+      const entry = found.get(row.zip) || { orders: 0, cities: new Map() };
+      entry.orders += row.n;
+      const city = cityFromAddress(row.address);
+      if (city) entry.cities.set(city, (entry.cities.get(city) || 0) + row.n);
+      found.set(row.zip, entry);
+    }
+    for (const zip of names.keys()) if (!found.has(zip)) found.set(zip, { orders: 0, cities: new Map() });
+    return [...found.entries()]
+      .map(([zip, entry]) => {
+        const city = [...entry.cities.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+        const name = names.get(zip) ?? null;
+        return { zip, city, name, label: name || city || zip, orders: entry.orders };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label) || a.zip.localeCompare(b.zip));
+  }
+
+  function nameZip(zip, name) {
+    const key = zip5(zip);
+    if (name) db.prepare('INSERT INTO zip_names (zip, name) VALUES (?, ?) ON CONFLICT (zip) DO UPDATE SET name = excluded.name').run(key, name);
+    else db.prepare('DELETE FROM zip_names WHERE zip = ?').run(key);
   }
 
   // Shared WHERE clause, built only from fixed text and bound parameters.
@@ -802,6 +889,9 @@ function openDatabase(file) {
     const stores = new Map();
     const payments = new Map();
     const zips = new Map();
+    const cities = new Map();
+    const cityZips = new Map();
+    const placeLabel = new Map(places().map((p) => [p.zip, p.label]));
     for (const order of orders) {
       const key = `${order.store}\u0000${order.order_id}`;
       const own = itemsByOrder.get(key) || [];
@@ -820,7 +910,13 @@ function openDatabase(file) {
       if (order.order_date) bump(months, order.order_date.slice(0, 7), value, key);
       bump(stores, order.store_name || order.store, value, key, order.store);
       bump(payments, order.payment || 'Not recorded', value, key, order.payment || NO_PAYMENT);
-      if (order.delivery_zip) bump(zips, order.delivery_zip, value, key);
+      if (order.delivery_zip) {
+        bump(zips, order.delivery_zip, value, key);
+        const label = placeLabel.get(order.delivery_zip) || order.delivery_zip;
+        bump(cities, label, value, key);
+        if (!cityZips.has(label)) cityZips.set(label, new Set());
+        cityZips.get(label).add(order.delivery_zip);
+      }
     }
     const counted = totals.orders - totals.withoutTotal;
     totals.spend = tax.cents(totals.spend);
@@ -853,6 +949,7 @@ function openDatabase(file) {
       byStore: finish(stores),
       byPayment: finish(payments),
       byZip: finish(zips),
+      byCity: finish(cities).map((row) => ({ ...row, key: undefined, keys: [...cityZips.get(row.label)].sort() })),
       byCategory: finish(categories),
       topItems,
     };
@@ -930,6 +1027,7 @@ function openDatabase(file) {
       payments: column('SELECT DISTINCT payment FROM orders WHERE payment IS NOT NULL ORDER BY payment', 'payment'),
       zips: column('SELECT DISTINCT delivery_zip FROM orders WHERE delivery_zip IS NOT NULL ORDER BY delivery_zip', 'delivery_zip'),
       years: column("SELECT DISTINCT substr(order_date, 1, 4) AS year FROM orders WHERE order_date IS NOT NULL ORDER BY year DESC", 'year'),
+      places: places(),
     };
   }
 
@@ -952,10 +1050,12 @@ function openDatabase(file) {
     deleteTaxRule,
     markItems,
     taxReport,
+    places,
+    nameZip,
     // For the web app's own tables (users, sessions, audit log).
     raw: db,
     close: () => db.close(),
   };
 }
 
-module.exports = { openDatabase, SCHEMA_V1, UNCATEGORIZED };
+module.exports = { openDatabase, SCHEMA_V1, UNCATEGORIZED, cityFromAddress, zip5 };

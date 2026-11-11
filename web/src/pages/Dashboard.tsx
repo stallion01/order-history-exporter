@@ -15,15 +15,16 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
 
   // A page link that keeps the dashboard's filters, with the clicked one replacing
   // whatever was ticked for that filter.
-  const linkTo = (path: string, changes: Record<string, string>) => {
+  const linkTo = (path: string, changes: Record<string, string | string[]>) => {
     const next = new URLSearchParams();
     for (const key of ['preset', 'from', 'to', 'years', 'store', 'category', 'zip', 'payment', 'q']) {
-      const chosen = key in changes ? [changes[key]] : params.getAll(key);
+      const change = changes[key];
+      const chosen = key in changes ? (Array.isArray(change) ? change : [change]) : params.getAll(key);
       for (const value of chosen) if (value) next.append(key, value);
     }
     return `${path}?${next}`;
   };
-  const by = (path: string, key: string) => (row: Row) => linkTo(path, { [key]: row.key ?? row.label });
+  const by = (path: string, key: string) => (row: Row) => linkTo(path, { [key]: row.keys ?? row.key ?? row.label });
   const openMonth = (row: Row) => {
     const [year, month] = row.label.split('-').map(Number);
     const last = new Date(year, month, 0).getDate();
@@ -70,8 +71,15 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
             <Card title="By payment method">
               <RankBars rows={data.byPayment} empty="No orders match these filters." linkFor={by('/orders', 'payment')} />
             </Card>
-            <Card title="By delivery ZIP">
-              <RankBars rows={data.byZip} empty="No delivered orders match these filters." linkFor={by('/orders', 'zip')} />
+            <Card
+              title="By delivery city"
+              actions={
+                <Link to="/settings#places" className="text-sm text-emerald-700 hover:underline dark:text-emerald-400">
+                  Name places
+                </Link>
+              }
+            >
+              <RankBars rows={data.byCity} empty="No delivered orders match these filters." linkFor={by('/orders', 'zip')} />
             </Card>
           </div>
 

@@ -112,7 +112,7 @@ Everything else is skipped. To read a period again regardless, for example after
 
 Expense Hub works on a computer or a phone. On a phone, use your browser's **Add to Home Screen** to open it like an app. Pages are filtered by period, store, category, delivery ZIP, payment method or text, and filters stay in the address so a view can be bookmarked. Click a column heading to sort by it.
 
-- **Dashboard:** bank and card totals, then store spending: tax, spending by month, category, store, payment method and delivery ZIP, your most-bought items, and each store's sync status.
+- **Dashboard:** bank and card totals, then store spending: tax, spending by month, category, store, payment method and delivery city, your most-bought items, and each store's sync status.
 - **Transactions:** every bank and card transaction. Set its category, business or personal, or mark it a transfer or ignored. See below.
 - **Review:** transactions that still need a category or a business or personal decision, and your rules.
 - **Receipts:** take a photo or upload receipts; each is read and matched to its transaction. See below.
@@ -121,7 +121,7 @@ Expense Hub works on a computer or a phone. On a phone, use your browser's **Add
 - **Orders:** every synced order.
 - **Items:** every purchased item, where you can correct its category or mark it business or personal.
 - **Tax groups:** business purchases grouped by form line. See below.
-- **Settings:** two-factor sign-in, your password, and the extension's address and token.
+- **Settings:** two-factor sign-in, your password, the extension's address and token, the key for reading receipts, and **Places**: the city each delivery ZIP is shown as, which you can rename (a property name, say) or correct. ZIP+4 codes are kept as their five-digit ZIP.
 
 Each page has CSV downloads for what it's showing.
 
@@ -214,7 +214,7 @@ On Linux without Proxmox, follow `deploy/proxmox/setup-in-container.sh` by hand:
 
 On Proxmox, a copy of the database is made every night into `/var/lib/expense-hub/backups`, and the last 14 are kept. New receipt photos are copied there too, into `backups/receipts`. Include the container in your Proxmox backups as well. On another machine, run `npm run backup -w server`, or stop the server and copy `server/data/`.
 
-Upgrades that change the database make their own copy first, named `orders.db.before-v7.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
+Upgrades that change the database make their own copy first, named `orders.db.before-v8.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
 
 ### CSV only
 

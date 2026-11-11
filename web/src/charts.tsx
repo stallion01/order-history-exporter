@@ -7,6 +7,8 @@ export interface Row {
   label: string;
   // The filter value behind the label, such as a store id.
   key?: string;
+  // When one row covers several filter values, such as a city's ZIP codes.
+  keys?: string[];
   spend: number;
   orders: number;
 }

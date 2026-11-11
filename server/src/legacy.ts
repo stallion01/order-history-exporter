@@ -44,6 +44,8 @@ export interface OrdersDb {
   deleteTaxRule(id: number): void;
   markItems(items: { store: string; orderId: string; name: string }[], status: string | null): void;
   taxReport(form: string, filters: Partial<Filters>): Any;
+  places(): { zip: string; city: string | null; name: string | null; label: string; orders: number }[];
+  nameZip(zip: string, name: string | null): void;
   raw: DatabaseSync;
   close(): void;
 }

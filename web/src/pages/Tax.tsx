@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Download, Trash2 } from 'lucide-react';
 import { download, post, useApi } from '../api';
+import { placeOptions } from '../filters';
 import type { Meta } from '../filters';
 import { money, plural, wholeMoney } from '../format';
 import { Banner, Button, Card, Empty, Field, Input, Loading, PageHeader, Select, Stat, TD, TH, TR } from '../ui';
 
 const STATUS_LABELS: Record<string, string> = { business: 'Business', personal: 'Personal' };
-const FIELD_LABELS: Record<string, string> = { zip: 'Delivery ZIP is', payment: 'Payment method is', store: 'Store is', category: 'Category is' };
+const FIELD_LABELS: Record<string, string> = { zip: 'Delivered to', payment: 'Payment method is', store: 'Store is', category: 'Category is' };
 
 export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: Record<string, { name: string; lines: [string, string][] }>; onMetaChange: () => void }) {
   const lastYear = String(new Date().getFullYear() - 1);
@@ -27,7 +28,7 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
   const rules = useApi<{ rules: { id: number; field: string; value: string; status: string }[] }>('/api/tax/rules');
 
   const ruleOptions: [string, string][] = {
-    zip: (meta?.zips || []).map((z): [string, string] => [z, z]),
+    zip: placeOptions(meta),
     payment: (meta?.payments || []).map((p): [string, string] => [p, p]),
     store: (meta?.stores || []).map((s): [string, string] => [s.store, s.name]),
     category: (meta?.categories || []).map((c): [string, string] => [c.name, c.name]),
@@ -116,12 +117,12 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
             <option value="schedule-e">Schedule E (rental)</option>
           </Select>
         </Field>
-        <Field label="Delivery ZIP">
+        <Field label="Delivered to">
           <Select value={zip} onChange={(e) => setZip(e.target.value)}>
-            <option value="">All ZIPs</option>
-            {meta?.zips.map((z) => (
+            <option value="">All places</option>
+            {placeOptions(meta).map(([z, label]) => (
               <option key={z} value={z}>
-                {z}
+                {label}
               </option>
             ))}
           </Select>
