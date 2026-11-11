@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -290,6 +290,56 @@ const SCHEMA_V8 = `
   DELETE FROM tax_rules WHERE field = 'zip' AND value GLOB '[0-9][0-9][0-9][0-9][0-9]-*';
 `;
 
+// Phase 4: store orders linked to the card charges that paid for them, and the
+// businesses and properties ("entities") spending belongs to. A transaction belongs
+// to one entity, or is shared between several by percentage.
+const SCHEMA_V9 = `
+  CREATE TABLE entities (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    kind TEXT NOT NULL DEFAULT 'business',
+    created_at TEXT NOT NULL
+  );
+
+  ALTER TABLE bank_accounts ADD COLUMN entity_id INTEGER REFERENCES entities (id) ON DELETE SET NULL;
+  ALTER TABLE bank_rules ADD COLUMN entity_id INTEGER REFERENCES entities (id) ON DELETE SET NULL;
+  ALTER TABLE bank_rules ADD COLUMN shared_entities TEXT;
+  ALTER TABLE bank_transactions ADD COLUMN entity_id INTEGER REFERENCES entities (id) ON DELETE SET NULL;
+  ALTER TABLE bank_transactions ADD COLUMN entity_source TEXT;
+
+  CREATE TABLE tx_entity_shares (
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    entity_id INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE,
+    percent REAL NOT NULL,
+    PRIMARY KEY (transaction_id, entity_id)
+  );
+
+  CREATE TABLE place_entities (
+    zip TEXT PRIMARY KEY,
+    entity_id INTEGER NOT NULL REFERENCES entities (id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE order_links (
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    store TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (transaction_id, store, order_id),
+    FOREIGN KEY (store, order_id) REFERENCES orders (store, order_id) ON DELETE CASCADE
+  );
+  CREATE INDEX order_links_order ON order_links (store, order_id);
+
+  -- Pairs the user unlinked, so they aren't matched again automatically.
+  CREATE TABLE order_link_rejections (
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    store TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    PRIMARY KEY (transaction_id, store, order_id)
+  );
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -452,6 +502,7 @@ function migrate(db, file) {
     if (version < 6) db.exec(SCHEMA_V6);
     if (version < 7) db.exec(SCHEMA_V7);
     if (version < 8) db.exec(SCHEMA_V8);
+    if (version < 9) db.exec(SCHEMA_V9);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
@@ -970,6 +1021,10 @@ function openDatabase(file) {
     const total = rows.length;
     const page = limit ? rows.slice(offset, offset + limit) : rows;
     const byOrder = allItemsByOrder();
+    const charges = db.prepare(
+      `SELECT t.id, t.posted, l.amount, a.name AS account FROM order_links l JOIN bank_transactions t ON t.id = l.transaction_id
+       JOIN bank_accounts a ON a.id = t.account_id WHERE l.store = ? AND l.order_id = ? ORDER BY t.posted`
+    );
     return {
       total,
       orders: page.map((row) => ({
@@ -988,6 +1043,7 @@ function openDatabase(file) {
         deliveryZip: row.delivery_zip,
         url: row.url,
         detailRead: Boolean(row.detail_fetched_at),
+        charges: charges.all(row.store, row.order_id).map((c) => ({ ...c })),
         items: (byOrder.get(`${row.store}\u0000${row.order_id}`) || []).map((item) => ({
           name: item.name,
           quantity: item.quantity,

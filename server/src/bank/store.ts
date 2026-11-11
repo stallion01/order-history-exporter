@@ -29,6 +29,7 @@ export interface Account {
   firstDate: string | null;
   lastDate: string | null;
   sources: Source[];
+  entityId: number | null;
 }
 
 export type ImportOutcome = 'added' | 'merged' | 'skipped';
@@ -57,12 +58,35 @@ export interface TxFilters {
   direction?: 'in' | 'out' | null;
   q?: string | null;
   review?: boolean;
+  // Entities (ids), or 'none' for transactions belonging to no entity.
+  entity?: (number | string)[] | null;
+  // Store charges not yet matched to an order.
+  storeUnlinked?: boolean;
   // Only the transactions one import added, matched or found already there.
   importId?: number | null;
   importOutcome?: ImportOutcome | null;
 }
 
 export const NO_CATEGORY = 'none';
+export const NO_ENTITY = 'none';
+
+// Payees whose charges are paid store orders, which the extension syncs.
+export const ORDER_STORE_PAYEES: Record<string, string[]> = {
+  amazon: ['Amazon'],
+  ebay: ['eBay', 'PayPal'],
+  walmart: ['Walmart'],
+  samsclub: ["Sam's Club"],
+  newegg: ['Newegg'],
+  homedepot: ['Home Depot'],
+};
+const ALL_STORE_PAYEES = [...new Set(Object.values(ORDER_STORE_PAYEES).flat())];
+
+// What linked store orders say about a transaction.
+export interface OrderInfo {
+  category: string | null; // the category with the most money in the linked orders
+  zips: string[]; // where those orders were delivered
+}
+export type Share = { entityId: number; percent: number };
 const SORTS: Record<string, string> = {
   date: 't.posted',
   amount: 't.amount',
@@ -104,6 +128,8 @@ export function rowId(tx: IncomingTransaction, occurrence: number) {
 
 export function createBankStore(db: DatabaseSync) {
   const afterImport: (() => void)[] = [];
+  // Filled in by the order matching, which knows about orders and items.
+  let orderInfo: (ids: number[]) => Map<number, OrderInfo> = () => new Map();
   function transaction<T>(fn: () => T, rollback = false): T {
     db.exec('BEGIN');
     try {
@@ -142,6 +168,7 @@ export function createBankStore(db: DatabaseSync) {
     firstDate: row.first_date ?? null,
     lastDate: row.last_date ?? null,
     sources: row.sources ? (String(row.sources).split(',') as Source[]) : [],
+    entityId: row.entity_id ?? null,
   });
 
   const ACCOUNT_SQL = `
@@ -184,13 +211,14 @@ export function createBankStore(db: DatabaseSync) {
     return Number(result.lastInsertRowid);
   }
 
-  function updateAccount(id: number, changes: { name?: string; kind?: AccountKind; owner?: Owner }) {
+  function updateAccount(id: number, changes: { name?: string; kind?: AccountKind; owner?: Owner; entityId?: number | null }) {
     const before = account(id);
     if (!before) return null;
-    db.prepare('UPDATE bank_accounts SET name = ?, kind = ?, owner = ? WHERE id = ?').run(
+    db.prepare('UPDATE bank_accounts SET name = ?, kind = ?, owner = ?, entity_id = ? WHERE id = ?').run(
       changes.name ?? before.name,
       changes.kind ?? before.kind,
       changes.owner ?? before.owner,
+      'entityId' in changes ? changes.entityId ?? null : before.entityId,
       id
     );
     // The owner sets each transaction's default business or personal status, and the
@@ -216,21 +244,48 @@ export function createBankStore(db: DatabaseSync) {
 
   /* ---------- Rules and categories ---------- */
 
-  type Rule = { id: number; pattern: string; accountId: number | null; category: string | null; status: string | null; kind: string | null };
+  type Rule = {
+    id: number;
+    pattern: string;
+    accountId: number | null;
+    category: string | null;
+    status: string | null;
+    kind: string | null;
+    entityId: number | null;
+    sharedEntities: number[] | null; // shared equally between these
+  };
   const rules = (): Rule[] =>
     db
-      .prepare('SELECT id, pattern, account_id, category, status, kind FROM bank_rules ORDER BY LENGTH(pattern) DESC, id')
+      .prepare('SELECT id, pattern, account_id, category, status, kind, entity_id, shared_entities FROM bank_rules ORDER BY LENGTH(pattern) DESC, id')
       .all()
       .map((r) => {
         const row = r as Row;
-        return { id: row.id, pattern: row.pattern, accountId: row.account_id, category: row.category, status: row.status, kind: row.kind };
+        return {
+          id: row.id,
+          pattern: row.pattern,
+          accountId: row.account_id,
+          category: row.category,
+          status: row.status,
+          kind: row.kind,
+          entityId: row.entity_id,
+          sharedEntities: row.shared_entities ? (JSON.parse(row.shared_entities) as number[]) : null,
+        };
       });
 
-  function saveRule(rule: { pattern: string; accountId?: number | null; category?: string | null; status?: string | null; kind?: string | null }) {
+  function saveRule(rule: {
+    pattern: string;
+    accountId?: number | null;
+    category?: string | null;
+    status?: string | null;
+    kind?: string | null;
+    entityId?: number | null;
+    sharedEntities?: number[] | null;
+  }) {
+    const shared = rule.sharedEntities && rule.sharedEntities.length > 1 ? JSON.stringify([...new Set(rule.sharedEntities)]) : null;
     const id = Number(
       db
-        .prepare('INSERT INTO bank_rules (pattern, account_id, category, status, kind, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(rule.pattern, rule.accountId ?? null, rule.category ?? null, rule.status ?? null, rule.kind ?? null, now()).lastInsertRowid
+        .prepare('INSERT INTO bank_rules (pattern, account_id, category, status, kind, entity_id, shared_entities, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(rule.pattern, rule.accountId ?? null, rule.category ?? null, rule.status ?? null, rule.kind ?? null, shared ? null : rule.entityId ?? null, shared, now()).lastInsertRowid
     );
     transaction(() => {
       applyRules();
@@ -249,16 +304,22 @@ export function createBankStore(db: DatabaseSync) {
     return removed;
   }
 
-  // Sets everything the user hasn't decided themselves: the user's edits, then
-  // rules (longest pattern first), then the payee and the account's owner.
+  // Sets everything the user hasn't decided themselves. In order of trust: the
+  // user's edits, rules (longest pattern first), the matched store order, the
+  // receipt, the payee, and the account's owner and entity.
   function applyRules(where = '1 = 1') {
     const list = rules();
     const rows = db
       .prepare(
-        `SELECT t.*, a.owner, (SELECT r.category FROM receipts r WHERE r.transaction_id = t.id AND r.category IS NOT NULL ORDER BY r.id LIMIT 1) AS receipt_category
+        `SELECT t.*, a.owner, a.entity_id AS account_entity, (SELECT r.category FROM receipts r WHERE r.transaction_id = t.id AND r.category IS NOT NULL ORDER BY r.id LIMIT 1) AS receipt_category
          FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id WHERE ${where}`
       )
       .all() as Row[];
+    const fromOrders = orderInfo(rows.map((r) => r.id as number));
+    const placeEntity = new Map((db.prepare('SELECT zip, entity_id FROM place_entities').all() as Row[]).map((r) => [r.zip as string, r.entity_id as number]));
+    const setEntity = db.prepare('UPDATE bank_transactions SET entity_id = ?, entity_source = ? WHERE id = ?');
+    const clearShares = db.prepare('DELETE FROM tx_entity_shares WHERE transaction_id = ?');
+    const addShare = db.prepare('INSERT INTO tx_entity_shares (transaction_id, entity_id, percent) VALUES (?, ?, ?)');
     const update = db.prepare(
       `UPDATE bank_transactions SET category = ?, category_source = ?, status = ?, status_source = ?, kind = ?, kind_source = ?, transfer_id = ?, updated_at = ? WHERE id = ?`
     );
@@ -267,14 +328,16 @@ export function createBankStore(db: DatabaseSync) {
       const text = `${row.description} ${row.payee || ''} ${row.memo || ''}`.toLowerCase();
       const matches = list.filter((r) => (r.accountId === null || r.accountId === row.account_id) && text.includes(r.pattern.toLowerCase()));
       const pick = (field: 'category' | 'status' | 'kind') => matches.find((r) => r[field])?.[field] ?? null;
+      const orders = fromOrders.get(row.id);
 
       let { category, category_source: categorySource, status, status_source: statusSource, kind, kind_source: kindSource, transfer_id: transferId } = row;
       if (categorySource !== 'user') {
         const ruled = pick('category');
-        const fromReceipt = ruled ? null : row.receipt_category;
-        const hint = ruled || fromReceipt ? null : categoryHint(row.description, row.payee || '', row.amount);
-        category = ruled ?? fromReceipt ?? hint;
-        categorySource = ruled ? 'rule' : fromReceipt ? 'receipt' : hint ? 'payee' : null;
+        const fromOrder = ruled ? null : orders?.category ?? null;
+        const fromReceipt = ruled || fromOrder ? null : row.receipt_category;
+        const hint = ruled || fromOrder || fromReceipt ? null : categoryHint(row.description, row.payee || '', row.amount);
+        category = ruled ?? fromOrder ?? fromReceipt ?? hint;
+        categorySource = ruled ? 'rule' : fromOrder ? 'order' : fromReceipt ? 'receipt' : hint ? 'payee' : null;
       }
       if (statusSource !== 'user') {
         const ruled = pick('status');
@@ -295,6 +358,22 @@ export function createBankStore(db: DatabaseSync) {
         }
       }
       update.run(category, categorySource, status, statusSource, kind, kindSource, transferId, now(), row.id);
+
+      // Entity: a rule (one entity, or several sharing equally), then where its
+      // store order was delivered, then the account's.
+      if (row.entity_source !== 'user') {
+        clearShares.run(row.id);
+        const ruled = matches.find((r) => r.entityId || r.sharedEntities);
+        if (ruled?.sharedEntities) {
+          setEntity.run(null, 'rule', row.id);
+          const each = Math.round((100 / ruled.sharedEntities.length) * 10000) / 10000;
+          for (const entityId of ruled.sharedEntities) addShare.run(row.id, entityId, each);
+        } else {
+          const place = orders?.zips.map((z) => placeEntity.get(z)).find(Boolean) ?? null;
+          const entity = ruled?.entityId ?? place ?? row.account_entity ?? null;
+          setEntity.run(entity, ruled?.entityId ? 'rule' : place ? 'place' : entity ? 'account' : null, row.id);
+        }
+      }
     }
   }
 
@@ -523,6 +602,23 @@ export function createBankStore(db: DatabaseSync) {
       clauses.push(`(t.description LIKE ? ESCAPE '\\' OR t.payee LIKE ? ESCAPE '\\' OR t.memo LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\')`);
       params.push(like, like, like, like);
     }
+    if (filters.entity?.length) {
+      const ids = filters.entity.filter((e) => e !== NO_ENTITY).map(Number);
+      const parts: string[] = [];
+      if (ids.length) {
+        const marks = ids.map(() => '?').join(', ');
+        parts.push(`t.entity_id IN (${marks}) OR EXISTS (SELECT 1 FROM tx_entity_shares es WHERE es.transaction_id = t.id AND es.entity_id IN (${marks}))`);
+        params.push(...ids, ...ids);
+      }
+      if (filters.entity.includes(NO_ENTITY)) parts.push('(t.entity_id IS NULL AND NOT EXISTS (SELECT 1 FROM tx_entity_shares es WHERE es.transaction_id = t.id))');
+      clauses.push(`(${parts.join(' OR ')})`);
+    }
+    if (filters.storeUnlinked) {
+      clauses.push(
+        `t.amount < 0 AND t.kind = 'normal' AND t.payee IN (${ALL_STORE_PAYEES.map(() => '?').join(', ')}) AND NOT EXISTS (SELECT 1 FROM order_links l WHERE l.transaction_id = t.id)`
+      );
+      params.push(...ALL_STORE_PAYEES);
+    }
     if (filters.importId) {
       clauses.push(`EXISTS (SELECT 1 FROM bank_import_rows r WHERE r.transaction_id = t.id AND r.import_id = ?${filters.importOutcome ? ' AND r.outcome = ?' : ''})`);
       params.push(filters.importId, ...(filters.importOutcome ? [filters.importOutcome] : []));
@@ -556,6 +652,24 @@ export function createBankStore(db: DatabaseSync) {
     note: row.note,
     sources: row.sources ? String(row.sources).split(',') : [],
     receiptId: row.receipt_id ?? null,
+    entityId: row.entity_id ?? null,
+    entitySource: row.entity_source ?? null,
+    shares: row.shares
+      ? String(row.shares)
+          .split(',')
+          .map((pair) => {
+            const [entityId, percent] = pair.split(':');
+            return { entityId: Number(entityId), percent: Number(percent) };
+          })
+      : [],
+    orders: row.linked_orders
+      ? String(row.linked_orders)
+          .split('\u0001')
+          .map((pair) => {
+            const [store, orderId, amount] = pair.split('\u0002');
+            return { store, orderId, amount: Number(amount) };
+          })
+      : [],
   });
 
   function listTransactions(filters: TxFilters, options: { sort?: string; direction?: 'asc' | 'desc'; limit?: number; offset?: number } = {}) {
@@ -571,6 +685,8 @@ export function createBankStore(db: DatabaseSync) {
       .prepare(
         `SELECT t.*, a.name AS account_name, pa.name AS transfer_account,
                 (SELECT r.id FROM receipts r WHERE r.transaction_id = t.id ORDER BY r.id LIMIT 1) AS receipt_id,
+                (SELECT GROUP_CONCAT(es.entity_id || ':' || es.percent) FROM tx_entity_shares es WHERE es.transaction_id = t.id) AS shares,
+                (SELECT GROUP_CONCAT(l.store || char(2) || l.order_id || char(2) || l.amount, char(1)) FROM order_links l WHERE l.transaction_id = t.id) AS linked_orders,
                 (SELECT GROUP_CONCAT(DISTINCT s.source) FROM bank_tx_sources s WHERE s.transaction_id = t.id) AS sources
          ${base.replace('JOIN bank_accounts a ON a.id = t.account_id', 'JOIN bank_accounts a ON a.id = t.account_id LEFT JOIN bank_transactions p ON p.id = t.transfer_id LEFT JOIN bank_accounts pa ON pa.id = p.account_id')}
          ORDER BY ${column} ${order}, t.posted DESC, t.id DESC ${limit}`
@@ -589,7 +705,10 @@ export function createBankStore(db: DatabaseSync) {
   /* ---------- Editing ---------- */
 
   // Each change is the user's own choice; null puts a field back to automatic.
-  function updateTransactions(ids: number[], changes: { category?: string | null; status?: string | null; kind?: TxKind | null; note?: string | null }) {
+  function updateTransactions(
+    ids: number[],
+    changes: { category?: string | null; status?: string | null; kind?: TxKind | null; note?: string | null; entity?: number | null; shares?: Share[] | null }
+  ) {
     if (!ids.length) return 0;
     const list = ids.map(Number).filter(Number.isInteger).join(',');
     return transaction(() => {
@@ -604,6 +723,18 @@ export function createBankStore(db: DatabaseSync) {
         else db.prepare(`UPDATE bank_transactions SET status_source = NULL, updated_at = ? WHERE id IN (${list})`).run(stamp);
       }
       if ('note' in changes) db.prepare(`UPDATE bank_transactions SET note = ?, updated_at = ? WHERE id IN (${list})`).run(changes.note || null, stamp);
+      if ('entity' in changes || 'shares' in changes) {
+        db.prepare(`DELETE FROM tx_entity_shares WHERE transaction_id IN (${list})`).run();
+        if (changes.shares && changes.shares.length > 1) {
+          db.prepare(`UPDATE bank_transactions SET entity_id = NULL, entity_source = 'user', updated_at = ? WHERE id IN (${list})`).run(stamp);
+          const add = db.prepare('INSERT INTO tx_entity_shares (transaction_id, entity_id, percent) VALUES (?, ?, ?)');
+          for (const id of ids) for (const share of changes.shares) add.run(id, share.entityId, share.percent);
+        } else if (changes.entity) {
+          db.prepare(`UPDATE bank_transactions SET entity_id = ?, entity_source = 'user', updated_at = ? WHERE id IN (${list})`).run(changes.entity, stamp);
+        } else {
+          db.prepare(`UPDATE bank_transactions SET entity_source = NULL, updated_at = ? WHERE id IN (${list})`).run(stamp);
+        }
+      }
       if ('kind' in changes) {
         // Changing one side of a transfer releases its partner.
         for (const row of rows) {
@@ -674,6 +805,9 @@ export function createBankStore(db: DatabaseSync) {
     updateTransactions,
     deleteTransactions,
     spending,
+    setOrderInfo: (fn: (ids: number[]) => Map<number, OrderInfo>) => {
+      orderInfo = fn;
+    },
     transactionById: (id: number) => plain(db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id) as Row | undefined),
   };
 }

@@ -12,6 +12,8 @@ import type { SimplefinService } from './bank/simplefin';
 import { createBankStore } from './bank/store';
 import { bankRoutes } from './routes/bank';
 import { receiptRoutes } from './routes/receipts';
+import { correlationRoutes } from './routes/correlate';
+import { correlationService } from './correlate/service';
 import { claudeReader } from './receipts/reader';
 import type { ReceiptReader } from './receipts/reader';
 import { receiptService } from './receipts/service';
@@ -159,8 +161,17 @@ export function buildApp(options: AppOptions): FastifyInstance {
   bank.onImport(() => receipts!.matchUnlinked());
   app.decorate('receipts', receipts);
 
-  syncRoutes(app, db);
-  bankRoutes(app, bank, simplefin, categoryNames);
+  // Store orders and the card charges that paid for them, matched whenever either arrives.
+  const correlate = correlationService({ db, bank });
+  bank.onImport(() => correlate.matchOrders());
+  // Item categories decide how linked charges split, so a change there flows through.
+  app.addHook('onResponse', async (request, reply) => {
+    if (request.method === 'POST' && reply.statusCode < 400 && /^\/api\/(items\/(category|status)|categories)/.test(request.url)) correlate.refreshLinked();
+  });
+
+  syncRoutes(app, db, () => correlate.matchOrders());
+  bankRoutes(app, bank, simplefin, categoryNames, () => correlate.entities().map((e) => e.id));
+  correlationRoutes(app, correlate, bank, db);
   receiptRoutes(app, receipts, categoryNames);
   reportRoutes(app, db);
   authRoutes(app, store, tokens);

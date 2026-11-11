@@ -140,6 +140,16 @@ Money moving between your own accounts, such as paying a card from checking, is 
 
 **Transactions** downloads as CSV, or one account as OFX for Quicken, QuickBooks and other money programs. Loading that OFX back in adds nothing.
 
+### Store orders and card charges
+
+Each synced store order is matched to the card or bank charge that paid for it: same store, same amount, posted within two days before to two weeks after the order (stores charge when they ship), and not on a different card than the order names. An order charged in parts, one per shipment, is matched to all its charges when only one combination adds up. Uncertain ones are left for you: a store charge with no order shows **Find its order** in **Transactions**, with likely orders and a search, and **Review** counts them. **Not this order** unlinks a match, and it isn't made again automatically. **Orders** shows the charge that paid for each order.
+
+A matched charge is split by the order's items, so one Amazon charge can count partly as Cleaning Supplies and partly as Grocery, each item business or personal as marked in **Items**. Changing an item's category re-splits its charge. Choosing one category for the whole charge yourself overrides the split.
+
+### Businesses and properties
+
+Add each business and rental property under **Settings → Businesses and properties**, and spending is reported for each. A transaction gets one from, in order: your own choice, a rule, where its store order was delivered (set per ZIP under **Settings → Places**), then its account's. A shared cost can be split between several by percentage (**Share between…**), or by a rule that shares it equally. The **Dashboard** shows bank and card spending by category, with matched charges split by item, and by business or property.
+
 ### Receipts
 
 On a phone, **Receipts → Take a photo** opens the camera; on a computer, **Upload files** takes photos or PDFs, several at once. Photos are shrunk in the browser before upload, and each file is kept on your server. The same photo twice is stored once.
@@ -214,7 +224,7 @@ On Linux without Proxmox, follow `deploy/proxmox/setup-in-container.sh` by hand:
 
 On Proxmox, a copy of the database is made every night into `/var/lib/expense-hub/backups`, and the last 14 are kept. New receipt photos are copied there too, into `backups/receipts`. Include the container in your Proxmox backups as well. On another machine, run `npm run backup -w server`, or stop the server and copy `server/data/`.
 
-Upgrades that change the database make their own copy first, named `orders.db.before-v8.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
+Upgrades that change the database make their own copy first, named `orders.db.before-v9.bak` and so on. If `secret.key` is lost, connect SimpleFIN again with a new token; nothing else depends on it. To replace the extension's token, use **Settings** in the web app.
 
 ### CSV only
 

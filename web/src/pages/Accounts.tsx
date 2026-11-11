@@ -4,7 +4,8 @@ import { Link } from 'react-router-dom';
 import { Download, ExternalLink, Link2, RefreshCw, Trash2, Unplug, Upload } from 'lucide-react';
 import { download, post, useApi } from '../api';
 import { KIND_LABELS, OWNER_LABELS, SourceBadges, importLink, when } from '../bank';
-import type { Account, SimplefinStatus } from '../bank';
+import type { Account, Entity, SimplefinStatus } from '../bank';
+import type { Meta } from '../filters';
 import { money, plural, whole } from '../format';
 import { Banner, Button, Card, Confirm, Empty, Field, Input, Loading, PageHeader, Select, cx } from '../ui';
 
@@ -14,7 +15,7 @@ interface AccountsData {
   reviewCount: number;
 }
 
-export function Accounts() {
+export function Accounts({ meta }: { meta: Meta | null }) {
   const { data, error, loading, reload } = useApi<AccountsData>('/api/bank/accounts');
   const imports = useApi<{ imports: any[] }>('/api/bank/imports');
   const undecided = data?.accounts.filter((a) => a.owner === 'mixed').length || 0;
@@ -49,7 +50,7 @@ export function Accounts() {
           )}
           <div className="mb-6 grid gap-4 lg:grid-cols-2">
             {data.accounts.map((account) => (
-              <AccountCard key={account.id} account={account} onChange={reload} />
+              <AccountCard key={account.id} account={account} entities={meta?.entities || []} onChange={reload} />
             ))}
           </div>
           {!data.accounts.length && (
@@ -187,13 +188,13 @@ function SimplefinCard({ status, onChange }: { status: SimplefinStatus | null; o
   );
 }
 
-function AccountCard({ account, onChange }: { account: Account; onChange: () => void }) {
+function AccountCard({ account, entities, onChange }: { account: Account; entities: Entity[]; onChange: () => void }) {
   const [name, setName] = useState(account.name);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirm, setConfirm] = useState(false);
 
-  async function save(changes: Partial<Pick<Account, 'name' | 'kind' | 'owner'>>) {
+  async function save(changes: Partial<Pick<Account, 'name' | 'kind' | 'owner' | 'entityId'>>) {
     setBusy(true);
     setError('');
     try {
@@ -274,6 +275,18 @@ function AccountCard({ account, onChange }: { account: Account; onChange: () => 
             ))}
           </Select>
         </Field>
+        {entities.length > 0 && (
+          <Field label="Business or property">
+            <Select value={account.entityId ?? ''} disabled={busy} onChange={(e) => save({ entityId: e.target.value ? Number(e.target.value) : null })}>
+              <option value="">None (decide each)</option>
+              {entities.map((en) => (
+                <option key={en.id} value={en.id}>
+                  {en.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
         <Link

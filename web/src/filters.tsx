@@ -10,6 +10,8 @@ export interface Meta {
   stores: { store: string; name: string }[];
   payments: string[];
   zips: string[];
+  // Businesses and properties that spending is assigned to.
+  entities: { id: number; name: string; kind: 'business' | 'rental' | 'other' }[];
   // Each ZIP's place name (its city, or a name you gave it).
   places: { zip: string; city: string | null; name: string | null; label: string; orders: number }[];
   years: string[];

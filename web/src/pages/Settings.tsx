@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Copy, Eye, KeyRound, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import { Copy, Eye, KeyRound, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
 import { get, post, useApi } from '../api';
-import { Banner, Button, Card, Confirm, Field, Input, PageHeader } from '../ui';
+import { Banner, Button, Card, Confirm, Field, Input, PageHeader, Select } from '../ui';
+import type { Meta } from '../filters';
 import type { SignedInUser } from './SignIn';
 
 function PasswordCard({ onSignedOut }: { onSignedOut: () => void }) {
@@ -188,9 +189,107 @@ function ExtensionCard() {
   );
 }
 
+// The businesses and properties spending can be assigned to.
+function EntitiesCard({ entities, onChange }: { entities: Meta['entities']; onChange: () => void }) {
+  const [name, setName] = useState('');
+  const [kind, setKind] = useState('rental');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [removing, setRemoving] = useState<Meta['entities'][number] | null>(null);
+  async function run(path: string, body: unknown = {}) {
+    setBusy(true);
+    setError('');
+    try {
+      await post(path, body);
+      onChange();
+      return true;
+    } catch (e) {
+      setError((e as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Card title="Businesses and properties" className="lg:col-span-2">
+      <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
+        Add each business and rental property, so spending can be reported for each. A transaction gets one from, in order: your own choice, a rule, where its store order was delivered (set under Places below), then its account. A shared cost can be split between them by percentage.
+      </p>
+      {error && <Banner>{error}</Banner>}
+      {entities.length > 0 && (
+        <ul className="mb-4 divide-y divide-slate-100 text-sm dark:divide-slate-800">
+          {entities.map((en) => (
+            <li key={en.id} className="grid grid-cols-[1fr_10rem_auto] items-center gap-2 py-2">
+              <Input
+                aria-label={`Name of ${en.name}`}
+                defaultValue={en.name}
+                maxLength={60}
+                onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== en.name && run(`/api/entities/${en.id}`, { name: e.target.value.trim(), kind: en.kind })}
+              />
+              <Select aria-label={`Kind of ${en.name}`} value={en.kind} onChange={(e) => run(`/api/entities/${en.id}`, { name: en.name, kind: e.target.value })}>
+                <option value="business">Business</option>
+                <option value="rental">Rental property</option>
+                <option value="other">Other</option>
+              </Select>
+              <Button variant="ghost" aria-label={`Remove ${en.name}`} onClick={() => setRemoving(en)}>
+                <Trash2 className="size-4" aria-hidden />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_12rem_auto] sm:items-end"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (await run('/api/entities', { name: name.trim(), kind })) setName('');
+        }}
+      >
+        <Field label="Name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Elm St rental, Consulting LLC" maxLength={60} />
+        </Field>
+        <Field label="Kind">
+          <Select value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="business">Business</option>
+            <option value="rental">Rental property</option>
+            <option value="other">Other</option>
+          </Select>
+        </Field>
+        <Button type="submit" variant="primary" busy={busy} disabled={!name.trim()}>
+          <Plus className="size-4" aria-hidden />
+          Add
+        </Button>
+      </form>
+      <Confirm
+        open={Boolean(removing)}
+        title={`Remove ${removing?.name}?`}
+        confirmLabel="Remove"
+        busy={busy}
+        onCancel={() => setRemoving(null)}
+        onConfirm={async () => {
+          if (removing) await run(`/api/entities/${removing.id}/delete`);
+          setRemoving(null);
+        }}
+      >
+        Its transactions are kept, but no longer assigned to it, and rules and places that pointed to it are cleared.
+      </Confirm>
+    </Card>
+  );
+}
+
 // Delivery ZIPs and their place names: found from addresses, or named here.
-function PlacesCard({ onChange }: { onChange: () => void }) {
+function PlacesCard({ onChange, entities }: { onChange: () => void; entities: Meta['entities'] }) {
   const list = useApi<{ places: { zip: string; city: string | null; name: string | null; label: string; orders: number }[] }>('/api/places');
+  const owners = useApi<{ placeEntities: Record<string, number> }>('/api/places/entities');
+  async function belongs(zip: string, entityId: string) {
+    setError('');
+    try {
+      await post('/api/places/entity', { zip, entityId: entityId ? Number(entityId) : null });
+      owners.reload();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   async function save(zip: string, name: string) {
@@ -224,6 +323,7 @@ function PlacesCard({ onChange }: { onChange: () => void }) {
                 <th className="px-2 py-1.5 font-medium">ZIP</th>
                 <th className="px-2 py-1.5 font-medium">City from addresses</th>
                 <th className="px-2 py-1.5 font-medium">Your name for it</th>
+                {entities.length > 0 && <th className="px-2 py-1.5 font-medium">Belongs to</th>}
                 <th className="px-2 py-1.5 text-right font-medium">Orders</th>
               </tr>
             </thead>
@@ -245,6 +345,18 @@ function PlacesCard({ onChange }: { onChange: () => void }) {
                         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
                       />
                     </td>
+                    {entities.length > 0 && (
+                      <td className="px-2 py-1.5">
+                        <Select aria-label={`Business or property for ${p.zip}`} value={owners.data?.placeEntities[p.zip] ?? ''} onChange={(e) => belongs(p.zip, e.target.value)}>
+                          <option value="">None</option>
+                          {entities.map((en) => (
+                            <option key={en.id} value={en.id}>
+                              {en.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </td>
+                    )}
                     <td className="px-2 py-1.5 text-right tabular-nums">{p.orders}</td>
                   </tr>
                 );
@@ -322,7 +434,7 @@ function ReceiptReaderCard() {
   );
 }
 
-export function Settings({ user, onUserChange, onSignedOut, onMetaChange }: { user: SignedInUser; onUserChange: () => void; onSignedOut: () => void; onMetaChange: () => void }) {
+export function Settings({ user, meta, onUserChange, onSignedOut, onMetaChange }: { user: SignedInUser; meta: Meta | null; onUserChange: () => void; onSignedOut: () => void; onMetaChange: () => void }) {
   return (
     <>
       <PageHeader title="Settings" description={`Signed in as ${user.username}.`} />
@@ -331,7 +443,8 @@ export function Settings({ user, onUserChange, onSignedOut, onMetaChange }: { us
         <ExtensionCard />
         <ReceiptReaderCard />
         <PasswordCard onSignedOut={onSignedOut} />
-        <PlacesCard onChange={onMetaChange} />
+        <EntitiesCard entities={meta?.entities || []} onChange={onMetaChange} />
+        <PlacesCard onChange={onMetaChange} entities={meta?.entities || []} />
       </div>
     </>
   );

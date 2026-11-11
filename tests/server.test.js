@@ -547,14 +547,14 @@ test('upgrading an older database keeps its orders, backs it up, and queues miss
 
   const upgraded = openDatabase(file);
   assert.equal(upgraded.listOrders({}).total, 3);
-  assert.ok(fs.existsSync(`${file}.before-v8.bak`), 'a backup was made first');
+  assert.ok(fs.existsSync(`${file}.before-v9.bak`), 'a backup was made first');
   const pending = upgraded.syncPlan('samsclub', { from: null, to: null }).pendingDetails.map((o) => o.orderId);
   assert.deepEqual(pending, ['NOPRICE'], 'only orders missing prices are read again');
   assert.equal(upgraded.syncPlan('ebay', { from: null, to: null }).pendingDetails.length, 0);
   assert.ok(upgraded.categoryList().some((c) => c.name === 'Cleaning Supplies'));
   upgraded.close();
 
-  const backup = new DatabaseSync(`${file}.before-v8.bak`, { readOnly: true });
+  const backup = new DatabaseSync(`${file}.before-v9.bak`, { readOnly: true });
   assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 3);
   backup.close();
 });
@@ -567,7 +567,7 @@ test('upgrading to v8 trims ZIP+4 in orders and rules', () => {
   const raw = new DatabaseSync(file);
   raw.exec("UPDATE orders SET delivery_zip = '02134-1234'");
   raw.exec("INSERT INTO tax_rules (field, value, status) VALUES ('zip', '02134-1234', 'business')");
-  raw.exec('DROP TABLE zip_names; PRAGMA user_version = 7');
+  raw.exec('DROP TABLE order_link_rejections; DROP TABLE order_links; DROP TABLE place_entities; DROP TABLE tx_entity_shares; ALTER TABLE bank_transactions DROP COLUMN entity_source; ALTER TABLE bank_transactions DROP COLUMN entity_id; ALTER TABLE bank_rules DROP COLUMN shared_entities; ALTER TABLE bank_rules DROP COLUMN entity_id; ALTER TABLE bank_accounts DROP COLUMN entity_id; DROP TABLE entities; DROP TABLE zip_names; PRAGMA user_version = 7');
   raw.close();
   const second = openDatabase(file);
   assert.equal(second.raw.prepare('SELECT delivery_zip FROM orders').get().delivery_zip, '02134');
@@ -583,7 +583,7 @@ test('upgrading to v4 queues Amazon details to be read again', () => {
   first.close();
   const raw = new DatabaseSync(file);
   // Back to how a version 3 database looked, without the later bank tables.
-  raw.exec('DROP TABLE zip_names; DROP TABLE receipts; DROP TABLE bank_import_rows; DROP TABLE bank_tx_sources; DROP TABLE bank_rules; DROP TABLE bank_imports; DROP TABLE bank_transactions; DROP TABLE bank_accounts; DROP TABLE csv_layouts; DROP TABLE app_settings;');
+  raw.exec('DROP TABLE order_link_rejections; DROP TABLE order_links; DROP TABLE place_entities; DROP TABLE tx_entity_shares; ALTER TABLE bank_transactions DROP COLUMN entity_source; ALTER TABLE bank_transactions DROP COLUMN entity_id; ALTER TABLE bank_rules DROP COLUMN shared_entities; ALTER TABLE bank_rules DROP COLUMN entity_id; ALTER TABLE bank_accounts DROP COLUMN entity_id; DROP TABLE entities; DROP TABLE zip_names; DROP TABLE receipts; DROP TABLE bank_import_rows; DROP TABLE bank_tx_sources; DROP TABLE bank_rules; DROP TABLE bank_imports; DROP TABLE bank_transactions; DROP TABLE bank_accounts; DROP TABLE csv_layouts; DROP TABLE app_settings;');
   raw.exec('PRAGMA user_version = 3');
   raw.close();
   const second = openDatabase(file);

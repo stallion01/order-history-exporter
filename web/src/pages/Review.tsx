@@ -4,10 +4,10 @@ import { Link } from 'react-router-dom';
 import { Plus, Trash2 } from 'lucide-react';
 import { post, useApi } from '../api';
 import { BulkBar, TxRow } from '../bank';
-import type { Transaction } from '../bank';
+import type { Entity, Transaction } from '../bank';
 import type { Meta } from '../filters';
 import { whole } from '../format';
-import { Banner, Button, Card, Empty, Field, Input, Loading, PageHeader, Pager, Select, TD, TH, TR } from '../ui';
+import { Banner, Button, Card, Empty, Field, Input, Loading, MultiSelect, PageHeader, Pager, Select, TD, TH, TR } from '../ui';
 
 const PAGE = 50;
 
@@ -18,6 +18,8 @@ interface Rule {
   category: string | null;
   status: string | null;
   kind: string | null;
+  entityId: number | null;
+  sharedEntities: number[] | null;
 }
 
 export function Review({ meta }: { meta: Meta | null }) {
@@ -25,6 +27,8 @@ export function Review({ meta }: { meta: Meta | null }) {
   const list = useApi<{ total: number; transactions: Transaction[] }>(`/api/bank/transactions?review=1&sort=date&dir=desc&limit=${PAGE}&offset=${offset}`);
   const rules = useApi<{ rules: Rule[]; accounts: { id: number; name: string }[] }>('/api/bank/rules');
   const receipts = useApi<{ counts: { review: number } }>('/api/receipts?limit=1');
+  const unmatched = useApi<{ total: number }>('/api/bank/transactions?unmatched=1&limit=1');
+  const entities = meta?.entities || [];
   const [selected, setSelected] = useState<number[]>([]);
   const categories = meta?.categories.map((c) => c.name) || [];
   useEffect(() => setSelected([]), [list.data]);
@@ -49,8 +53,16 @@ export function Review({ meta }: { meta: Meta | null }) {
           </Link>
         </Banner>
       )}
+      {unmatched.data && unmatched.data.total > 0 && (
+        <Banner tone="warning">
+          {unmatched.data.total === 1 ? '1 store charge has' : `${unmatched.data.total} store charges have`} no matching order, so they can't be split by item yet.{' '}
+          <Link to="/transactions?preset=all&unmatched=1" className="font-medium underline">
+            Match them
+          </Link>
+        </Banner>
+      )}
       <Card title={data ? `${whole(data.total)} to review` : 'To review'} padded={false} className="mb-6">
-        <BulkBar ids={selected} categories={categories} onDone={reload} />
+        <BulkBar ids={selected} categories={categories} entities={entities} onDone={reload} />
         {!data && list.loading && <Loading />}
         {data && !data.transactions.length && (
           <Empty>
@@ -64,6 +76,7 @@ export function Review({ meta }: { meta: Meta | null }) {
                 key={tx.id}
                 tx={tx}
                 categories={categories}
+                entities={entities}
                 selected={selected.includes(tx.id)}
                 onSelect={(checked) => setSelected((s) => (checked ? [...s, tx.id] : s.filter((id) => id !== tx.id)))}
                 onChanged={reload}
@@ -74,18 +87,26 @@ export function Review({ meta }: { meta: Meta | null }) {
         {data && <Pager offset={offset} pageSize={PAGE} total={data.total} onChange={setOffset} />}
       </Card>
 
-      <Rules data={rules.data} categories={categories} onChange={reload} />
+      <Rules data={rules.data} categories={categories} entities={entities} onChange={reload} />
     </>
   );
 }
 
-const describe = (rule: Rule) =>
-  [rule.category, rule.status === 'business' ? 'Business' : rule.status === 'personal' ? 'Personal' : null, rule.kind === 'transfer' ? 'Transfer' : rule.kind === 'ignored' ? 'Ignore' : null]
+const describe = (rule: Rule, entities: Entity[]) => {
+  const name = (id: number) => entities.find((e) => e.id === id)?.name ?? 'Removed';
+  return [
+    rule.category,
+    rule.status === 'business' ? 'Business' : rule.status === 'personal' ? 'Personal' : null,
+    rule.kind === 'transfer' ? 'Transfer' : rule.kind === 'ignored' ? 'Ignore' : null,
+    rule.entityId ? name(rule.entityId) : null,
+    rule.sharedEntities ? `Shared equally: ${rule.sharedEntities.map(name).join(', ')}` : null,
+  ]
     .filter(Boolean)
     .join(' · ');
+};
 
-function Rules({ data, categories, onChange }: { data: { rules: Rule[]; accounts: { id: number; name: string }[] } | null; categories: string[]; onChange: () => void }) {
-  const empty = { pattern: '', accountId: '', category: '', status: '', kind: '' };
+function Rules({ data, categories, entities, onChange }: { data: { rules: Rule[]; accounts: { id: number; name: string }[] } | null; categories: string[]; entities: Entity[]; onChange: () => void }) {
+  const empty = { pattern: '', accountId: '', category: '', status: '', kind: '', entities: [] as string[] };
   const [form, setForm] = useState(empty);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -101,6 +122,8 @@ function Rules({ data, categories, onChange }: { data: { rules: Rule[]; accounts
         category: form.category || null,
         status: form.status || null,
         kind: form.kind || null,
+        entityId: form.entities.length === 1 ? Number(form.entities[0]) : null,
+        sharedEntities: form.entities.length > 1 ? form.entities.map(Number) : null,
       });
       setForm(empty);
       onChange();
@@ -138,7 +161,7 @@ function Rules({ data, categories, onChange }: { data: { rules: Rule[]; accounts
                 <tr key={rule.id} className={TR}>
                   <td className={`${TD} font-medium`}>{rule.pattern}</td>
                   <td className={TD}>{accountName(rule.accountId)}</td>
-                  <td className={TD}>{describe(rule)}</td>
+                  <td className={TD}>{describe(rule, entities)}</td>
                   <td className={`${TD} text-right`}>
                     <Button variant="ghost" aria-label={`Remove the rule for ${rule.pattern}`} onClick={() => remove(rule.id)}>
                       <Trash2 className="size-4" aria-hidden />
@@ -153,7 +176,7 @@ function Rules({ data, categories, onChange }: { data: { rules: Rule[]; accounts
         <Empty>No rules yet.</Empty>
       )}
       <form
-        className="grid grid-cols-2 gap-3 md:grid-cols-[2fr_1.5fr_1.5fr_1fr_1fr_auto] md:items-end"
+        className={`grid grid-cols-2 gap-3 md:items-end ${entities.length ? 'md:grid-cols-[2fr_1.3fr_1.3fr_1fr_1.3fr_1fr_auto]' : 'md:grid-cols-[2fr_1.5fr_1.5fr_1fr_1fr_auto]'}`}
         onSubmit={(e) => {
           e.preventDefault();
           add();
@@ -187,6 +210,15 @@ function Rules({ data, categories, onChange }: { data: { rules: Rule[]; accounts
             <option value="personal">Personal</option>
           </Select>
         </Field>
+        {entities.length > 0 && (
+          <MultiSelect
+            label="Business or property"
+            allLabel="Leave as is"
+            options={entities.map((e): [string, string] => [String(e.id), e.name])}
+            selected={form.entities}
+            onChange={(next) => setForm({ ...form, entities: next })}
+          />
+        )}
         <Field label="Type">
           <Select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
             <option value="">Leave as is</option>
@@ -194,7 +226,7 @@ function Rules({ data, categories, onChange }: { data: { rules: Rule[]; accounts
             <option value="ignored">Ignore</option>
           </Select>
         </Field>
-        <Button type="submit" variant="primary" busy={busy} disabled={form.pattern.trim().length < 3 || !(form.category || form.status || form.kind)}>
+        <Button type="submit" variant="primary" busy={busy} disabled={form.pattern.trim().length < 3 || !(form.category || form.status || form.kind || form.entities.length)}>
           <Plus className="size-4" aria-hidden />
           Add rule
         </Button>

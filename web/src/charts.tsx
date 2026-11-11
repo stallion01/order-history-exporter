@@ -10,7 +10,7 @@ export interface Row {
   // When one row covers several filter values, such as a city's ZIP codes.
   keys?: string[];
   spend: number;
-  orders: number;
+  orders?: number;
 }
 
 function niceMax(value: number) {
@@ -148,7 +148,8 @@ export function RankBars({ rows, empty, limit = 8, linkFor }: { rows: Row[]; emp
                 {row.label}
               </span>
               <span className="shrink-0 tabular-nums">
-                {money(row.spend)} <span className="text-xs text-slate-500 dark:text-slate-400">· {row.orders}</span>
+                {money(row.spend)}
+                {row.orders ? <span className="text-xs text-slate-500 dark:text-slate-400"> · {row.orders}</span> : null}
               </span>
             </div>
             <div className="mt-1 h-2 rounded-r-full bg-slate-100 dark:bg-slate-800">

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Download } from 'lucide-react';
 import { download, useApi } from '../api';
 import { FilterBar, useFilters } from '../filters';
@@ -14,6 +15,20 @@ function OrderLink({ url, children }: { url: string | null; children: string }) 
     <a href={url} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline dark:text-emerald-400">
       {children}
     </a>
+  );
+}
+
+// The card or bank charges that paid for an order.
+function Charges({ charges }: { charges?: { id: number; posted: string; amount: number; account: string }[] }) {
+  if (!charges?.length) return <span className="text-slate-400">Not matched</span>;
+  return (
+    <span className="flex flex-col">
+      {charges.map((c) => (
+        <Link key={c.id} to={`/transactions?preset=custom&kind=all&from=${c.posted}&to=${c.posted}`} className="text-emerald-700 hover:underline dark:text-emerald-400">
+          {money(c.amount)} on {c.posted} · {c.account}
+        </Link>
+      ))}
+    </span>
   );
 }
 
@@ -66,6 +81,7 @@ export function Orders({ meta }: { meta: Meta | null }) {
                     <th className={TH}>Items</th>
                     <SortHeader label="Delivery ZIP" column="zip" sort={sort} dir={dir} onSort={onSort} />
                     <SortHeader label="Payment" column="payment" sort={sort} dir={dir} onSort={onSort} />
+                    <th className={TH}>Card charge</th>
                     <SortHeader label="Total" column="total" sort={sort} dir={dir} onSort={onSort} align="right" />
                   </tr>
                 </thead>
@@ -80,6 +96,9 @@ export function Orders({ meta }: { meta: Meta | null }) {
                       <td className={TD}>{order.items.map((item: any) => item.name).join('; ')}</td>
                       <td className={`${TD} whitespace-nowrap`}>{order.deliveryZip}</td>
                       <td className={`${TD} whitespace-nowrap`}>{order.payment}</td>
+                      <td className={`${TD} whitespace-nowrap text-xs`}>
+                        <Charges charges={order.charges} />
+                      </td>
                       <td className={`${TD} text-right whitespace-nowrap tabular-nums`}>{money(order.total)}</td>
                     </tr>
                   ))}
@@ -98,6 +117,11 @@ export function Orders({ meta }: { meta: Meta | null }) {
                     {order.deliveryZip ? ` · ${order.deliveryZip}` : ''}
                   </div>
                   <div className="mt-1 line-clamp-2 text-slate-700 dark:text-slate-300">{order.items.map((item: any) => item.name).join('; ')}</div>
+                  {order.charges?.length > 0 && (
+                    <div className="mt-1 text-xs">
+                      <Charges charges={order.charges} />
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

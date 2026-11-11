@@ -160,6 +160,9 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
   if (range.to) period.set('to', range.to);
   for (const y of range.years || []) period.append('years', y);
   const totals = useApi<{ total: number; moneyOut: number; moneyIn: number }>(`/api/bank/transactions?${period}&limit=1`);
+  const spending = useApi<{ byCategory: { key: string; label: string; spend: number }[]; byEntity: { key: string; label: string; spend: number }[] }>(`/api/bank/spending?${period}`);
+  const asRows = (rows: { key: string; label: string; spend: number }[] = []) => rows.map((r) => ({ label: r.label, key: r.key, spend: r.spend }));
+  const txLink = (key: string, value: string) => `/transactions?${new URLSearchParams([...params(), [key, value]])}`;
   const link = 'text-sm text-emerald-700 hover:underline dark:text-emerald-400';
   if (!accounts.data) return null;
   if (!accounts.data.accounts.length) {
@@ -203,6 +206,28 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
           hint="Need a category, or business or personal"
         />
         <Stat label="Accounts" value={whole(accounts.data.accounts.length)} hint={sf?.connected ? `SimpleFIN updated ${when(sf.lastSuccess)}` : 'From imported files'} />
+      </div>
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <div>
+          <h3 className="mb-2 text-sm font-semibold">Spending by category</h3>
+          <RankBars rows={asRows(spending.data?.byCategory)} empty="No spending in this period." linkFor={(row) => txLink('category', row.key === 'Uncategorized' ? 'none' : row.key!)} />
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Store charges matched to orders are split by their items.</p>
+        </div>
+        {(spending.data?.byEntity.length ?? 0) > 1 || spending.data?.byEntity[0]?.key !== 'none' ? (
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">By business or property</h3>
+            <RankBars rows={asRows(spending.data?.byEntity)} empty="No spending in this period." linkFor={(row) => txLink('entity', row.key!)} />
+          </div>
+        ) : (
+          <div className="text-sm text-slate-600 dark:text-slate-300">
+            <h3 className="mb-2 text-sm font-semibold">By business or property</h3>
+            Add your businesses and rental properties under{' '}
+            <Link to="/settings" className={link}>
+              Settings
+            </Link>{' '}
+            to see spending for each.
+          </div>
+        )}
       </div>
       {sf?.errors.length ? (
         <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">

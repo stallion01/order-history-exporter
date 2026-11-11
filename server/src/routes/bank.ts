@@ -55,6 +55,8 @@ export function txFiltersFrom(query: Query): TxFilters {
     review: query.get('review') === '1',
     importId,
     importOutcome: outcome as ImportOutcome | null,
+    entity: query.getAll('entity').filter(Boolean).length ? query.getAll('entity').filter(Boolean).map((e) => (e === 'none' ? e : Number(e))) : null,
+    storeUnlinked: query.get('unmatched') === '1',
   };
 }
 
@@ -87,7 +89,10 @@ const newAccountSchema = z.object({
   owner: z.enum(OWNERS as [string, ...string[]]),
 });
 
-export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: SimplefinService | null, categoryNames: () => string[]) {
+export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: SimplefinService | null, categoryNames: () => string[], entityIds: () => number[] = () => []) {
+  const checkEntity = (id: number | null | undefined) => {
+    if (id && !entityIds().includes(id)) throw new HttpError(400, 'Unknown business or property.');
+  };
   const user = (request: unknown) => (request as AuthedRequest).user?.username ?? null;
   const audit = (request: unknown, action: string, detail?: unknown) => (request as AuthedRequest).audit(action, detail);
   const idParam = (value: unknown) => {
@@ -116,7 +121,8 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
 
   app.post('/api/bank/accounts/:id', async (request) => {
     const id = idParam((request.params as { id: string }).id);
-    const body = parse(newAccountSchema.partial().pick({ name: true, kind: true, owner: true }), request.body);
+    const body = parse(newAccountSchema.partial().pick({ name: true, kind: true, owner: true }).extend({ entityId: z.number().int().nullable().optional() }), request.body);
+    checkEntity(body.entityId);
     audit(request, 'bank.account.update', { id, ...body });
     return bank.updateAccount(id, body as never);
   });
@@ -143,7 +149,6 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
     return bank.listTransactions(txFiltersFrom(query), sortOptions(query));
   });
 
-  app.get('/api/bank/spending', async (request) => bank.spending(txFiltersFrom(queryOf(request.query))));
 
   app.post('/api/bank/transactions/update', async (request) => {
     const body = parse(
@@ -153,17 +158,37 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
         status: z.enum(TX_STATUSES).nullable().optional(),
         kind: z.enum(TX_KINDS).nullable().optional(),
         note: z.string().max(1000).nullable().optional(),
+        entity: z.number().int().nullable().optional(),
+        shares: z
+          .array(z.object({ entityId: z.number().int(), percent: z.number().gt(0).max(100) }))
+          .min(2)
+          .max(20)
+          .refine((s) => Math.abs(s.reduce((t, x) => t + x.percent, 0) - 100) < 0.01, 'Shares must add up to 100%.')
+          .refine((s) => new Set(s.map((x) => x.entityId)).size === s.length, 'Each entity once.')
+          .nullable()
+          .optional(),
         // Also make a rule, so future transactions like these get the same choice.
         rule: z.object({ pattern: z.string().trim().min(3).max(100), accountId: z.number().int().nullable().optional() }).optional(),
       }),
       request.body
     );
     checkCategory(body.category);
+    checkEntity(body.entity);
+    for (const share of body.shares || []) checkEntity(share.entityId);
     const { ids, rule, ...changes } = body;
     const changed = bank.updateTransactions(ids, changes as never);
     let ruleId: number | null = null;
     if (rule) {
-      ruleId = bank.saveRule({ pattern: rule.pattern, accountId: rule.accountId ?? null, category: changes.category ?? null, status: changes.status ?? null, kind: changes.kind ?? null });
+      ruleId = bank.saveRule({
+        pattern: rule.pattern,
+        accountId: rule.accountId ?? null,
+        category: changes.category ?? null,
+        status: changes.status ?? null,
+        kind: changes.kind ?? null,
+        entityId: changes.entity ?? null,
+        // A rule shares equally; custom percentages stay on the transaction.
+        sharedEntities: changes.shares ? changes.shares.map((s) => s.entityId) : null,
+      });
     }
     audit(request, 'bank.transactions.update', { count: changed, ...changes, rule: rule?.pattern });
     return { changed, ruleId };
@@ -182,11 +207,15 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
           category: z.string().max(60).nullable().optional(),
           status: z.enum(TX_STATUSES).nullable().optional(),
           kind: z.enum(TX_KINDS).nullable().optional(),
+          entityId: z.number().int().nullable().optional(),
+          sharedEntities: z.array(z.number().int()).max(20).nullable().optional(),
         })
-        .refine((r) => r.category || r.status || r.kind, 'A rule needs a category, a business or personal choice, or a type.'),
+        .refine((r) => r.category || r.status || r.kind || r.entityId || (r.sharedEntities && r.sharedEntities.length > 1), 'A rule needs a category, a business or personal choice, a type, or an entity.'),
       request.body
     );
     checkCategory(body.category);
+    checkEntity(body.entityId);
+    for (const id of body.sharedEntities || []) checkEntity(id);
     if (body.accountId) idParam(body.accountId);
     const id = bank.saveRule(body);
     audit(request, 'bank.rule.create', body);

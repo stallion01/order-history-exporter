@@ -12,7 +12,7 @@ export const SYNC_ROUTES = new Set([
   'POST /api/sync/runs',
 ]);
 
-export function syncRoutes(app: FastifyInstance, db: OrdersDb) {
+export function syncRoutes(app: FastifyInstance, db: OrdersDb, afterOrders: () => void = () => {}) {
   app.get('/api/health', async () => ({ ok: true }));
 
   app.get('/api/sync/plan', async (request) => {
@@ -27,7 +27,14 @@ export function syncRoutes(app: FastifyInstance, db: OrdersDb) {
   app.post('/api/orders', async (request) => {
     const body = (request.body || {}) as { store?: unknown; orders?: unknown };
     if (!Array.isArray(body.orders)) throw new HttpError(400, 'orders must be a list.');
-    return db.saveOrders(storeParam(body.store), body.orders);
+    const result = db.saveOrders(storeParam(body.store), body.orders);
+    // New or changed orders may now match card charges.
+    try {
+      afterOrders();
+    } catch (err) {
+      console.error('Matching orders to charges failed:', err);
+    }
+    return result;
   });
 
   app.post('/api/sync/coverage', async (request) => {

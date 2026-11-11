@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Download, Search, Upload } from 'lucide-react';
 import { download, useApi } from '../api';
-import { BulkBar, TxRow } from '../bank';
+import { BulkBar, TxRow, txGrid } from '../bank';
 import { when } from '../bank';
 import type { Account, Transaction } from '../bank';
 import { PeriodFilter, useFilters } from '../filters';
@@ -22,8 +22,8 @@ export function useBankQuery() {
     if (from) out.set('from', from);
     if (to) out.set('to', to);
     for (const y of years || []) out.append('years', y);
-    for (const key of ['account', 'category']) for (const v of filters.values(key)) out.append(key, v);
-    for (const key of ['status', 'kind', 'direction', 'q', 'import', 'outcome']) if (filters.value(key)) out.set(key, filters.value(key));
+    for (const key of ['account', 'category', 'entity']) for (const v of filters.values(key)) out.append(key, v);
+    for (const key of ['status', 'kind', 'direction', 'q', 'import', 'outcome', 'unmatched']) if (filters.value(key)) out.set(key, filters.value(key));
     for (const [key, v] of Object.entries(extra)) out.set(key, String(v));
     return out.toString();
   };
@@ -41,6 +41,7 @@ export function Transactions({ meta }: { meta: Meta | null }) {
   const [search, setSearch] = useState(filters.value('q'));
   const [error, setError] = useState('');
   const categories = meta?.categories.map((c) => c.name) || [];
+  const entities = meta?.entities || [];
   const years = [...new Set((accounts.data?.accounts || []).flatMap((a) => (a.firstDate && a.lastDate ? range(+a.firstDate.slice(0, 4), +a.lastDate.slice(0, 4)) : [])))].sort().reverse();
 
   useEffect(() => {
@@ -95,6 +96,21 @@ export function Transactions({ meta }: { meta: Meta | null }) {
             <option value="none">Not decided</option>
           </Select>
         </Field>
+        {entities.length > 0 && (
+          <MultiSelect
+            label="Business or property"
+            allLabel="All"
+            options={[...entities.map((e): [string, string] => [String(e.id), e.name]), ['none', 'Not assigned']]}
+            selected={filters.values('entity')}
+            onChange={(next) => filters.set({ entity: next })}
+          />
+        )}
+        <Field label="Store orders">
+          <Select value={filters.value('unmatched')} onChange={(e) => filters.set({ unmatched: e.target.value })}>
+            <option value="">All transactions</option>
+            <option value="1">Store charges without an order</option>
+          </Select>
+        </Field>
         <Field label="Type">
           <Select value={filters.value('kind') || 'normal'} onChange={(e) => filters.set({ kind: e.target.value === 'normal' ? '' : e.target.value })}>
             <option value="normal">Spending and income</option>
@@ -128,12 +144,12 @@ export function Transactions({ meta }: { meta: Meta | null }) {
       )}
 
       <Card title={data ? plural(data.total, 'transaction') : 'Transactions'} padded={false}>
-        <BulkBar ids={selected} categories={categories} onDone={list.reload} />
+        <BulkBar ids={selected} categories={categories} entities={entities} onDone={list.reload} />
         {!data && list.loading && <Loading />}
         {data && !data.transactions.length && <Empty>No transactions match these filters.</Empty>}
         {data && data.transactions.length > 0 && (
           <>
-            <div className="hidden grid-cols-[auto_5.5rem_minmax(0,1fr)_13rem_9.5rem_8rem_7.5rem] gap-x-3 border-b border-slate-100 px-4 py-2 text-xs font-medium text-slate-600 md:grid dark:border-slate-800 dark:text-slate-400">
+            <div className={`hidden ${txGrid(entities.length > 0)} gap-x-3 border-b border-slate-100 px-4 py-2 text-xs font-medium text-slate-600 md:grid dark:border-slate-800 dark:text-slate-400`}>
               <input
                 type="checkbox"
                 aria-label="Select all on this page"
@@ -145,6 +161,7 @@ export function Transactions({ meta }: { meta: Meta | null }) {
               <SortButton label="Payee" column="payee" sort={sort} dir={dir} onSort={(c, d) => filters.set({ sort: c, dir: d })} />
               <SortButton label="Category" column="category" sort={sort} dir={dir} onSort={(c, d) => filters.set({ sort: c, dir: d })} />
               <span>Business or personal</span>
+              {entities.length > 0 && <span>Business or property</span>}
               <span>Type</span>
               <span className="text-right">
                 <SortButton label="Amount" column="amount" sort={sort} dir={dir} onSort={(c, d) => filters.set({ sort: c, dir: d })} />
@@ -156,6 +173,7 @@ export function Transactions({ meta }: { meta: Meta | null }) {
                   key={tx.id}
                   tx={tx}
                   categories={categories}
+                  entities={entities}
                   selected={selected.includes(tx.id)}
                   onSelect={(checked) => setSelected((s) => (checked ? [...s, tx.id] : s.filter((id) => id !== tx.id)))}
                   onChanged={list.reload}

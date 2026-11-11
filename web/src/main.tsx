@@ -42,8 +42,12 @@ function App() {
   // Filter choices and categories, shared by every page.
   const loadMeta = useCallback(async () => {
     try {
-      const [status, categories] = await Promise.all([get<any>('/api/status'), get<{ categories: Meta['categories']; forms: Forms }>('/api/categories')]);
-      setMeta({ stores: status.stores, payments: status.payments, zips: status.zips, places: status.places || [], years: status.years, categories: categories.categories });
+      const [status, categories, entities] = await Promise.all([
+        get<any>('/api/status'),
+        get<{ categories: Meta['categories']; forms: Forms }>('/api/categories'),
+        get<{ entities: Meta['entities'] }>('/api/entities'),
+      ]);
+      setMeta({ stores: status.stores, payments: status.payments, zips: status.zips, places: status.places || [], years: status.years, categories: categories.categories, entities: entities.entities });
       setForms(categories.forms);
     } catch (e) {
       setError((e as Error).message);
@@ -81,7 +85,7 @@ function App() {
         <Route path="/" element={<Dashboard meta={meta} />} />
         <Route path="/transactions" element={<Transactions meta={meta} />} />
         <Route path="/review" element={<Review meta={meta} />} />
-        <Route path="/accounts" element={<Accounts />} />
+        <Route path="/accounts" element={<Accounts meta={meta} />} />
         <Route path="/import" element={<Import />} />
         <Route path="/more" element={<More />} />
         <Route path="/receipts" element={<Receipts />} />
@@ -89,7 +93,7 @@ function App() {
         <Route path="/orders" element={<Orders meta={meta} />} />
         <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
         <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />
-        <Route path="/settings" element={<Settings user={auth.user} onUserChange={loadAuth} onSignedOut={() => setAuth({ loading: false, setupNeeded: false, user: null })} onMetaChange={loadMeta} />} />
+        <Route path="/settings" element={<Settings user={auth.user} meta={meta} onUserChange={loadAuth} onSignedOut={() => setAuth({ loading: false, setupNeeded: false, user: null })} onMetaChange={loadMeta} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
