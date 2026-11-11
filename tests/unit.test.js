@@ -434,6 +434,32 @@ test('walmart detail: item price, quantity, free delivery', () => {
   ]);
 });
 
+test("sam's club order page: split prices, fractional quantity, logo payment, no store address as delivery", () => {
+  const win = load(fixture('samsclub-detail'), 'https://www.samsclub.com/en/orders/1');
+  const patch = plain(win.OHE.stores.samsclub.extractDetail(win.document));
+  assert.deepEqual(patch.items, [
+    { name: 'Test Paper Towels 12 Rolls', quantity: 2, price: 10.5, lineTotal: 21 },
+    { name: 'Unleaded Fuel', quantity: 10.5, price: 3.12, lineTotal: 32.85 },
+  ]);
+  assert.equal(patch.payment, 'Discover ending 1234', 'a repeated section is not counted twice');
+  assert.equal(patch.date, '2025-10-12', 'the full date comes from the heading, not the greeting');
+  assert.equal(patch.total, 58.6);
+  assert.equal(patch.subtotal, 53.85);
+  assert.equal(patch.tax, 4.75);
+  assert.equal(patch.deliveryZip, undefined, 'a club address is not a delivery address');
+});
+
+test('thumbnail fallback leaves out barcodes and payment logos', () => {
+  const win = load(
+    `<!doctype html><body><main>
+      <img alt="barcode"><img alt="Mastercard"><img alt="Discover"><img alt="Cash"><img alt="Great Value Milk">
+      <div><h3>Order total</h3><p>$5.00</p></div></main></body>`,
+    'https://www.samsclub.com/orders/1'
+  );
+  const { items } = plain(win.OHE.stores.samsclub.extractDetail(win.document));
+  assert.deepEqual(items.map((i) => i.name), ['Great Value Milk']);
+});
+
 test("sam's club shares the walmart parser with its own origin", () => {
   const win = load(fixture('walmart-list'), 'https://www.samsclub.com/orders');
   const store = win.OHE.stores.samsclub;

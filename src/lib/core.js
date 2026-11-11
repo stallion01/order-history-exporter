@@ -104,6 +104,60 @@
     }
   };
 
+  /* ---------- What a repeat sync still needs to read ---------- */
+
+  // Stands in for "from the beginning" so unbounded ranges can be compared as text.
+  const EARLIEST = '0001-01-01';
+
+  function shiftDay(iso, days) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const date = new Date(0);
+    date.setUTCFullYear(y, m - 1, d + days); // unlike Date.UTC, this keeps years below 100
+    return date.toISOString().slice(0, 10);
+  }
+  OHE.shiftDay = shiftDay;
+
+  // Sorted, with overlapping or touching ranges joined.
+  OHE.mergeRanges = function mergeRanges(ranges) {
+    const sorted = ranges.map((r) => ({ from: r.from, to: r.to })).sort((a, b) => a.from.localeCompare(b.from));
+    const merged = [];
+    for (const range of sorted) {
+      const last = merged[merged.length - 1];
+      if (last && range.from <= shiftDay(last.to, 1)) {
+        if (range.to > last.to) last.to = range.to;
+      } else {
+        merged.push(range);
+      }
+    }
+    return merged;
+  };
+
+  // The parts of a requested range still worth reading, newest first: anything never
+  // fully read, plus a recent window, because recent orders change (delivered, returned).
+  // A null `from` in the result means "from the beginning".
+  OHE.planGaps = function planGaps(range, covered, today, recheckDays = 60) {
+    const from = range.from || EARLIEST;
+    const to = range.to && range.to < today ? range.to : today;
+    if (from > to) return [];
+    const gaps = [];
+    let cursor = from;
+    for (const part of OHE.mergeRanges(covered)) {
+      if (part.to < cursor) continue;
+      if (part.from > to) break;
+      if (part.from > cursor) gaps.push({ from: cursor, to: shiftDay(part.from, -1) });
+      cursor = shiftDay(part.to, 1);
+    }
+    if (cursor <= to) gaps.push({ from: cursor, to });
+    const recent = shiftDay(today, -recheckDays);
+    if (to >= recent) gaps.push({ from: recent > from ? recent : from, to });
+    return OHE.mergeRanges(gaps)
+      .reverse()
+      .map((g) => ({ from: g.from === EARLIEST ? null : g.from, to: g.to }));
+  };
+
+  // What the order list says about an order. If this changes, its details need re-reading.
+  OHE.listFingerprint = (order) => `${order.status || ''}|${order.total === undefined || order.total === null ? '' : order.total}`;
+
   /* ---------- Money ---------- */
 
   const CURRENCIES = { $: 'USD', '£': 'GBP', '€': 'EUR' };
@@ -151,6 +205,7 @@
     ['Order ID', (o) => o.orderId],
     ['Status', (o) => o.status],
     ['Item', (_o, i) => i && i.name],
+    ['Category', (_o, i) => i && i.category],
     ['Quantity', (_o, i) => i && i.quantity],
     ['Item Price', (_o, i) => i && i.price],
     ['Seller', (_o, i) => i && i.seller],

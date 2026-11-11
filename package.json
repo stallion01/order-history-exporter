@@ -4,9 +4,12 @@
   "private": true,
   "description": "Chrome extension that exports your purchase history from online stores to CSV.",
   "license": "GPL-3.0-or-later",
+  "engines": { "node": ">=22.13" },
   "scripts": {
-    "test": "node --test tests/unit.test.js",
-    "test:e2e": "node --test tests/e2e.test.js",
+    "server": "node --disable-warning=ExperimentalWarning server/index.js",
+    "server:network": "node --disable-warning=ExperimentalWarning server/index.js --network",
+    "test": "node --disable-warning=ExperimentalWarning --test tests/unit.test.js tests/server.test.js",
+    "test:e2e": "node --disable-warning=ExperimentalWarning --test tests/e2e.test.js",
     "icons": "node scripts/make-icons.js"
   },
   "devDependencies": {

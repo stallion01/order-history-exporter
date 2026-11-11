@@ -1,0 +1,727 @@
+// The order database: one SQLite file, using the SQLite built into Node.
+const fs = require('node:fs');
+const { DatabaseSync } = require('node:sqlite');
+
+const OHE = require('./core');
+const { CATEGORIES, UNCATEGORIZED, createClassifier, nameKey } = require('./categories');
+const tax = require('./tax');
+
+const RECHECK_DAYS = 60;
+const MAX_DETAIL_ATTEMPTS = 3;
+const SCHEMA_VERSION = 2;
+
+const SCHEMA_V1 = `
+  CREATE TABLE orders (
+    store TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    store_name TEXT,
+    order_date TEXT,
+    status TEXT,
+    subtotal REAL,
+    tax REAL,
+    shipping REAL,
+    total REAL,
+    currency TEXT,
+    payment TEXT,
+    delivery_address TEXT,
+    delivery_zip TEXT,
+    url TEXT,
+    detail_url TEXT,
+    list_fingerprint TEXT,
+    detail_fetched_at TEXT,
+    detail_attempts INTEGER NOT NULL DEFAULT 0,
+    first_seen_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (store, order_id)
+  );
+  CREATE INDEX orders_date ON orders (order_date);
+
+  CREATE TABLE items (
+    id INTEGER PRIMARY KEY,
+    store TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    name TEXT,
+    quantity REAL,
+    price REAL,
+    seller TEXT,
+    url TEXT,
+    FOREIGN KEY (store, order_id) REFERENCES orders (store, order_id) ON DELETE CASCADE
+  );
+  CREATE INDEX items_order ON items (store, order_id);
+
+  CREATE TABLE sync_coverage (
+    store TEXT NOT NULL,
+    from_date TEXT NOT NULL,
+    to_date TEXT NOT NULL,
+    PRIMARY KEY (store, from_date)
+  );
+
+  CREATE TABLE sync_runs (
+    id INTEGER PRIMARY KEY,
+    store TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    range_from TEXT,
+    range_to TEXT,
+    new_orders INTEGER NOT NULL DEFAULT 0,
+    updated_orders INTEGER NOT NULL DEFAULT 0,
+    details_read INTEGER NOT NULL DEFAULT 0,
+    details_missed INTEGER NOT NULL DEFAULT 0,
+    complete INTEGER NOT NULL DEFAULT 0
+  );
+`;
+
+// Corrections and marks are keyed by item name, because item rows are replaced
+// whenever an order's details are re-read.
+const SCHEMA_V2 = `
+  ALTER TABLE items ADD COLUMN line_total REAL;
+
+  CREATE TABLE categories (
+    name TEXT PRIMARY KEY,
+    schedule_c TEXT,
+    schedule_e TEXT,
+    position INTEGER NOT NULL
+  );
+
+  CREATE TABLE category_overrides (
+    name_key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL
+  );
+
+  CREATE TABLE item_marks (
+    store TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    name_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    PRIMARY KEY (store, order_id, name_key)
+  );
+
+  CREATE TABLE tax_rules (
+    id INTEGER PRIMARY KEY,
+    field TEXT NOT NULL,
+    value TEXT NOT NULL,
+    status TEXT NOT NULL,
+    UNIQUE (field, value)
+  );
+`;
+
+// Whitelisted so request data can never choose a column name.
+const ORDER_COLUMNS = {
+  storeName: 'store_name',
+  date: 'order_date',
+  status: 'status',
+  subtotal: 'subtotal',
+  tax: 'tax',
+  shipping: 'shipping',
+  total: 'total',
+  currency: 'currency',
+  payment: 'payment',
+  deliveryAddress: 'delivery_address',
+  deliveryZip: 'delivery_zip',
+  url: 'url',
+  detailUrl: 'detail_url',
+};
+const ORDER_SORTS = {
+  date: 'o.order_date',
+  store: 'COALESCE(o.store_name, o.store)',
+  zip: 'o.delivery_zip',
+  payment: 'o.payment',
+  total: 'o.total',
+};
+const ITEM_SORTS = {
+  date: (i) => i.date,
+  store: (i) => i.storeName,
+  item: (i) => i.name,
+  category: (i) => i.category,
+  zip: (i) => i.deliveryZip,
+  payment: (i) => i.payment,
+  amount: (i) => i.amount,
+  status: (i) => i.status,
+};
+const NO_ZIP = 'none';
+
+const present = (value) => value !== undefined && value !== null && value !== '';
+const now = () => new Date().toISOString();
+
+// Coverage stores "from the beginning" as this date, since a key can't be null.
+const EARLIEST = '0001-01-01';
+
+function compareValues(a, b, direction) {
+  const aMissing = a === null || a === undefined || a === '';
+  const bMissing = b === null || b === undefined || b === '';
+  if (aMissing || bMissing) return aMissing === bMissing ? 0 : aMissing ? 1 : -1; // blanks always last
+  const order = typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b), undefined, { numeric: true });
+  return direction === 'desc' ? -order : order;
+}
+
+function migrate(db, file) {
+  const version = db.prepare('PRAGMA user_version').get().user_version;
+  if (version > SCHEMA_VERSION) {
+    throw new Error(`This database was made by a newer version of the server (schema ${version}).`);
+  }
+  if (version === SCHEMA_VERSION) return;
+
+  // A safety copy before an existing database is changed.
+  if (version > 0 && file !== ':memory:') {
+    const backup = `${file}.before-v${SCHEMA_VERSION}.bak`;
+    if (!fs.existsSync(backup)) db.prepare('VACUUM INTO ?').run(backup);
+  }
+
+  db.exec('BEGIN');
+  try {
+    if (version < 1) db.exec(SCHEMA_V1);
+    if (version < 2) {
+      db.exec(SCHEMA_V2);
+      const insert = db.prepare('INSERT INTO categories (name, schedule_c, schedule_e, position) VALUES (?, ?, ?, ?)');
+      CATEGORIES.forEach(([name, c, e], index) => insert.run(name, c, e, index));
+      // Earlier versions missed these stores' item prices, so their details are read again.
+      db.exec(`UPDATE orders SET detail_fetched_at = NULL, detail_attempts = 0
+               WHERE store IN ('samsclub', 'walmart') AND NOT EXISTS (
+                 SELECT 1 FROM items i WHERE i.store = orders.store AND i.order_id = orders.order_id AND i.price IS NOT NULL
+               )`);
+    }
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+function openDatabase(file) {
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  migrate(db, file);
+
+  function transaction(fn) {
+    db.exec('BEGIN');
+    try {
+      const result = fn();
+      db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  const getOrder = db.prepare('SELECT * FROM orders WHERE store = ? AND order_id = ?');
+  const countItems = db.prepare('SELECT COUNT(*) AS n FROM items WHERE store = ? AND order_id = ?');
+  const deleteItems = db.prepare('DELETE FROM items WHERE store = ? AND order_id = ?');
+  const insertItem = db.prepare(
+    'INSERT INTO items (store, order_id, position, name, quantity, price, line_total, seller, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+
+  function writeItems(store, orderId, items) {
+    deleteItems.run(store, orderId);
+    items.forEach((item, index) => {
+      insertItem.run(
+        store,
+        orderId,
+        index,
+        item.name ?? null,
+        typeof item.quantity === 'number' ? item.quantity : null,
+        typeof item.price === 'number' ? item.price : null,
+        typeof item.lineTotal === 'number' ? item.lineTotal : null,
+        item.seller ?? null,
+        item.url ?? null
+      );
+    });
+  }
+
+  // Adds or updates orders. A value is only ever replaced by another value, so a
+  // later partial read can't blank out something already known.
+  // order.fromList: this came from an order list page.
+  // order.detailRead / order.detailFailed: the outcome of reading its details page.
+  function saveOrders(store, orders) {
+    return transaction(() => {
+      const counts = { inserted: 0, updated: 0 };
+      for (const order of orders) {
+        if (!present(order.orderId)) continue;
+        const orderId = String(order.orderId);
+        const existing = getOrder.get(store, orderId);
+        // A details page is the better source. Once it's been read, a list page saying
+        // the same as last time adds nothing, and its figures may be less exact.
+        if (
+          order.fromList &&
+          existing &&
+          existing.detail_fetched_at &&
+          existing.list_fingerprint === OHE.listFingerprint(order)
+        ) {
+          continue;
+        }
+        const stamp = now();
+        const columns = {};
+        for (const [key, column] of Object.entries(ORDER_COLUMNS)) {
+          if (present(order[key])) columns[column] = order[key];
+        }
+        if (order.fromList) columns.list_fingerprint = OHE.listFingerprint(order);
+        if (order.detailRead) columns.detail_fetched_at = stamp;
+        if (order.detailFailed) columns.detail_attempts = (existing ? existing.detail_attempts : 0) + 1;
+
+        if (existing) {
+          const bookkeeping = ['detail_fetched_at', 'detail_attempts'];
+          const changed = Object.keys(columns).some((name) => !bookkeeping.includes(name) && existing[name] !== columns[name]);
+          columns.updated_at = changed ? stamp : existing.updated_at;
+          const assignments = Object.keys(columns).map((name) => `${name} = ?`).join(', ');
+          db.prepare(`UPDATE orders SET ${assignments} WHERE store = ? AND order_id = ?`).run(
+            ...Object.values(columns),
+            store,
+            orderId
+          );
+          if (changed) counts.updated++;
+        } else {
+          columns.first_seen_at = stamp;
+          columns.updated_at = stamp;
+          const names = Object.keys(columns);
+          db.prepare(
+            `INSERT INTO orders (store, order_id, ${names.join(', ')}) VALUES (?, ?, ${names.map(() => '?').join(', ')})`
+          ).run(store, orderId, ...Object.values(columns));
+          counts.inserted++;
+        }
+
+        // List pages often give thinner item rows than a details page, so they only
+        // replace items when they add something.
+        const items = order.items || [];
+        if (items.length) {
+          const known = countItems.get(store, orderId).n;
+          const detailed = existing && existing.detail_fetched_at;
+          if (order.detailRead || !known || (!detailed && items.length >= known) || items.length > known) {
+            writeItems(store, orderId, items);
+          }
+        }
+      }
+      return counts;
+    });
+  }
+
+  function coverage(store) {
+    return db
+      .prepare('SELECT from_date AS "from", to_date AS "to" FROM sync_coverage WHERE store = ? ORDER BY from_date')
+      .all(store)
+      .map((r) => ({ from: r.from, to: r.to }));
+  }
+
+  function addCoverage(store, ranges) {
+    const merged = OHE.mergeRanges([
+      ...coverage(store),
+      ...ranges.map((r) => ({ from: r.from || EARLIEST, to: r.to })),
+    ]);
+    transaction(() => {
+      db.prepare('DELETE FROM sync_coverage WHERE store = ?').run(store);
+      const insert = db.prepare('INSERT INTO sync_coverage (store, from_date, to_date) VALUES (?, ?, ?)');
+      for (const range of merged) insert.run(store, range.from, range.to);
+    });
+    return merged;
+  }
+
+  // What a sync run should read for this store and date range.
+  function syncPlan(store, range, { full = false, today = OHE.localToday() } = {}) {
+    const bounded = { from: range.from || null, to: range.to || null };
+    const gaps = full
+      ? [{ from: bounded.from, to: bounded.to && bounded.to < today ? bounded.to : today }]
+      : OHE.planGaps(bounded, coverage(store), today, RECHECK_DAYS);
+
+    const known = {};
+    if (!full) {
+      const rows = db
+        .prepare('SELECT order_id, list_fingerprint, detail_fetched_at FROM orders WHERE store = ?')
+        .all(store);
+      for (const row of rows) known[row.order_id] = { fingerprint: row.list_fingerprint, detailDone: Boolean(row.detail_fetched_at) };
+    }
+
+    // Orders in range whose details were never read, and haven't failed too often.
+    const rows = db
+      .prepare(
+        `SELECT order_id, detail_url, order_date FROM orders
+         WHERE store = ? AND detail_url IS NOT NULL AND detail_attempts < ?
+           AND ${full ? '1 = 1' : 'detail_fetched_at IS NULL'}
+         ORDER BY order_date DESC`
+      )
+      .all(store, MAX_DETAIL_ATTEMPTS);
+    const pendingDetails = rows
+      .filter((row) => OHE.inRange(row.order_date, bounded) || !row.order_date)
+      .map((row) => ({ orderId: row.order_id, detailUrl: row.detail_url, date: row.order_date, store }));
+
+    return { gaps, known, pendingDetails };
+  }
+
+  function recordRun(store, run) {
+    db.prepare(
+      `INSERT INTO sync_runs (store, finished_at, range_from, range_to, new_orders, updated_orders, details_read, details_missed, complete)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      store,
+      now(),
+      run.from ?? null,
+      run.to ?? null,
+      run.newOrders || 0,
+      run.updatedOrders || 0,
+      run.detailsRead || 0,
+      run.detailsMissed || 0,
+      run.complete ? 1 : 0
+    );
+  }
+
+  /* ---------- Categories and tax settings ---------- */
+
+  let classifier = null;
+  function classify(name, store) {
+    if (!classifier) {
+      classifier = createClassifier(db.prepare('SELECT name, category FROM category_overrides').all());
+    }
+    return classifier(name, store);
+  }
+
+  function categoryList() {
+    return db
+      .prepare('SELECT name, schedule_c, schedule_e FROM categories ORDER BY position')
+      .all()
+      .map((row) => ({ name: row.name, scheduleC: row.schedule_c, scheduleE: row.schedule_e }));
+  }
+
+  // Sets a category for every item with this name, and teaches similar names.
+  function setItemCategory(name, category) {
+    const key = nameKey(name);
+    if (!key) return;
+    if (category) {
+      db.prepare(
+        'INSERT INTO category_overrides (name_key, name, category) VALUES (?, ?, ?) ON CONFLICT (name_key) DO UPDATE SET category = excluded.category'
+      ).run(key, name, category);
+    } else {
+      db.prepare('DELETE FROM category_overrides WHERE name_key = ?').run(key);
+    }
+    classifier = null;
+  }
+
+  function saveCategory({ name, scheduleC, scheduleE }) {
+    const position = db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS next FROM categories').get().next;
+    db.prepare(
+      `INSERT INTO categories (name, schedule_c, schedule_e, position) VALUES (?, ?, ?, ?)
+       ON CONFLICT (name) DO UPDATE SET schedule_c = excluded.schedule_c, schedule_e = excluded.schedule_e`
+    ).run(name, scheduleC ?? null, scheduleE ?? null, position);
+  }
+
+  const taxRules = () => db.prepare('SELECT id, field, value, status FROM tax_rules ORDER BY field, value').all().map((row) => ({ ...row }));
+
+  function saveTaxRule({ field, value, status }) {
+    db.prepare(
+      'INSERT INTO tax_rules (field, value, status) VALUES (?, ?, ?) ON CONFLICT (field, value) DO UPDATE SET status = excluded.status'
+    ).run(field, value, status);
+  }
+  const deleteTaxRule = (id) => db.prepare('DELETE FROM tax_rules WHERE id = ?').run(id);
+
+  function markItems(items, status) {
+    transaction(() => {
+      const remove = db.prepare('DELETE FROM item_marks WHERE store = ? AND order_id = ? AND name_key = ?');
+      const insert = db.prepare(
+        `INSERT INTO item_marks (store, order_id, name_key, status) VALUES (?, ?, ?, ?)
+         ON CONFLICT (store, order_id, name_key) DO UPDATE SET status = excluded.status`
+      );
+      for (const item of items) {
+        const key = nameKey(item.name);
+        if (status) insert.run(item.store, item.orderId, key, status);
+        else remove.run(item.store, item.orderId, key);
+      }
+    });
+  }
+
+  /* ---------- Reading orders and items ---------- */
+
+  // Shared WHERE clause, built only from fixed text and bound parameters.
+  function whereFor(filters = {}) {
+    const clauses = [];
+    const params = [];
+    if (filters.from) {
+      clauses.push('o.order_date >= ?');
+      params.push(filters.from);
+    }
+    if (filters.to) {
+      clauses.push('o.order_date <= ?');
+      params.push(filters.to);
+    }
+    if (filters.store) {
+      clauses.push('o.store = ?');
+      params.push(filters.store);
+    }
+    if (filters.payment) {
+      clauses.push('o.payment = ?');
+      params.push(filters.payment);
+    }
+    if (filters.zip === NO_ZIP) {
+      clauses.push('o.delivery_zip IS NULL');
+    } else if (filters.zip) {
+      clauses.push('o.delivery_zip = ?');
+      params.push(filters.zip);
+    }
+    if (filters.q) {
+      const like = `%${String(filters.q).replace(/[\\%_]/g, '\\$&')}%`;
+      clauses.push(
+        `(o.order_id LIKE ? ESCAPE '\\' OR EXISTS (
+           SELECT 1 FROM items i WHERE i.store = o.store AND i.order_id = o.order_id AND i.name LIKE ? ESCAPE '\\'
+         ))`
+      );
+      params.push(like, like);
+    }
+    return { sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params };
+  }
+
+  function allItemsByOrder() {
+    const byOrder = new Map();
+    for (const row of db.prepare('SELECT * FROM items ORDER BY store, order_id, position').all()) {
+      const key = `${row.store}\u0000${row.order_id}`;
+      if (!byOrder.has(key)) byOrder.set(key, []);
+      byOrder.get(key).push(row);
+    }
+    return byOrder;
+  }
+
+  function allMarks() {
+    const marks = new Map();
+    for (const row of db.prepare('SELECT * FROM item_marks').all()) {
+      marks.set(`${row.store}\u0000${row.order_id}\u0000${row.name_key}`, row.status);
+    }
+    return marks;
+  }
+
+  // Every item matching the filters, with its category, share of the order's
+  // total, and business or personal status. Worked out on each read, so an improved
+  // rule or a new correction applies to everything straight away.
+  function enrichedItems(filters = {}) {
+    const { sql, params } = whereFor(filters);
+    const orders = db.prepare(`SELECT o.* FROM orders o ${sql}`).all(...params);
+    const byOrder = allItemsByOrder();
+    const marks = allMarks();
+    const rules = taxRules();
+    const lookup = new Map(categoryList().map((c) => [c.name, c]));
+    const search = filters.q ? String(filters.q).toLowerCase() : null;
+    const out = [];
+    for (const order of orders) {
+      const rows = byOrder.get(`${order.store}\u0000${order.order_id}`) || [];
+      const shares = tax.allocate(order, rows);
+      const orderMatchesSearch = search && order.order_id.toLowerCase().includes(search);
+      rows.forEach((row, index) => {
+        if (search && !orderMatchesSearch && !String(row.name || '').toLowerCase().includes(search)) return;
+        const { category, source } = classify(row.name, order.store);
+        const item = {
+          store: order.store,
+          storeName: order.store_name || order.store,
+          orderId: order.order_id,
+          date: order.order_date,
+          name: row.name,
+          quantity: row.quantity,
+          price: row.price,
+          amount: shares[index].amount,
+          estimated: shares[index].estimated,
+          category,
+          categorySource: source,
+          deliveryZip: order.delivery_zip,
+          deliveryAddress: order.delivery_address,
+          payment: order.payment,
+          url: row.url,
+          orderUrl: order.url,
+          scheduleC: lookup.get(category) ? lookup.get(category).scheduleC : null,
+          scheduleE: lookup.get(category) ? lookup.get(category).scheduleE : null,
+        };
+        const mark = marks.get(`${order.store}\u0000${order.order_id}\u0000${nameKey(row.name)}`);
+        const resolved = tax.resolveStatus(item, mark, rules);
+        item.status = resolved.status;
+        item.statusSource = resolved.source;
+        if (filters.category && item.category !== filters.category) return;
+        if (filters.status && item.status !== filters.status) return;
+        out.push(item);
+      });
+    }
+    return out;
+  }
+
+  function listItems(filters, { sort = 'date', direction = 'desc', limit, offset = 0 } = {}) {
+    const items = enrichedItems(filters);
+    const get = ITEM_SORTS[sort] || ITEM_SORTS.date;
+    items.sort((a, b) => compareValues(get(a), get(b), direction) || compareValues(a.date, b.date, 'desc') || String(a.orderId).localeCompare(String(b.orderId)));
+    const amount = items.reduce((sum, item) => sum + (typeof item.amount === 'number' ? item.amount : 0), 0);
+    return { total: items.length, amount: tax.cents(amount), items: limit ? items.slice(offset, offset + limit) : items };
+  }
+
+  function bump(map, label, spend, orderKey) {
+    const entry = map.get(label) || { label, spend: 0, orderKeys: new Set() };
+    entry.spend += spend;
+    entry.orderKeys.add(orderKey);
+    map.set(label, entry);
+  }
+  const finish = (map) =>
+    [...map.values()]
+      .map(({ label, spend, orderKeys }) => ({ label, spend: tax.cents(spend), orders: orderKeys.size }))
+      .sort((a, b) => b.spend - a.spend);
+
+  function report(filters = {}) {
+    const { sql, params } = whereFor(filters);
+    const orders = db.prepare(`SELECT o.* FROM orders o ${sql}`).all(...params);
+    const items = enrichedItems(filters);
+    const itemsByOrder = new Map();
+    for (const item of items) {
+      const key = `${item.store}\u0000${item.orderId}`;
+      if (!itemsByOrder.has(key)) itemsByOrder.set(key, []);
+      itemsByOrder.get(key).push(item);
+    }
+
+    const totals = { orders: 0, spend: 0, tax: 0, shipping: 0, withoutTotal: 0, withoutDetails: 0, undated: 0, items: 0 };
+    const months = new Map();
+    const stores = new Map();
+    const payments = new Map();
+    const zips = new Map();
+    for (const order of orders) {
+      const key = `${order.store}\u0000${order.order_id}`;
+      const own = itemsByOrder.get(key) || [];
+      // With a category chosen, only that category's share of each order counts.
+      if (filters.category && !own.length) continue;
+      const value = filters.category ? own.reduce((sum, item) => sum + (item.amount || 0), 0) : order.total || 0;
+      totals.orders++;
+      totals.spend += value;
+      if (!filters.category) {
+        totals.tax += order.tax || 0;
+        totals.shipping += order.shipping || 0;
+      }
+      if (order.total === null) totals.withoutTotal++;
+      if (!order.detail_fetched_at) totals.withoutDetails++;
+      if (!order.order_date) totals.undated++;
+      if (order.order_date) bump(months, order.order_date.slice(0, 7), value, key);
+      bump(stores, order.store_name || order.store, value, key);
+      bump(payments, order.payment || 'Not recorded', value, key);
+      if (order.delivery_zip) bump(zips, order.delivery_zip, value, key);
+    }
+    const counted = totals.orders - totals.withoutTotal;
+    totals.spend = tax.cents(totals.spend);
+    totals.tax = filters.category ? null : tax.cents(totals.tax);
+    totals.shipping = filters.category ? null : tax.cents(totals.shipping);
+    totals.average = counted > 0 ? tax.cents(totals.spend / counted) : null;
+    totals.items = items.reduce((sum, item) => sum + (typeof item.quantity === 'number' ? item.quantity : 1), 0);
+
+    const categories = new Map();
+    const products = new Map();
+    let estimatedItems = 0;
+    for (const item of items) {
+      bump(categories, item.category, item.amount || 0, `${item.store}\u0000${item.orderId}`);
+      if (item.estimated) estimatedItems++;
+      if (!item.name) continue;
+      const product = products.get(item.name) || { label: item.name, orderKeys: new Set(), quantity: 0, lastBought: null };
+      product.orderKeys.add(`${item.store}\u0000${item.orderId}`);
+      product.quantity += typeof item.quantity === 'number' ? item.quantity : 1;
+      if (item.date && (!product.lastBought || item.date > product.lastBought)) product.lastBought = item.date;
+      products.set(item.name, product);
+    }
+    const topItems = [...products.values()]
+      .map(({ label, orderKeys, quantity, lastBought }) => ({ label, orders: orderKeys.size, quantity, lastBought }))
+      .sort((a, b) => b.orders - a.orders || b.quantity - a.quantity || String(b.lastBought).localeCompare(String(a.lastBought)))
+      .slice(0, 10);
+
+    return {
+      totals: { ...totals, estimatedItems },
+      byMonth: finish(months).sort((a, b) => a.label.localeCompare(b.label)),
+      byStore: finish(stores),
+      byPayment: finish(payments),
+      byZip: finish(zips).slice(0, 15),
+      byCategory: finish(categories),
+      topItems,
+    };
+  }
+
+  function listOrders(filters = {}, { sort = 'date', direction = 'desc', limit, offset = 0 } = {}) {
+    const { sql, params } = whereFor(filters);
+    const column = ORDER_SORTS[sort] || ORDER_SORTS.date;
+    const order = direction === 'asc' ? 'ASC' : 'DESC';
+    let rows = db
+      .prepare(`SELECT o.* FROM orders o ${sql} ORDER BY ${column} IS NULL, ${column} ${order}, o.order_date DESC, o.store, o.order_id`)
+      .all(...params);
+    if (filters.category) {
+      const matching = new Set(enrichedItems(filters).map((item) => `${item.store}\u0000${item.orderId}`));
+      rows = rows.filter((row) => matching.has(`${row.store}\u0000${row.order_id}`));
+    }
+    const total = rows.length;
+    const page = limit ? rows.slice(offset, offset + limit) : rows;
+    const byOrder = allItemsByOrder();
+    return {
+      total,
+      orders: page.map((row) => ({
+        store: row.store,
+        storeName: row.store_name,
+        orderId: row.order_id,
+        date: row.order_date,
+        status: row.status,
+        subtotal: row.subtotal,
+        tax: row.tax,
+        shipping: row.shipping,
+        total: row.total,
+        currency: row.currency,
+        payment: row.payment,
+        deliveryAddress: row.delivery_address,
+        deliveryZip: row.delivery_zip,
+        url: row.url,
+        detailRead: Boolean(row.detail_fetched_at),
+        items: (byOrder.get(`${row.store}\u0000${row.order_id}`) || []).map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price,
+          seller: item.seller,
+          url: item.url,
+          category: classify(item.name, row.store).category,
+        })),
+      })),
+    };
+  }
+
+  function taxReport(formId, filters) {
+    const key = formId === 'schedule-e' ? 'scheduleE' : 'scheduleC';
+    const lookup = new Map(categoryList().map((c) => [c.name, c[key]]));
+    return tax.buildReport(formId, enrichedItems(filters), (category) => lookup.get(category));
+  }
+
+  // The choices shown in the report filters, and each store's sync state.
+  function status() {
+    const stores = db
+      .prepare(
+        `SELECT store, COALESCE(MAX(store_name), store) AS name, COUNT(*) AS orders,
+                MIN(order_date) AS earliest, MAX(order_date) AS latest,
+                SUM(CASE WHEN detail_fetched_at IS NULL AND detail_url IS NOT NULL AND detail_attempts < ${MAX_DETAIL_ATTEMPTS} THEN 1 ELSE 0 END) AS missingDetails
+         FROM orders GROUP BY store ORDER BY name`
+      )
+      .all()
+      .map((row) => ({
+        ...row,
+        coverage: coverage(row.store).map((c) => ({ from: c.from === EARLIEST ? null : c.from, to: c.to })),
+        lastRun: { ...(db.prepare('SELECT * FROM sync_runs WHERE store = ? ORDER BY id DESC LIMIT 1').get(row.store) || {}) },
+      }));
+    const column = (sql, name) => db.prepare(sql).all().map((row) => row[name]);
+    return {
+      stores,
+      payments: column('SELECT DISTINCT payment FROM orders WHERE payment IS NOT NULL ORDER BY payment', 'payment'),
+      zips: column('SELECT DISTINCT delivery_zip FROM orders WHERE delivery_zip IS NOT NULL ORDER BY delivery_zip', 'delivery_zip'),
+      years: column("SELECT DISTINCT substr(order_date, 1, 4) AS year FROM orders WHERE order_date IS NOT NULL ORDER BY year DESC", 'year'),
+    };
+  }
+
+  return {
+    saveOrders,
+    addCoverage,
+    coverage,
+    syncPlan,
+    recordRun,
+    report,
+    listOrders,
+    listItems,
+    enrichedItems,
+    status,
+    categoryList,
+    setItemCategory,
+    saveCategory,
+    taxRules,
+    saveTaxRule,
+    deleteTaxRule,
+    markItems,
+    taxReport,
+    close: () => db.close(),
+  };
+}
+
+module.exports = { openDatabase, SCHEMA_V1, UNCATEGORIZED };

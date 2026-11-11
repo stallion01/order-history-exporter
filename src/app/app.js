@@ -69,24 +69,71 @@
       layout: $('layout').value,
       split: $('split').value,
       details: $('details').checked,
+      destination: $('destination').value,
+      full: $('full').checked,
     };
   }
 
+  /* ---------- Database connection ---------- */
+
+  const DATABASE_KEY = 'database';
+  const DEFAULT_SERVER = 'http://127.0.0.1:8787';
+
+  const databaseSettings = () => ({ url: $('db-url').value.trim() || DEFAULT_SERVER, token: $('db-token').value.trim() });
+
+  function syncDestinationFields() {
+    const toDatabase = $('destination').value === 'database';
+    $('database-fields').hidden = !toDatabase;
+    $('csv-fields').hidden = toDatabase;
+  }
+  $('destination').addEventListener('change', syncDestinationFields);
+
+  // Local servers are allowed by the manifest. Any other address needs the user's
+  // permission for that one site, which Chrome only asks for right after a click.
+  function serverOrigin(url) {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error('The server address must start with http:// or https://.');
+    return `${parsed.protocol}//${parsed.hostname}/*`;
+  }
+
+  $('db-test').addEventListener('click', async () => {
+    const settings = databaseSettings();
+    $('db-result').textContent = 'Checking…';
+    try {
+      const origins = [serverOrigin(settings.url)];
+      if (!(await chrome.permissions.contains({ origins })) && !(await chrome.permissions.request({ origins }))) {
+        throw new Error('Chrome needs your permission to reach that address.');
+      }
+      await OHE.databaseClient(settings).health();
+      await chrome.storage.local.set({ [DATABASE_KEY]: settings });
+      $('db-result').textContent = 'Connected.';
+    } catch (err) {
+      $('db-result').textContent = err.message;
+    }
+  });
+
   async function restoreSettings() {
     try {
-      const saved = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
-      if (!saved) return;
-      document.querySelectorAll('input[name="store"]').forEach((box) => {
-        box.checked = saved.storeIds.includes(box.value);
-      });
-      for (const key of ['preset', 'year', 'from', 'to', 'layout', 'split']) {
-        if (saved[key] !== undefined) $(key).value = saved[key];
+      const stored = await chrome.storage.local.get([SETTINGS_KEY, DATABASE_KEY]);
+      const saved = stored[SETTINGS_KEY];
+      if (stored[DATABASE_KEY]) {
+        $('db-url').value = stored[DATABASE_KEY].url || '';
+        $('db-token').value = stored[DATABASE_KEY].token || '';
       }
-      $('details').checked = saved.details;
+      if (saved) {
+        document.querySelectorAll('input[name="store"]').forEach((box) => {
+          box.checked = saved.storeIds.includes(box.value);
+        });
+        for (const key of ['preset', 'year', 'from', 'to', 'layout', 'split', 'destination']) {
+          if (saved[key] !== undefined) $(key).value = saved[key];
+        }
+        $('details').checked = saved.details;
+      }
     } catch (_e) {
       // Defaults are fine if settings can't be read.
     }
     syncDateFields();
+    syncDestinationFields();
   }
 
   function validate(choice) {
@@ -94,6 +141,9 @@
     if (choice.preset === 'custom') {
       if (!choice.from && !choice.to) return 'Enter a start date, an end date, or both.';
       if (choice.from && choice.to && choice.from > choice.to) return 'The start date is after the end date.';
+    }
+    if (choice.destination === 'database' && !databaseSettings().token) {
+      return 'Enter the access token shown when the database server starts, or choose CSV file only.';
     }
     return null;
   }
@@ -149,6 +199,16 @@
     return ` reading order lists: ${orders} so far`;
   }
 
+  function describeSync(p) {
+    const changes = `${p.newOrders} new, ${p.updatedOrders} updated`;
+    if (p.phase === 'details') return ` reading order details: ${p.detailsRead + p.detailsMissed} of ${p.detailsTotal} (${changes})`;
+    if (p.phase === 'done') {
+      const nothing = !p.newOrders && !p.updatedOrders && !p.detailsRead;
+      return nothing ? ' already up to date' : ` finished: ${changes}, ${p.detailsRead} order details read`;
+    }
+    return ` reading order lists: ${changes}`;
+  }
+
   function saveFile(content, filename, type) {
     const url = URL.createObjectURL(new Blob([content], { type }));
     const link = document.createElement('a');
@@ -190,6 +250,10 @@
     const rows = new Map(chosen.map((store) => [store.id, progressRow(store)]));
     const failures = [];
     let undated = 0;
+    const toDatabase = choice.destination === 'database';
+    const client = toDatabase ? OHE.databaseClient(databaseSettings()) : null;
+    if (client) await client.health(); // fail now, before any store pages open
+    const synced = { newOrders: 0, updatedOrders: 0, detailsRead: 0, detailsMissed: 0, incomplete: [] };
 
     // A separate real window, so pages render normally and you can sign in if asked.
     const win = await chrome.windows.create({ url: 'about:blank', width: 1100, height: 800, focused: false });
@@ -206,6 +270,29 @@
       if (run.stopped) break;
       const row = rows.get(store.id);
       try {
+        if (client) {
+          const result = await OHE.syncStore(
+            store,
+            tabId,
+            client,
+            { range, full: choice.full, details: choice.details, today, isStopped: () => run.stopped },
+            {
+              onProgress: (p) => {
+                row.detail.textContent = describeSync(p);
+              },
+              onBlocked: (status) => askUser(store, status),
+              onUnparsed: (snapshot) => showParseWarning(row, store, snapshot),
+            }
+          );
+          for (const key of ['newOrders', 'updatedOrders', 'detailsRead', 'detailsMissed']) synced[key] += result[key];
+          if (!result.complete) synced.incomplete.push(store.name);
+          if (result.skipped) row.detail.textContent = ' skipped; anything read so far is saved';
+          if (result.detailsMissed) {
+            row.warning.hidden = false;
+            row.warning.textContent = `Couldn't read details for ${result.detailsMissed} order(s). The next run will try them again.`;
+          }
+          continue;
+        }
         const result = await OHE.crawlStore(
           store,
           tabId,
@@ -240,10 +327,30 @@
     run = null;
     $('start').disabled = false;
     $('stop').hidden = true;
-    showResults({ stopped, undated, failures });
+    if (client) showSyncResults({ client, synced, stopped, failures });
+    else showResults({ stopped, undated, failures });
+  }
+
+  function showSyncResults({ client, synced, stopped, failures }) {
+    const count = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    $('results').hidden = false;
+    $('results-title').textContent = `${count(synced.newOrders, 'new order')}, ${synced.updatedOrders} updated`;
+    const notes = [`${count(synced.detailsRead, 'order detail')} read.`];
+    if (stopped) notes.push('The run was stopped early. What it read is saved, and the next run picks up the rest.');
+    if (failures.length) notes.push(`${failures.join(', ')} ended with an error. The next run will try again.`);
+    else if (synced.incomplete.length && !stopped) notes.push(`${synced.incomplete.join(', ')} didn't finish, so the next run will read the rest.`);
+    $('results-note').textContent = notes.join(' ');
+    $('download').hidden = true;
+    $('preview-wrap').hidden = true;
+    $('preview-note').textContent = '';
+    $('open-reports').hidden = false;
+    $('open-reports').href = `${client.base}/#token=${encodeURIComponent(databaseSettings().token)}`;
   }
 
   function showResults({ stopped, undated, failures }) {
+    $('download').hidden = false;
+    $('preview-wrap').hidden = false;
+    $('open-reports').hidden = true;
     const count = collected.length;
     const itemCount = collected.reduce((sum, o) => sum + o.items.length, 0);
     $('results').hidden = false;
@@ -320,12 +427,22 @@
       const missing = await storesMissingAccess(choice.storeIds);
       if (missing.length) {
         problem = `Chrome hasn't given this extension access to ${missing.join(' and ')}. Go to chrome://extensions, click the reload arrow on Order History Exporter, then reopen this page.`;
+      } else if (choice.destination === 'database') {
+        try {
+          const origins = [serverOrigin(databaseSettings().url)];
+          if (!(await chrome.permissions.contains({ origins }))) {
+            problem = 'This extension needs permission to reach the database server. Press Test connection. If this is the local server, reload the extension at chrome://extensions first.';
+          }
+        } catch (err) {
+          problem = err.message;
+        }
       }
     }
     $('form-error').hidden = !problem;
     $('form-error').textContent = problem || '';
     if (problem) return;
-    chrome.storage.local.set({ [SETTINGS_KEY]: choice }).catch(() => {});
+    // "Re-read everything" is deliberately not remembered, so it can't stay on by accident.
+    chrome.storage.local.set({ [SETTINGS_KEY]: { ...choice, full: false }, [DATABASE_KEY]: databaseSettings() }).catch(() => {});
     startExport(choice).catch((err) => {
       $('start').disabled = false;
       $('stop').hidden = true;
@@ -339,5 +456,6 @@
   });
 
   syncDateFields();
+  syncDestinationFields();
   await restoreSettings();
 })();

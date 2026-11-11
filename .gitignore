@@ -3,3 +3,8 @@ test-results/
 *.csv
 *-diagnostic.html
 e2e-results.png
+server/data/
+*.db
+*.db-wal
+*.db-shm
+*.bak

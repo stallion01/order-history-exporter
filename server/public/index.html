@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Order Reports</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Order Reports</h1>
+      <p id="freshness" class="muted"></p>
+    </header>
+
+    <form id="signin" hidden>
+      <label>Access token <input type="password" id="token" autocomplete="off" spellcheck="false" required></label>
+      <button type="submit" class="primary">Open reports</button>
+      <p class="muted">It's shown in the window where the server is running.</p>
+      <p id="signin-error" class="error" role="alert" hidden></p>
+    </form>
+
+    <div id="content" hidden>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" id="tab-overview" aria-controls="view-overview" aria-selected="true">Overview</button>
+        <button type="button" role="tab" id="tab-items" aria-controls="view-items" aria-selected="false">Items</button>
+        <button type="button" role="tab" id="tab-tax" aria-controls="view-tax" aria-selected="false">Tax groups</button>
+      </div>
+
+      <form id="filters" class="filters">
+        <label>Period
+          <select id="preset">
+            <option value="all">All time</option>
+            <option value="this-year">This year</option>
+            <option value="last-year">Last year</option>
+            <option value="last-90">Last 90 days</option>
+            <option value="custom">Custom dates</option>
+          </select>
+        </label>
+        <label id="from-field" hidden>From <input type="date" id="from"></label>
+        <label id="to-field" hidden>To <input type="date" id="to"></label>
+        <label>Store <select id="store"><option value="">All stores</option></select></label>
+        <label>Category <select id="category"><option value="">All categories</option></select></label>
+        <label>Delivery ZIP <select id="zip"><option value="">All ZIPs</option></select></label>
+        <label>Payment <select id="payment"><option value="">All payment methods</option></select></label>
+        <label class="grow">Search <input type="search" id="q" placeholder="Item name or order number"></label>
+      </form>
+
+      <p id="error" class="error" role="alert" hidden></p>
+
+      <div id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
+        <section class="tiles" aria-label="Summary">
+          <div class="tile"><span class="tile-label">Total spent</span><strong id="t-spend"></strong></div>
+          <div class="tile"><span class="tile-label">Orders</span><strong id="t-orders"></strong></div>
+          <div class="tile"><span class="tile-label">Average order</span><strong id="t-average"></strong></div>
+          <div class="tile"><span class="tile-label">Tax paid</span><strong id="t-tax"></strong></div>
+        </section>
+        <p id="caveats" class="muted"></p>
+
+        <section class="panel">
+          <h2>Spending by month</h2>
+          <div id="months" class="month-chart"></div>
+          <div id="tooltip" class="tooltip" hidden></div>
+        </section>
+
+        <div class="grid">
+          <section class="panel"><h2>By category</h2><div id="by-category"></div></section>
+          <section class="panel"><h2>By store</h2><div id="by-store"></div></section>
+          <section class="panel"><h2>By payment method</h2><div id="by-payment"></div></section>
+          <section class="panel"><h2>By delivery ZIP</h2><div id="by-zip"></div></section>
+          <section class="panel wide">
+            <h2>Most-bought items</h2>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Item</th><th class="num">Orders</th><th class="num">Quantity</th><th>Last bought</th></tr></thead>
+                <tbody id="top-items"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2 id="orders-title">Orders</h2>
+            <div class="actions">
+              <button type="button" id="csv-items">Download CSV: one row per item</button>
+              <button type="button" id="csv-orders">Download CSV: one row per order</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead id="orders-head"></thead>
+              <tbody id="orders"></tbody>
+            </table>
+          </div>
+          <div class="actions pager">
+            <button type="button" id="prev">Previous</button>
+            <span id="page-note" class="muted"></span>
+            <button type="button" id="next">Next</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Sync status</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Store</th><th class="num">Orders</th><th>Fully read</th><th class="num">Details still missing</th><th>Last sync</th></tr></thead>
+              <tbody id="sync"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div id="view-items" role="tabpanel" aria-labelledby="tab-items" hidden>
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 id="items-title">Items</h2>
+              <p class="muted small">Changing a category updates every item with that name, and teaches similar names. Amounts include each item's share of tax and shipping.</p>
+            </div>
+            <button type="button" id="csv-item-list">Download CSV</button>
+          </div>
+          <div class="actions spaced">
+            <label class="inline">Status
+              <select id="status-filter">
+                <option value="">Any</option>
+                <option value="unreviewed">Not reviewed</option>
+                <option value="business">Business</option>
+                <option value="personal">Personal</option>
+              </select>
+            </label>
+            <button type="button" id="mark-business">Mark all matching as business</button>
+            <button type="button" id="mark-personal">Mark all matching as personal</button>
+            <span id="mark-note" class="muted" role="status"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead id="items-head"></thead>
+              <tbody id="items"></tbody>
+            </table>
+          </div>
+          <div class="actions pager">
+            <button type="button" id="items-prev">Previous</button>
+            <span id="items-page-note" class="muted"></span>
+            <button type="button" id="items-next">Next</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="view-tax" role="tabpanel" aria-labelledby="tab-tax" hidden>
+        <p class="notice">This groups purchases to help you or your tax preparer. It isn't tax advice, and it can't tell whether a purchase is deductible. Only items marked business are counted. Check the line numbers against the current year's form.</p>
+
+        <div class="filters">
+          <label>Tax year <select id="tax-year"></select></label>
+          <label>Form
+            <select id="tax-form">
+              <option value="schedule-c">Schedule C (business)</option>
+              <option value="schedule-e">Schedule E (rental property)</option>
+            </select>
+          </label>
+          <label>Delivery ZIP <select id="tax-zip"><option value="">All ZIPs</option></select></label>
+        </div>
+
+        <section class="tiles" aria-label="Tax summary">
+          <div class="tile"><span class="tile-label">Business</span><strong id="tax-business"></strong></div>
+          <div class="tile"><span class="tile-label">Not reviewed</span><strong id="tax-unreviewed"></strong></div>
+          <div class="tile"><span class="tile-label">Personal</span><strong id="tax-personal"></strong></div>
+        </section>
+        <p id="tax-caveats" class="muted"></p>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2 id="tax-title">Expense lines</h2>
+            <div class="actions">
+              <button type="button" id="tax-csv-summary">Download summary CSV</button>
+              <button type="button" id="tax-csv-items">Download itemized CSV</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Line</th><th>Description</th><th class="num">Amount</th><th class="num">Items</th><th>Note</th></tr></thead>
+              <tbody id="tax-lines"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" id="tax-review-panel" hidden>
+          <h2>Large items to review</h2>
+          <p id="tax-review-note" class="muted small"></p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>Item</th><th>Category</th><th class="num">Amount</th></tr></thead>
+              <tbody id="tax-review"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="grid">
+          <section class="panel">
+            <h2>Business and personal rules</h2>
+            <p class="muted small">For example, everything delivered to a rental property's ZIP, or everything on a business card. An item you mark yourself always wins, and a personal rule beats a business one.</p>
+            <form id="rule-form" class="filters">
+              <label>When
+                <select id="rule-field">
+                  <option value="zip">Delivery ZIP is</option>
+                  <option value="payment">Payment method is</option>
+                  <option value="store">Store is</option>
+                  <option value="category">Category is</option>
+                </select>
+              </label>
+              <label>Value <select id="rule-value"></select></label>
+              <label>Treat as
+                <select id="rule-status">
+                  <option value="business">Business</option>
+                  <option value="personal">Personal</option>
+                </select>
+              </label>
+              <button type="submit">Add rule</button>
+            </form>
+            <ul id="rules" class="rules"></ul>
+          </section>
+
+          <section class="panel">
+            <h2>Category to form line</h2>
+            <p class="muted small">These are suggestions. Change any of them to match how your preparer files.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Category</th><th id="mapping-head">Line</th></tr></thead>
+                <tbody id="mapping"></tbody>
+              </table>
+            </div>
+            <form id="category-form" class="filters spaced">
+              <label class="grow">New category <input type="text" id="new-category" maxlength="60"></label>
+              <button type="submit">Add category</button>
+            </form>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -9,6 +9,8 @@
   const ANY_DATE = new RegExp(OHE.DATE_SRC, 'i');
   const STATUS = /\b(Delivered|Picked up|Canceled|Cancelled|Returned|Refunded|Shipped|Arrives|Preparing|Purchased)\b[^$]{0,40}/i;
   const ID_DIGITS = /(\d{10,})/;
+  // Pictures on order pages that aren't purchases: receipt barcodes and payment logos.
+  const NOT_A_PRODUCT = /logo|icon|walmart|sam's club|barcode|^(visa|master\s?card|discover|amex|american express|cash|paypal|gift card|debit|credit)( card)?$/i;
   const VERIFY_PATH = /\/(verify|verification|otp|mfa|2fa|step-?up)\b|\/account\/[^?]*(verif|challenge)/i;
   const VERIFY_TEXT =
     /verify (it's|its|that it's) you|confirm (it's|its) you|verification code|(enter|send|resend)( me)?( the| a| your)? code|code (to|by|via) (your )?(phone|email|text)/i;
@@ -30,7 +32,53 @@
       // In-store purchases have much longer ids and use a separate view.
       `${origin}/orders/${orderId}${orderId.length >= 20 ? '?storePurchase=true' : ''}`;
 
+    // Order pages mark each item with test ids. In-store items have no product link,
+    // so this is the only place their prices appear.
+    function readItemStacks(root) {
+      return [...root.querySelectorAll('[data-testid="itemtile-stack"]')]
+        .map((stack) => {
+          const image = stack.querySelector('img[alt]');
+          const name = text(stack.querySelector('[data-testid="productName"]')) || (image && image.getAttribute('alt')) || '';
+          if (!name) return null;
+          const link = stack.querySelector('a[href]');
+          const href = link ? link.getAttribute('href') : '';
+          const quantity = text(stack).match(/\bQty:?\s*([\d.]+)/i);
+          const unit = OHE.parseMoney(text(stack.querySelector('[data-testid="productDescription"]')));
+          // The line price is split into separate pieces: "$", "12", "34".
+          const lineEl = stack.querySelector('[data-testid="line-price"]');
+          const parts = lineEl ? [...lineEl.querySelectorAll('span')].filter((s) => !s.children.length && /\d/.test(text(s))).map(text) : [];
+          const lineTotal = parts.length === 2 ? Number(`${parts[0].replace(/,/g, '')}.${parts[1]}`) : (OHE.parseMoney(text(lineEl)) || {}).amount;
+          const item = { name };
+          if (href) item.url = absolute(href, origin);
+          if (quantity) item.quantity = Number(quantity[1]);
+          if (unit) item.price = unit.amount;
+          if (Number.isFinite(lineTotal)) item.lineTotal = lineTotal;
+          return item;
+        })
+        .filter(Boolean);
+    }
+
+    // "*1234" beside a card logo whose alt text is the brand. It can appear twice,
+    // because the section is repeated for different screen sizes.
+    function readCardPayments(root) {
+      const found = new Set();
+      for (const el of root.querySelectorAll('span, div')) {
+        if (el.children.length) continue;
+        const digits = text(el).match(/^\*(\d{4})$/);
+        if (!digits) continue;
+        let node = el;
+        let logo = null;
+        for (let up = 0; up < 4 && node && !logo; up++, node = node.parentElement) logo = node.querySelector('img[alt]');
+        const alt = logo ? logo.getAttribute('alt').trim() : '';
+        const brand = /^[A-Za-z][A-Za-z '-]{1,30}$/.test(alt) ? alt : 'Card';
+        found.add(`${brand} ending ${digits[1]}`);
+      }
+      return found.size ? [...found].join('; ') : undefined;
+    }
+
     function readItems(root, withPrices) {
+      const stacks = readItemStacks(root);
+      if (stacks.length) return stacks;
       const links = [...root.querySelectorAll(itemLink)];
       const items = new Map();
       for (const link of links) {
@@ -55,7 +103,7 @@
       // Order cards often show only thumbnails, whose alt text is the product name.
       return [...root.querySelectorAll('img[alt]')]
         .map((img) => img.getAttribute('alt').trim())
-        .filter((alt) => alt.length > 3 && !/logo|icon|walmart|sam's club/i.test(alt))
+        .filter((alt) => alt.length > 3 && !NOT_A_PRODUCT.test(alt))
         .map((alt) => ({ name: alt }));
     }
 
@@ -128,7 +176,16 @@
 
       extractDetail(doc) {
         const main = doc.querySelector('main') || doc.body;
-        return { ...summary(main), ...OHE.dom.deliveryAddress(main), payment: payment(main), items: readItems(main, true) };
+        // List pages can leave out the year, so the full date here corrects them.
+        const heading = [...main.querySelectorAll('h1')].map(text).find((t) => /\b\d{4}\b/.test(t));
+        const date = heading ? OHE.parseDate(heading) : null;
+        return {
+          ...summary(main),
+          ...OHE.dom.deliveryAddress(main),
+          ...(date ? { date } : {}),
+          payment: readCardPayments(main) || payment(main),
+          items: readItems(main, true),
+        };
       },
     };
   };

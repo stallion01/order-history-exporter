@@ -18,6 +18,9 @@
     "https://www.ebay.com/*",
     "https://order.ebay.com/*",
     "https://secure.newegg.com/*",
-    "https://www.homedepot.com/*"
-  ]
+    "https://www.homedepot.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"]
 }

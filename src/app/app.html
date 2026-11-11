@@ -40,6 +40,32 @@
       </fieldset>
 
       <fieldset>
+        <legend>Save to</legend>
+        <div class="row">
+          <label>Destination
+            <select id="destination">
+              <option value="database">Database (only new and missing orders)</option>
+              <option value="csv">CSV file only (reads everything in the period)</option>
+            </select>
+          </label>
+        </div>
+        <div id="database-fields">
+          <div class="row">
+            <label class="grow">Server address <input type="url" id="db-url" placeholder="http://127.0.0.1:8787" spellcheck="false" autocomplete="off"></label>
+            <label class="grow">Access token <input type="password" id="db-token" spellcheck="false" autocomplete="off"></label>
+          </div>
+          <div class="actions spaced">
+            <button type="button" id="db-test">Test connection</button>
+            <span id="db-result" class="muted" role="status"></span>
+          </div>
+          <label class="check">
+            <input type="checkbox" id="full">
+            <span>Re-read everything in this period <span class="muted">(only needed if a store's parser was improved)</span></span>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset id="csv-fields">
         <legend>CSV file</legend>
         <div class="row">
           <label>Rows
@@ -55,7 +81,11 @@
             </select>
           </label>
         </div>
-        <label class="check">
+      </fieldset>
+
+      <fieldset>
+        <legend>Detail</legend>
+        <label class="check first">
           <input type="checkbox" id="details" checked>
           <span>Open each order for item prices, tax, shipping, payment method and delivery address <span class="muted">(slower: about 3 seconds per order)</span></span>
         </label>
@@ -86,8 +116,9 @@
       <p id="results-note" class="muted"></p>
       <div class="actions">
         <button type="button" id="download" class="primary">Download CSV</button>
+        <a id="open-reports" class="button primary" target="_blank" rel="noopener" hidden>Open reports</a>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap" id="preview-wrap">
         <table>
           <thead><tr><th>Date</th><th>Store</th><th>Order</th><th>Items</th><th>Payment</th><th class="num">Total</th></tr></thead>
           <tbody id="preview"></tbody>
@@ -99,6 +130,7 @@
   <script src="../lib/core.js"></script>
   <script src="../stores/index.js"></script>
   <script src="../lib/crawler.js"></script>
+  <script src="../lib/database.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

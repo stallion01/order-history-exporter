@@ -4,8 +4,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { openDatabase } = require('../server/db');
+const { createApp } = require('../server/app');
 
 const ROOT = path.join(__dirname, '..');
 const fixture = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -26,13 +29,367 @@ async function launch() {
   return { context, page };
 }
 
-async function chooseStores(page, wanted) {
+async function chooseStores(page, wanted, destination = 'csv') {
+  await page.selectOption('#destination', destination);
   for (const box of await page.locator('input[name="store"]').all()) {
     await box.setChecked(wanted.includes(await box.getAttribute('value')));
   }
 }
 
-test('exports two stores for a date range and downloads a correct CSV', { timeout: 180000 }, async () => {
+const TOKEN = 'e2e-token';
+
+async function startDatabase() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ohe-e2e-'));
+  const db = openDatabase(path.join(dir, 'orders.db'));
+  const placeholder = createApp({ db, token: TOKEN, allowedHosts: [] });
+  await new Promise((resolve) => placeholder.listen(0, '127.0.0.1', resolve));
+  const { port } = placeholder.address();
+  const real = createApp({ db, token: TOKEN, allowedHosts: [`127.0.0.1:${port}`] });
+  placeholder.removeAllListeners('request');
+  placeholder.on('request', (req, res) => real.emit('request', req, res));
+  return {
+    db,
+    url: `http://127.0.0.1:${port}`,
+    stop() {
+      placeholder.close();
+      placeholder.closeAllConnections();
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function connect(page, server) {
+  await page.fill('#db-url', server.url);
+  await page.fill('#db-token', TOKEN);
+  await page.click('#db-test');
+  await page.waitForFunction(() => document.getElementById('db-result').textContent === 'Connected.');
+}
+
+async function runExport(page) {
+  await page.click('#start');
+  await page.waitForFunction(() => document.getElementById('start').disabled, { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(
+    () => !document.getElementById('start').disabled && !document.getElementById('results').hidden,
+    { timeout: 120000 }
+  );
+  return page.textContent('#results-title');
+}
+
+const listPage = (orders) => `<!doctype html><title>Your Orders</title><body>${orders
+  .map(
+    (o) => `<div class="order-card"><ul>
+      <li><span>Order placed</span> <div>${o.date}</div></li>
+      <li><span>Total</span> <div>${o.total}</div></li></ul>
+      <div class="yohtmlc-order-id">Order # <span>${o.id}</span></div>
+      <span class="delivery-box__primary-text">${o.status || 'Delivered'}</span>
+      <div class="yohtmlc-product-title"><a href="/dp/${o.asin}">Item ${o.id}</a></div></div>`
+  )
+  .join('')}</body>`;
+const orderIdOf = (url) => new URL(url).searchParams.get('orderID');
+
+test('a second sync of an old period reads nothing again, except details still missing', { timeout: 240000 }, async () => {
+  const server = await startDatabase();
+  const { context, page } = await launch();
+  const visits = { lists: 0, details: [] };
+  let detailWorks = false;
+  try {
+    await context.route('https://www.amazon.com/**', (route) => {
+      const url = route.request().url();
+      if (url.includes('order-details')) {
+        const id = orderIdOf(url);
+        visits.details.push(id);
+        // One order's details fail the first time, to leave something missing.
+        if (id.startsWith('333') && !detailWorks) return route.fulfill(html('<!doctype html><body>Unavailable</body>'));
+        return route.fulfill(html(fixture('amazon-detail.html')));
+      }
+      if (route.request().resourceType() === 'document') visits.lists++;
+      return route.fulfill(html(fixture(url.includes('startIndex') ? 'amazon-list-2.html' : 'amazon-list.html')));
+    });
+    await chooseStores(page, ['amazon'], 'database');
+    await connect(page, server);
+    await page.selectOption('#preset', 'custom');
+    await page.fill('#from', '2024-01-01');
+    await page.fill('#to', '2024-12-31');
+
+    assert.match(await runExport(page), /^3 new orders/);
+    assert.equal(visits.lists, 2);
+    assert.equal(visits.details.length, 3);
+    assert.equal(server.db.listOrders({}).total, 3);
+    assert.equal(server.db.syncPlan('amazon', { from: '2024-01-01', to: '2024-12-31' }).pendingDetails.length, 1);
+
+    // Second run: the period is fully read, so only the one failed order is opened.
+    visits.lists = 0;
+    visits.details = [];
+    detailWorks = true;
+    assert.match(await runExport(page), /^0 new orders/);
+    assert.equal(visits.lists, 0, 'order lists are not read again');
+    assert.deepEqual(visits.details, ['333-3333333-3333333']);
+    assert.equal(server.db.syncPlan('amazon', { from: '2024-01-01', to: '2024-12-31' }).pendingDetails.length, 0);
+
+    // Third run: nothing at all left to do, so no store page is opened.
+    visits.details = [];
+    assert.match(await runExport(page), /^0 new orders/);
+    assert.equal(visits.lists, 0);
+    assert.deepEqual(visits.details, []);
+    assert.match(await page.textContent('#progress-list'), /already up to date/);
+    assert.equal(await page.getAttribute('#open-reports', 'href'), `${server.url}/#token=${TOKEN}`);
+
+    // A wider period reads only the part never read.
+    await page.fill('#from', '2023-01-01');
+    visits.lists = 0;
+    await runExport(page);
+    assert.ok(visits.lists >= 1, 'the unread year is listed');
+    const covered = server.db.coverage('amazon');
+    assert.equal(covered.length, 1);
+    assert.equal(covered[0].from, '2023-01-01');
+  } finally {
+    await context.close();
+    server.stop();
+  }
+});
+
+test('a repeat sync of a recent period adds new orders and re-reads changed ones only', { timeout: 180000 }, async () => {
+  const server = await startDatabase();
+  const { context, page } = await launch();
+  const today = new Date();
+  const longDate = today.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const first = { id: '111-0000000-0000001', date: longDate, total: '$10.00', asin: 'B000000011', status: 'Shipped' };
+  const second = { id: '111-0000000-0000002', date: longDate, total: '$20.00', asin: 'B000000012' };
+  let shown = [first];
+  let details = [];
+  try {
+    await context.route('https://www.amazon.com/**', (route) => {
+      const url = route.request().url();
+      if (url.includes('order-details')) {
+        details.push(orderIdOf(url));
+        return route.fulfill(html('<!doctype html><body><div id="orderDetails"><p>Grand Total:</p><p>$10.00</p></div></body>'));
+      }
+      return route.fulfill(html(listPage(shown)));
+    });
+    await chooseStores(page, ['amazon'], 'database');
+    await connect(page, server);
+    await page.selectOption('#preset', 'this-year');
+
+    assert.match(await runExport(page), /^1 new order,/);
+    assert.deepEqual(details, [first.id]);
+
+    // A new order appears: only it is opened.
+    details = [];
+    shown = [second, first];
+    assert.match(await runExport(page), /^1 new order,/);
+    assert.deepEqual(details, [second.id]);
+    assert.equal(server.db.listOrders({}).total, 2);
+
+    // Nothing changed: the recent list is re-checked, but no order is opened.
+    details = [];
+    assert.match(await runExport(page), /^0 new orders, 0 updated/);
+    assert.deepEqual(details, []);
+
+    // The first order's status changes: it is updated and re-read.
+    details = [];
+    shown = [second, { ...first, status: 'Delivered' }];
+    assert.match(await runExport(page), /^0 new orders, 1 updated/);
+    assert.deepEqual(details, [first.id]);
+    assert.equal(server.db.listOrders({ q: first.id }).orders[0].status, 'Delivered');
+  } finally {
+    await context.close();
+    server.stop();
+  }
+});
+
+test('stopping early keeps what was read, and marks the period as not finished', { timeout: 120000 }, async () => {
+  const server = await startDatabase();
+  const { context, page } = await launch();
+  try {
+    await context.route('https://www.amazon.com/**', (route) => route.fulfill(html(fixture('amazon-list.html'))));
+    await chooseStores(page, ['amazon'], 'database');
+    await connect(page, server);
+    await page.selectOption('#preset', 'custom');
+    await page.fill('#from', '2024-01-01');
+    await page.fill('#to', '2024-12-31');
+    await page.click('#start');
+    await page.waitForFunction(() => /[1-9]\d* new/.test(document.getElementById('progress-list').textContent), { timeout: 30000 });
+    await page.click('#stop');
+    await page.waitForSelector('#results:not([hidden])', { timeout: 30000 });
+    assert.match(await page.textContent('#results-note'), /stopped early/);
+    assert.equal(server.db.listOrders({}).total, 2);
+    assert.deepEqual(server.db.coverage('amazon'), []);
+  } finally {
+    await context.close();
+    server.stop();
+  }
+});
+
+test('a wrong token or stopped server is reported before any store page opens', { timeout: 60000 }, async () => {
+  const server = await startDatabase();
+  const { context, page } = await launch();
+  try {
+    await chooseStores(page, ['amazon'], 'database');
+    await page.selectOption('#preset', 'last-30');
+    await page.click('#start');
+    await page.waitForSelector('#form-error:not([hidden])');
+    assert.match(await page.textContent('#form-error'), /access token/);
+
+    await page.fill('#db-url', server.url);
+    await page.fill('#db-token', 'wrong');
+    await page.click('#start');
+    await page.waitForFunction(() => /token/.test(document.getElementById('form-error').textContent) && !document.getElementById('start').disabled);
+    assert.match(await page.textContent('#form-error'), /couldn't start.*token/i);
+    assert.equal(context.pages().length, 2, 'no export window opened');
+  } finally {
+    await context.close();
+    server.stop();
+  }
+});
+
+test('the reports page shows the database, filters it, and downloads CSV', { timeout: 120000 }, async () => {
+  const server = await startDatabase();
+  const stores = [['amazon', 'Amazon'], ['walmart', 'Walmart'], ['homedepot', 'Home Depot'], ['newegg', 'Newegg']];
+  const payments = ['Visa ending 1111', 'Mastercard ending 2222', 'PayPal'];
+  const names = ['Stainless Steel Kettle', 'USB-C Cable 6 ft', 'Paint Roller Set', 'Graphics Card 16GB', '=Tricky <b>Name</b>'];
+  for (let i = 0; i < 90; i++) {
+    const [store, storeName] = stores[i % stores.length];
+    const month = String((i % 12) + 1).padStart(2, '0');
+    server.db.saveOrders(store, [
+      {
+        orderId: `T-${i}`,
+        storeName,
+        date: `${2025 + (i % 2)}-${month}-${String((i % 27) + 1).padStart(2, '0')}`,
+        total: i % 17 === 0 ? -25 : 20 + ((i * 37) % 400),
+        tax: 2 + (i % 9),
+        payment: payments[i % payments.length],
+        deliveryZip: i % 5 === 0 ? '02134' : '72712',
+        status: 'Delivered',
+        url: 'https://example.com/order',
+        detailRead: i % 10 !== 0,
+        items: [{ name: names[i % names.length], quantity: 1 + (i % 3) }],
+      },
+    ]);
+  }
+  server.db.addCoverage('amazon', [{ from: null, to: '2026-11-01' }]);
+  server.db.recordRun('amazon', { newOrders: 1, complete: true });
+
+  const browser = await chromium.launch({ channel: 'chromium' });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 1100 }, acceptDownloads: true, colorScheme: 'light' });
+  const page = await context.newPage();
+  const problems = [];
+  page.on('pageerror', (err) => problems.push(err.message));
+  page.on('console', (msg) => msg.type() === 'error' && problems.push(msg.text()));
+  try {
+    // A wrong token is refused, with a way to enter the right one.
+    await page.goto(`${server.url}/#token=wrong`);
+    await page.waitForSelector('#signin:not([hidden])');
+    assert.match(await page.textContent('#signin-error'), /not accepted/);
+    assert.equal(new URL(page.url()).hash, '', 'token removed from the address bar');
+    problems.length = 0; // the refused request itself logs a console error
+
+    await page.fill('#token', TOKEN);
+    await page.click('#signin button');
+    await page.waitForSelector('#content:not([hidden])');
+    await page.waitForFunction(() => document.getElementById('t-orders').textContent === '90');
+    assert.match(await page.textContent('#orders-title'), /90/);
+    assert.equal(await page.locator('#orders tr').count(), 50);
+    assert.equal(await page.locator('#months svg .column').count() > 12, true);
+
+    // Page text from a store is shown as text, never run as HTML.
+    assert.equal(await page.locator('#orders b').count(), 0);
+    assert.match(await page.textContent('#orders'), /<b>Name<\/b>/);
+
+    await page.screenshot({ path: path.join(process.env.E2E_SHOTS || ROOT, 'reports-light.png'), fullPage: true });
+
+    await page.selectOption('#store', 'walmart');
+    await page.waitForFunction(() => document.getElementById('orders-title').textContent.includes('(23)') || document.getElementById('orders-title').textContent.includes('(22)'));
+    await page.selectOption('#store', '');
+    await page.fill('#q', 'kettle');
+    await page.waitForFunction(() => document.getElementById('orders-title').textContent.includes('(18)'));
+
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#csv-items')]);
+    assert.equal(download.suggestedFilename(), 'orders_all-time_items.csv');
+    const csv = fs.readFileSync(await download.path(), 'utf8');
+    assert.equal(csv.trim().split('\r\n').length, 19, 'header plus the 18 filtered orders');
+    assert.ok(csv.includes('Stainless Steel Kettle'));
+    assert.ok(!csv.includes('Graphics Card'));
+
+    // The token persists for the next visit.
+    await page.reload();
+    await page.waitForSelector('#content:not([hidden])');
+    await page.waitForFunction(() => document.getElementById('t-orders').textContent === '90');
+
+    // Orders sort by delivery ZIP.
+    await page.click('#orders-head button:has-text("Delivery ZIP")');
+    await page.waitForFunction(() => document.querySelector('#orders tr td:nth-child(5)').textContent === '02134');
+    assert.equal(await page.getAttribute('#orders-head th:nth-child(5)', 'aria-sort'), 'ascending');
+    await page.selectOption('#category', 'Office Supplies');
+    await page.waitForFunction(() => document.getElementById('orders-title').textContent.includes('(0)'));
+    await page.selectOption('#category', '');
+    await page.selectOption('#zip', '02134');
+    await page.waitForFunction(() => document.getElementById('orders-title').textContent.includes('(18)'));
+    await page.selectOption('#zip', '');
+    assert.match(await page.textContent('#by-category'), /Kitchen & Dining/);
+
+    // Items tab: sort by category, correct one, and see it apply to the same name.
+    await page.click('#tab-items');
+    await page.waitForSelector('#items tr select');
+    await page.click('#items-head button:has-text("Category")');
+    await page.waitForFunction(() => document.querySelector('#items-head th[aria-sort="ascending"]'));
+    await page.fill('#q', 'kettle');
+    await page.waitForFunction(() => document.getElementById('items-title').textContent.startsWith('Items (18'));
+    await page.locator('#items tr select').first().selectOption('Office Supplies');
+    await page.waitForFunction(() => [...document.querySelectorAll('#items tr')].every((tr) => tr.querySelector('select').value === 'Office Supplies'));
+    await page.fill('#q', '');
+
+    // Marking everything that matches asks first.
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.selectOption('#zip', '02134');
+    await page.waitForFunction(() => document.getElementById('items-title').textContent.startsWith('Items (18'));
+    await page.click('#mark-business');
+    await page.waitForFunction(() => /18 item/.test(document.getElementById('mark-note').textContent));
+    await page.selectOption('#zip', '');
+    await page.waitForFunction(() => !document.getElementById('items-title').textContent.startsWith('Items (18'));
+    await page.screenshot({ path: path.join(process.env.E2E_SHOTS || ROOT, 'reports-items.png'), fullPage: false });
+
+    // Tax tab: a rule, then form lines and a download.
+    await page.click('#tab-tax');
+    await page.waitForFunction(() => document.getElementById('tax-business').textContent !== '');
+    await page.selectOption('#tax-year', '');
+    await page.selectOption('#rule-field', 'payment');
+    await page.selectOption('#rule-value', 'PayPal');
+    await page.click('#rule-form button');
+    await page.waitForFunction(() => /PayPal: Business/.test(document.getElementById('rules').textContent));
+    await page.waitForFunction(() => document.querySelectorAll('#tax-lines tr').length > 1);
+    assert.match(await page.textContent('#tax-title'), /Schedule C/);
+    assert.match(await page.textContent('#tax-lines'), /Supplies|Office expense/);
+    assert.match(await page.textContent('#tax-caveats'), /aren't marked business or personal/);
+    await page.screenshot({ path: path.join(process.env.E2E_SHOTS || ROOT, 'reports-tax.png'), fullPage: true });
+    const [taxDownload] = await Promise.all([page.waitForEvent('download'), page.click('#tax-csv-summary')]);
+    assert.equal(taxDownload.suggestedFilename(), 'schedule-c_all-years_summary.csv');
+    assert.match(fs.readFileSync(await taxDownload.path(), 'utf8'), /Schedule C,18,Office expense/);
+    await page.selectOption('#tax-form', 'schedule-e');
+    await page.waitForFunction(() => /Schedule E/.test(document.getElementById('tax-title').textContent));
+    assert.match(await page.textContent('#mapping-head'), /Schedule E/);
+    await page.click('#tab-overview');
+    await page.waitForFunction(() => !document.getElementById('view-overview').hidden);
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.fill('#q', '');
+    await page.waitForFunction(() => document.getElementById('t-orders').textContent === '90');
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(overflow <= 0, `page scrolls sideways on a phone by ${overflow}px`);
+    await page.waitForFunction(() => {
+      const chart = document.querySelector('#months svg');
+      return chart && chart.getBoundingClientRect().width <= 400;
+    });
+    await page.screenshot({ path: path.join(process.env.E2E_SHOTS || ROOT, 'reports-dark-phone.png'), fullPage: true });
+    assert.deepEqual(problems, []);
+  } finally {
+    await browser.close();
+    server.stop();
+  }
+});
+
+test('exports two stores for a date range and downloads a correct CSV',{ timeout: 180000 }, async () => {
   const { context, page } = await launch();
   const visited = [];
   try {
