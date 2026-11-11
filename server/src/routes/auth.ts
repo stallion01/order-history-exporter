@@ -55,7 +55,8 @@ export function authRoutes(app: FastifyInstance, store: AuthStore, tokens: Token
     if (store.hasUsers()) throw new HttpError(409, 'An owner account already exists. Sign in instead.');
     const key = `setup:${request.ip}`;
     if (throttle.blocked(key)) throw new HttpError(429, 'Too many attempts. Try again in 15 minutes.');
-    if (!sameSecret(body.setupCode.trim(), tokens.get())) {
+    // Copying from a terminal can bring line breaks or spaces with it; the token has none.
+    if (!sameSecret(body.setupCode.replace(/\s+/g, ''), tokens.get())) {
       throttle.fail(key);
       throw new HttpError(403, "That setup code isn't right. It's the access token shown when the server starts.");
     }

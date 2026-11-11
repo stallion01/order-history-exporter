@@ -53,10 +53,10 @@ export function Setup({ onDone }: { onDone: (user: SignedInUser) => void }) {
       <form onSubmit={submit} className="space-y-4">
         {error && <Banner>{error}</Banner>}
         <Field label="Setup code">
-          <Input value={form.setupCode} onChange={update('setupCode')} autoComplete="off" spellCheck={false} required aria-describedby="setup-help" />
+          <Input value={form.setupCode} onChange={update('setupCode')} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} required aria-describedby="setup-help" />
         </Field>
         <p id="setup-help" className="-mt-2 text-xs text-slate-500">
-          The access token shown when the server starts.
+          The access token. On Proxmox, show it with: pct exec &lt;container id&gt; -- cat /var/lib/expense-hub/token
         </p>
         <Field label="Username">
           <Input value={form.username} onChange={update('username')} autoComplete="username" required />

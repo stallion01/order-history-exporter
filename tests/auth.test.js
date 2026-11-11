@@ -83,7 +83,7 @@ test('first-run setup needs the setup code, and happens only once', async () => 
     assert.deepEqual((await s.request('/api/auth/state')).body, { setupNeeded: true, user: null });
     assert.equal((await s.request('/api/auth/setup', { setupCode: 'guess', username: 'me', password: PASSWORD })).status, 403);
     assert.equal((await s.request('/api/auth/setup', { setupCode: 'first-token', username: 'me', password: 'short' })).status, 400);
-    const ok = await s.request('/api/auth/setup', { setupCode: 'first-token', username: 'me', password: PASSWORD });
+    const ok = await s.request('/api/auth/setup', { setupCode: ' first-\ntoken\n', username: 'me', password: PASSWORD });
     assert.equal(ok.status, 200);
     assert.match(ok.setCookie, /HttpOnly/i);
     assert.match(ok.setCookie, /SameSite=Strict/i);

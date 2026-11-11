@@ -4,7 +4,7 @@
 set -euo pipefail
 
 cd /opt/expense-hub
-sudo -u expense-hub env $(grep -v '^#' /etc/expense-hub/env | xargs) node --disable-warning=ExperimentalWarning server/dist/backup.js || true
+runuser -u expense-hub -- env $(grep -v '^#' /etc/expense-hub/env | xargs) node --disable-warning=ExperimentalWarning server/dist/backup.js || true
 git pull --ff-only
 npm ci --no-audit --no-fund --loglevel=error
 npm run build --silent
