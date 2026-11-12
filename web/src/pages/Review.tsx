@@ -90,7 +90,11 @@ export function Review({ meta }: { meta: Meta | null }) {
         {data && <Pager offset={offset} pageSize={PAGE} total={data.total} onChange={setOffset} />}
       </Card>
 
-      <Rules data={rules.data} categories={categories} entities={entities} onChange={reload} />
+      {/* On wider screens the rules stay in view at the bottom, scrolling on their own,
+          while the page scrolls through the transactions above them. */}
+      <div className="md:sticky md:bottom-0 md:z-20 md:-mx-1 md:px-1 md:pb-2">
+        <Rules data={rules.data} categories={categories} entities={entities} onChange={reload} />
+      </div>
     </>
   );
 }
@@ -141,7 +145,7 @@ function Rules({ data, categories, entities, onChange }: { data: { rules: Rule[]
   }
 
   return (
-    <Card title="Rules">
+    <Card title="Rules" className="md:max-h-[42vh] md:overflow-y-auto md:shadow-[0_-10px_24px_-12px_rgba(15,23,42,0.35)]">
       <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
         A rule applies to every transaction whose description contains its text, including ones imported later. The longest matching text wins. Your own edits on a transaction always come first.
       </p>
