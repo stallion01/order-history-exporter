@@ -55,6 +55,26 @@ export function stayRoutes(app: FastifyInstance, stays: StayService) {
     return { ...stays.list(filters), options: stays.options(), status: stays.status() };
   });
 
+  // Airbnb, week by week: payouts against the deposits linked to them.
+  app.get('/api/stays/airbnb-weeks', async (request) => {
+    const year = queryOf(request.query).get('year') || String(new Date().getFullYear());
+    if (!/^\d{4}$/.test(year)) throw new HttpError(400, 'year must look like 2026.');
+    return stays.airbnbWeeks(year);
+  });
+
+  app.get('/api/stays/conflicts', async () => ({ conflicts: stays.conflictList() }));
+
+  app.post('/api/stays/conflicts/resolve', async (request) => {
+    const body = parse(z.object({ transactionId: z.number().int().positive(), subjects: z.array(z.string().regex(/^(stay|payout):[A-Za-z0-9-]{1,64}$/)).min(1).max(20) }), request.body);
+    try {
+      stays.resolve(body.transactionId, body.subjects);
+    } catch (err) {
+      fail(err);
+    }
+    audit(request, 'stay.conflict.resolve', body);
+    return { ok: true };
+  });
+
   app.get('/api/stays/:id', async (request) => {
     const found = stays.get(idOf(request));
     if (!found) throw new HttpError(404, 'That stay was not found.');

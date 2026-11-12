@@ -35,7 +35,7 @@ export const PLATFORM_LABELS: Record<string, string> = {
   manual: 'Direct',
   direct: 'Direct',
 };
-export const STAY_VIEWS = ['all', 'upcoming', 'unpaid', 'cancelled'] as const;
+export const STAY_VIEWS = ['all', 'upcoming', 'unpaid', 'conflicts', 'cancelled'] as const;
 export type StayView = (typeof STAY_VIEWS)[number];
 
 export interface StayFilters {
@@ -268,7 +268,8 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
         for (const t of lines) {
           // A "Payout" line is the payout itself; the others are what it paid for.
           if (!t.id || !t.payout?.id || !payoutIds.has(t.payout.id) || /^payout$/i.test(t.type || '')) continue;
-          const amount = cents(t.paid_out_amount?.amount);
+          // Each stay's share is in amount; paid_out_amount is only on the payout line itself.
+          const amount = cents(t.amount?.amount ?? t.paid_out_amount?.amount);
           if (amount === null) continue;
           const stayId = t.reservation?.id && stayIds.has(t.reservation.id) ? t.reservation.id : null;
           putLine.run(t.id, t.payout.id, stayId, (t.type || 'Other').slice(0, 60), amount, t.date ? t.date.slice(0, 10) : null);
@@ -308,21 +309,24 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
 
   // A deposit is free when nothing else claims it.
   const FREE = `NOT EXISTS (SELECT 1 FROM stay_payouts x WHERE x.transaction_id = t.id) AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id)`;
+  const MAX_GROUP = 6;
+  const MAX_POOL = 18;
 
+  // For the stay and payout pages: deposits near a payout's date.
   function payoutCandidates(payout: Row, exactOnly = true) {
     const rows = db
       .prepare(
         `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account, a.last4 FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
          WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ?
            ${exactOnly ? 'AND CAST(ROUND(t.amount * 100) AS INTEGER) = ?' : ''}
-           AND (${FREE} OR t.id = ?)
+           AND (NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id) OR t.id = ?)
            AND NOT EXISTS (SELECT 1 FROM stay_link_rejections j WHERE j.subject = ? AND j.transaction_id = t.id)
          ORDER BY t.posted`
       )
       .all(shift(payout.paid_on, -2), shift(payout.paid_on, exactOnly ? 7 : 14), ...(exactOnly ? [toCents(payout.amount)] : []), payout.transaction_id ?? -1, `payout:${payout.id}`) as Row[];
     const last4 = last4Of(payout.bank_account);
     const sameAccount = last4 ? rows.filter((r) => r.last4 === last4) : [];
-    return sameAccount.length ? sameAccount : rows;
+    return (sameAccount.length ? sameAccount : rows).filter((r) => ['airbnb', 'other'].includes(incomeSource(`${r.description} ${r.payee || ''}`)));
   }
 
   function stayCandidates(stay: Row, exactOnly = true) {
@@ -332,11 +336,11 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
         `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
          WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ?
            ${exactOnly ? 'AND CAST(ROUND(t.amount * 100) AS INTEGER) = ?' : ''}
-           AND (${FREE} OR t.id IN (SELECT transaction_id FROM stay_deposits WHERE stay_id = ?))
+           AND NOT EXISTS (SELECT 1 FROM stay_payouts x WHERE x.transaction_id = t.id)
            AND NOT EXISTS (SELECT 1 FROM stay_link_rejections j WHERE j.subject = ? AND j.transaction_id = t.id)
          ORDER BY t.posted`
       )
-      .all(from, to, ...(exactOnly ? [toCents(stay.payout)] : []), stay.id, `stay:${stay.id}`) as Row[];
+      .all(from, to, ...(exactOnly ? [toCents(stay.payout)] : []), `stay:${stay.id}`) as Row[];
     // A deposit that names another platform isn't this stay's.
     const mine = platformGroup(stay.platform);
     return rows.filter((r) => {
@@ -354,38 +358,185 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
          WHERE s.status = 'accepted' AND s.payout > 0
            AND NOT EXISTS (SELECT 1 FROM stay_payout_lines l WHERE l.stay_id = s.id)
            AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.stay_id = s.id)
-           AND (s.platform != 'airbnb' OR ? IS NULL OR s.arrival < ?)`
+           AND (s.platform != 'airbnb' OR ? IS NULL OR s.arrival < ?)
+         ORDER BY s.arrival, s.id`
       )
       .all(earliest, earliest) as Row[];
   }
 
-  // Links what is clear: one deposit fits, and no other payout or stay wants it.
-  function match() {
+  // Up to two ways of making `target` cents from some of `amounts` (2 to MAX_GROUP of
+  // them). Two is enough to know it isn't clear.
+  function groupsMaking(target: number, amounts: number[]) {
+    const order = amounts.map((a, i) => [a, i] as const).filter(([a]) => a > 0 && a < target).sort((x, y) => y[0] - x[0]);
+    const found: number[][] = [];
+    const seen = new Set<string>();
+    const pick: number[] = [];
+    const walk = (start: number, left: number) => {
+      if (found.length > 1) return;
+      if (left === 0) {
+        if (pick.length < 2) return;
+        // The same amounts in another order, or equal amounts swapped, aren't a different answer.
+        const key = pick.map((i) => amounts[i]).sort((a, b) => a - b).join(',');
+        if (seen.has(key)) return;
+        seen.add(key);
+        found.push([...pick]);
+        return;
+      }
+      if (pick.length === MAX_GROUP) return;
+      for (let k = start; k < order.length; k++) {
+        const [a, i] = order[k];
+        if (a > left) continue;
+        pick.push(i);
+        walk(k + 1, left - a);
+        pick.pop();
+        if (found.length > 1) return;
+      }
+    };
+    walk(0, target);
+    return found;
+  }
+
+  interface Deposit {
+    id: number;
+    posted: string;
+    cents: number;
+    last4: string | null;
+    named: string;
+  }
+  const freeDeposits = (from: string) =>
+    (
+      db
+        .prepare(
+          `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.last4 FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+           WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted >= ? AND ${FREE} ORDER BY t.posted, t.id`
+        )
+        .all(from) as Row[]
+    ).map((r): Deposit => ({ id: r.id, posted: r.posted, cents: toCents(r.amount), last4: r.last4 ?? null, named: incomeSource(`${r.description} ${r.payee || ''}`) }));
+  const rejectedSet = () => new Set((db.prepare('SELECT subject, transaction_id FROM stay_link_rejections').all() as Row[]).map((r) => `${r.subject}|${r.transaction_id}`));
+  const between = (date: string, from: string, to: string) => date >= from && date <= to;
+
+  function conflict(transactionId: number, options: string[][], reason: string) {
+    const subjects = [...new Set(options.flat())];
+    const put = db.prepare('INSERT OR REPLACE INTO stay_conflicts (subject, transaction_id, reason, options) VALUES (?, ?, ?, ?)');
+    for (const subject of subjects) put.run(subject, transactionId, reason, JSON.stringify(options));
+  }
+
+  // Airbnb payouts to deposits: one for one by amount, in date order, so repeated
+  // amounts pair up with the right week; then deposits that are several payouts added up.
+  function matchPayouts() {
     let linked = 0;
-    for (let pass = 0; pass < 3; pass++) {
-      let changed = 0;
-      const want = new Map<number, string[]>();
-      const plans: { kind: 'payout' | 'stay'; id: string; tx: number }[] = [];
-      for (const p of db.prepare(`SELECT * FROM stay_payouts WHERE transaction_id IS NULL`).all() as Row[]) {
-        const list = payoutCandidates(p);
-        for (const c of list) want.set(c.id, [...(want.get(c.id) || []), `payout:${p.id}`]);
-        if (list.length === 1) plans.push({ kind: 'payout', id: p.id, tx: list[0].id });
+    const payouts = db.prepare(`SELECT * FROM stay_payouts WHERE transaction_id IS NULL ORDER BY paid_on, id`).all() as Row[];
+    if (!payouts.length) return 0;
+    const rejected = rejectedSet();
+    const deposits = freeDeposits(shift(payouts[0].paid_on, -2)).filter((d) => d.named === 'airbnb' || d.named === 'other');
+    const used = new Set<number>();
+    const link = db.prepare(`UPDATE stay_payouts SET transaction_id = ?, match_source = 'auto' WHERE id = ? AND transaction_id IS NULL`);
+    const fits = (p: Row, d: Deposit) => {
+      const last4 = last4Of(p.bank_account);
+      return !used.has(d.id) && (!last4 || !d.last4 || d.last4 === last4) && !rejected.has(`payout:${p.id}|${d.id}`);
+    };
+    const left: Row[] = [];
+    for (const p of payouts) {
+      const cents = toCents(p.amount);
+      const options = deposits.filter((d) => d.cents === cents && fits(p, d) && between(d.posted, shift(p.paid_on, -2), shift(p.paid_on, 7)));
+      // A deposit that says Airbnb is preferred over one that doesn't say; then the earliest.
+      const best = options.find((d) => d.named === 'airbnb') || (options.length === 1 ? options[0] : null);
+      if (best) {
+        link.run(best.id, p.id);
+        used.add(best.id);
+        linked++;
+      } else left.push(p);
+    }
+    // Several payouts in one deposit.
+    for (const d of deposits) {
+      if (used.has(d.id) || d.named !== 'airbnb' || !left.length) continue;
+      const pool = left.filter((p) => fits(p, d) && between(p.paid_on, shift(d.posted, -7), shift(d.posted, 2))).slice(0, MAX_POOL);
+      if (pool.length < 2) continue;
+      const groups = groupsMaking(d.cents, pool.map((p) => toCents(p.amount)));
+      if (groups.length === 1) {
+        for (const i of groups[0]) {
+          link.run(d.id, pool[i].id);
+          left.splice(left.indexOf(pool[i]), 1);
+          linked++;
+        }
+        used.add(d.id);
+      } else if (groups.length > 1) {
+        conflict(d.id, groups.map((g) => g.map((i) => `payout:${pool[i].id}`)), 'payouts');
       }
-      for (const s of staysWithoutPayouts()) {
-        const list = stayCandidates(s);
-        for (const c of list) want.set(c.id, [...(want.get(c.id) || []), `stay:${s.id}`]);
-        if (list.length === 1) plans.push({ kind: 'stay', id: s.id, tx: list[0].id });
-      }
-      for (const plan of plans) {
-        if ((want.get(plan.tx) || []).length !== 1) continue;
-        if (plan.kind === 'payout') db.prepare(`UPDATE stay_payouts SET transaction_id = ?, match_source = 'auto' WHERE id = ? AND transaction_id IS NULL`).run(plan.tx, plan.id);
-        else db.prepare(`INSERT OR IGNORE INTO stay_deposits (stay_id, transaction_id, source, created_at) VALUES (?, ?, 'auto', ?)`).run(plan.id, plan.tx, now());
-        changed++;
-      }
-      linked += changed;
-      if (!changed) break;
     }
     return linked;
+  }
+
+  // Stays Hospitable has no payout for: one for one by amount, then deposits that are
+  // several stays added up (Airbnb before Hospitable's payout history, Vrbo, others).
+  function matchStays() {
+    let linked = 0;
+    const stays = staysWithoutPayouts();
+    if (!stays.length) return 0;
+    const rejected = rejectedSet();
+    const deposits = freeDeposits(shift(stays[0].booked_at || stays[0].arrival, -60));
+    const used = new Set<number>();
+    const link = db.prepare(`INSERT OR IGNORE INTO stay_deposits (stay_id, transaction_id, source, created_at) VALUES (?, ?, 'auto', ?)`);
+    const fits = (s: Row, d: Deposit) => {
+      const [from, to] = depositWindow(s);
+      return !used.has(d.id) && between(d.posted, from, to) && (d.named === 'other' || d.named === platformGroup(s.platform)) && !rejected.has(`stay:${s.id}|${d.id}`);
+    };
+    const left: Row[] = [];
+    for (const s of stays) {
+      const cents = toCents(s.payout);
+      const expected = shift(s.arrival, 1);
+      const options = deposits
+        .filter((d) => d.cents === cents && fits(s, d))
+        .sort((a, b) => Math.abs(dayNumber(a.posted) - dayNumber(expected)) - Math.abs(dayNumber(b.posted) - dayNumber(expected)));
+      // One that names the platform is enough; one that doesn't has to be the only one.
+      const named = options.filter((d) => d.named !== 'other');
+      const best = named[0] || (options.length === 1 ? options[0] : null);
+      if (best) {
+        link.run(s.id, best.id, now());
+        used.add(best.id);
+        linked++;
+      } else left.push(s);
+    }
+    // Several stays in one deposit: only deposits that name the platform.
+    for (const d of deposits) {
+      if (used.has(d.id) || d.named === 'other' || !left.length) continue;
+      const pool = left
+        .filter((s) => platformGroup(s.platform) === d.named && fits(s, d))
+        .sort((a, b) => Math.abs(dayNumber(a.arrival) - dayNumber(d.posted)) - Math.abs(dayNumber(b.arrival) - dayNumber(d.posted)))
+        .slice(0, MAX_POOL);
+      if (pool.length < 2) continue;
+      const groups = groupsMaking(d.cents, pool.map((s) => toCents(s.payout)));
+      if (groups.length === 1) {
+        for (const i of groups[0]) {
+          link.run(pool[i].id, d.id, now());
+          left.splice(left.indexOf(pool[i]), 1);
+          linked++;
+        }
+        used.add(d.id);
+      } else if (groups.length > 1) {
+        conflict(d.id, groups.map((g) => g.map((i) => `stay:${pool[i].id}`)), 'stays');
+      }
+    }
+    return linked;
+  }
+
+  // Links what is clear. Where a deposit could be made up more than one way, nothing
+  // is linked and the choice is kept as a conflict for the user. Run after every
+  // Hospitable sync and every bank import.
+  function match() {
+    db.exec('BEGIN');
+    try {
+      db.exec('DELETE FROM stay_conflicts');
+      const linked = matchPayouts() + matchStays();
+      // A conflict whose deposit or subjects got linked in the meantime is settled.
+      db.exec(`DELETE FROM stay_conflicts WHERE EXISTS (SELECT 1 FROM stay_payouts x WHERE x.transaction_id = stay_conflicts.transaction_id)
+                 OR EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = stay_conflicts.transaction_id)`);
+      db.exec('COMMIT');
+      return linked;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   /* ---------- Reading ---------- */
@@ -400,7 +551,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       clauses.push('s.departure >= ?');
       params.push(today());
     }
-    if (view === 'unpaid') {
+    if (view === 'unpaid' || view === 'conflicts') {
       clauses.push(`s.payout > 0 AND s.arrival <= ? AND NOT (${PAID})`);
       params.push(today());
     }
@@ -436,9 +587,25 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
 
   const PAID = `EXISTS (SELECT 1 FROM stay_deposits d WHERE d.stay_id = s.id) OR EXISTS (SELECT 1 FROM stay_payout_lines l JOIN stay_payouts p ON p.id = l.payout_id WHERE l.stay_id = s.id AND p.transaction_id IS NOT NULL)`;
 
-  const toStay = (r: Row) => {
+  // The first day the bank records cover: money due before then can't be checked.
+  const bankStart = () => ((db.prepare('SELECT MIN(posted) AS d FROM bank_transactions WHERE amount > 0').get() as Row).d as string | null) ?? null;
+  // Days after the payout (or check-in) before money not seen in the bank counts as missing.
+  const GRACE_DAYS = 7;
+
+  function paymentOf(r: Row, start: string | null) {
+    if (r.status !== 'accepted') return 'none' as const;
+    if (r.paid) return 'paid' as const;
+    if (r.conflict) return 'conflict' as const;
+    if (!r.payout) return 'none' as const;
+    const expected = r.expected_on as string;
+    if (expected > today()) return 'upcoming' as const;
+    if (start && expected < start) return 'nobank' as const;
+    if (shift(expected, GRACE_DAYS) >= today()) return 'due' as const;
+    return 'missing' as const;
+  }
+
+  const toStay = (r: Row, start: string | null) => {
     const paid = Boolean(r.paid);
-    const started = r.arrival <= today();
     return {
       id: r.id as string,
       code: r.code as string | null,
@@ -470,13 +637,17 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       payout: r.payout as number | null,
       note: r.note as string | null,
       paid,
-      // Money expected but not seen: after arrival, with nothing linked.
-      payment: r.status !== 'accepted' ? 'none' : paid ? 'paid' : !r.payout ? 'none' : started ? 'missing' : 'upcoming',
+      // paid, conflict (more than one way it could have been paid), due (on its way),
+      // missing, nobank (before the bank records start), upcoming, or none.
+      payment: paymentOf(r, start),
+      expectedOn: r.expected_on as string,
       depositDate: (r.deposit_date as string | null) ?? null,
     };
   };
 
-  const SELECT = `SELECT s.*, p.name AS property_name, (${PAID}) AS paid,
+  const CONFLICT = `EXISTS (SELECT 1 FROM stay_conflicts c WHERE c.subject = 'stay:' || s.id OR c.subject IN (SELECT 'payout:' || l.payout_id FROM stay_payout_lines l WHERE l.stay_id = s.id))`;
+  const SELECT = `SELECT s.*, p.name AS property_name, (${PAID}) AS paid, (${CONFLICT}) AS conflict,
+      COALESCE((SELECT MIN(po.paid_on) FROM stay_payout_lines l JOIN stay_payouts po ON po.id = l.payout_id WHERE l.stay_id = s.id), date(s.arrival, '+1 day')) AS expected_on,
       COALESCE((SELECT MIN(t.posted) FROM stay_deposits d JOIN bank_transactions t ON t.id = d.transaction_id WHERE d.stay_id = s.id),
                (SELECT MIN(t.posted) FROM stay_payout_lines l JOIN stay_payouts po ON po.id = l.payout_id JOIN bank_transactions t ON t.id = po.transaction_id WHERE l.stay_id = s.id)) AS deposit_date
     FROM stays s LEFT JOIN stay_properties p ON p.id = s.property_id`;
@@ -485,7 +656,10 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const { sql, params } = whereFor(filters);
     const asc = filters.view === 'upcoming';
     const rows = db.prepare(`${SELECT} ${sql} ORDER BY s.arrival ${asc ? 'ASC' : 'DESC'}, s.id LIMIT 2000`).all(...params) as Row[];
-    const stays = rows.map(toStay);
+    const start = bankStart();
+    let stays = rows.map((r) => toStay(r, start));
+    if (filters.view === 'unpaid' && !filters.deposit) stays = stays.filter((s) => s.payment === 'missing' || s.payment === 'conflict');
+    if (filters.view === 'conflicts' && !filters.deposit) stays = stays.filter((s) => s.payment === 'conflict');
 
     // Totals for what's listed, and per property.
     const accepted = stays.filter((s) => s.status === 'accepted');
@@ -496,6 +670,11 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       paid: round(accepted.filter((s) => s.paid).reduce((n, s) => n + (s.payout || 0), 0)),
       missing: round(accepted.filter((s) => s.payment === 'missing').reduce((n, s) => n + (s.payout || 0), 0)),
       missingCount: accepted.filter((s) => s.payment === 'missing').length,
+      conflictCount: accepted.filter((s) => s.payment === 'conflict').length,
+      due: round(accepted.filter((s) => s.payment === 'due').reduce((n, s) => n + (s.payout || 0), 0)),
+      noBank: round(accepted.filter((s) => s.payment === 'nobank').reduce((n, s) => n + (s.payout || 0), 0)),
+      noBankCount: accepted.filter((s) => s.payment === 'nobank').length,
+      bankStart: start,
       guestTotal: round(accepted.reduce((n, s) => n + (s.guestTotal || 0), 0)),
     };
     const byProperty = new Map<string, { property: string; propertyId: string | null; stays: number; nights: number; payout: number; accommodation: number }>();
@@ -529,7 +708,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
   function get(id: string) {
     const row = db.prepare(`${SELECT} WHERE s.id = ?`).get(id) as Row | undefined;
     if (!row) return null;
-    const stay = toStay(row);
+    const stay = toStay(row, bankStart());
     const lines = JSON.parse(row.financials || '[]') as { side: string; category: string; label: string; amount: number }[];
 
     // Airbnb payouts that paid for this stay, with what else each one covered.
@@ -576,7 +755,178 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
         .sort((a, b) => Number(b.exact) - Number(a.exact) || Math.abs(dayNumber(a.posted) - dayNumber(stay.arrival)) - Math.abs(dayNumber(b.posted) - dayNumber(stay.arrival)))
         .slice(0, 10);
     }
-    return { stay, lines, payouts, deposits, suggestions };
+    return { stay, lines, payouts, deposits, suggestions, conflicts: conflictsFor([`stay:${id}`, ...payouts.map((p) => `payout:${p.id}`)]) };
+  }
+
+  // What a conflict's choices are, in words: each way the deposit could be made up.
+  function describe(subject: string) {
+    const kind = subject.slice(0, subject.indexOf(':'));
+    const id = subject.slice(subject.indexOf(':') + 1);
+    if (kind === 'stay') {
+      const s = db.prepare('SELECT s.*, p.name AS property_name FROM stays s LEFT JOIN stay_properties p ON p.id = s.property_id WHERE s.id = ?').get(id) as Row | undefined;
+      if (!s) return null;
+      return { subject, kind, id, label: [s.guest_first, s.guest_last].filter(Boolean).join(' ') || 'Guest', date: s.arrival as string, detail: (s.property_name as string | null) || '', amount: s.payout as number, stayIds: [s.id as string] };
+    }
+    const p = db.prepare('SELECT * FROM stay_payouts WHERE id = ?').get(id) as Row | undefined;
+    if (!p) return null;
+    const guests = db.prepare('SELECT l.stay_id, s.guest_first, s.guest_last FROM stay_payout_lines l LEFT JOIN stays s ON s.id = l.stay_id WHERE l.payout_id = ? ORDER BY s.arrival').all(id) as Row[];
+    return {
+      subject,
+      kind,
+      id,
+      label: 'Airbnb payout',
+      date: p.paid_on as string,
+      detail: guests.map((g) => [g.guest_first, g.guest_last].filter(Boolean).join(' ')).filter(Boolean).join(', '),
+      amount: p.amount as number,
+      stayIds: guests.map((g) => g.stay_id as string).filter(Boolean),
+    };
+  }
+
+  function conflictsFor(subjects: string[]) {
+    if (!subjects.length) return [];
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT c.transaction_id, c.options, t.posted, t.amount, t.payee, t.description, a.name AS account FROM stay_conflicts c
+         JOIN bank_transactions t ON t.id = c.transaction_id JOIN bank_accounts a ON a.id = t.account_id
+         WHERE c.subject IN (${subjects.map(() => '?').join(', ')}) ORDER BY t.posted`
+      )
+      .all(...subjects) as Row[];
+    return rows.map((r) => ({
+      deposit: { id: r.transaction_id as number, posted: r.posted as string, amount: r.amount as number, payee: (r.payee || r.description) as string, account: r.account as string },
+      options: (JSON.parse(r.options) as string[][]).map((group) => {
+        const items = group.map(describe).filter((x): x is NonNullable<ReturnType<typeof describe>> => Boolean(x));
+        return { subjects: group, items, total: round(items.reduce((n, i) => n + i.amount, 0)) };
+      }),
+    }));
+  }
+
+  function conflictList() {
+    const subjects = (db.prepare('SELECT DISTINCT subject FROM stay_conflicts').all() as Row[]).map((r) => r.subject as string);
+    return conflictsFor(subjects);
+  }
+
+  // The user picks the way a deposit was made up.
+  function resolve(transactionId: number, subjects: string[]) {
+    if (!bank.transactionById(transactionId)) throw new Error('That transaction was not found.');
+    const row = db.prepare('SELECT options FROM stay_conflicts WHERE transaction_id = ? LIMIT 1').get(transactionId) as Row | undefined;
+    const allowed = row ? (JSON.parse(row.options) as string[][]).some((g) => g.length === subjects.length && g.every((s) => subjects.includes(s))) : false;
+    if (!allowed) throw new Error('That choice is no longer open. Reload the page.');
+    db.exec('BEGIN');
+    try {
+      for (const subject of subjects) {
+        const id = subject.slice(subject.indexOf(':') + 1);
+        if (subject.startsWith('payout:')) db.prepare(`UPDATE stay_payouts SET transaction_id = ?, match_source = 'user' WHERE id = ?`).run(transactionId, id);
+        else db.prepare(`INSERT INTO stay_deposits (stay_id, transaction_id, source, created_at) VALUES (?, ?, 'user', ?) ON CONFLICT DO UPDATE SET source = 'user'`).run(id, transactionId, now());
+      }
+      db.prepare('DELETE FROM stay_conflicts WHERE transaction_id = ?').run(transactionId);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    match();
+  }
+
+  /* ---------- Airbnb week by week ---------- */
+
+  // The Monday a date's week starts on. Day 0 (1970-01-01) was a Thursday.
+  const weekOf = (date: string) => {
+    const n = dayNumber(date);
+    return new Date((n - ((n + 3) % 7)) * DAY_MS).toISOString().slice(0, 10);
+  };
+
+  // Each week's Airbnb payouts (or, before Hospitable's payout history, each stay's
+  // expected payout) against the deposits linked to them, plus Airbnb deposits that
+  // nothing claims.
+  function airbnbWeeks(year: string) {
+    const start = bankStart();
+    const conflicts = new Set((db.prepare('SELECT subject FROM stay_conflicts').all() as Row[]).map((r) => r.subject as string));
+    const statusOf = (date: string, linked: boolean, subject: string) =>
+      linked ? 'paid' : conflicts.has(subject) ? 'conflict' : start && date < start ? 'nobank' : shift(date, GRACE_DAYS) >= today() ? 'due' : 'missing';
+    type Item = { kind: 'payout' | 'stay'; id: string; date: string; amount: number; deposit: { id: number; posted: string; amount: number } | null; stays: { id: string | null; guest: string; amount: number }[]; status: string };
+    const items: Item[] = [];
+
+    const payouts = db
+      .prepare(`SELECT p.*, t.posted, t.amount AS tx_amount FROM stay_payouts p LEFT JOIN bank_transactions t ON t.id = p.transaction_id WHERE substr(p.paid_on, 1, 4) = ? ORDER BY p.paid_on`)
+      .all(year) as Row[];
+    const lines = db.prepare('SELECT l.amount, l.type, l.stay_id, s.guest_first, s.guest_last FROM stay_payout_lines l LEFT JOIN stays s ON s.id = l.stay_id WHERE l.payout_id = ? ORDER BY s.arrival, l.id');
+    for (const p of payouts) {
+      items.push({
+        kind: 'payout',
+        id: p.id,
+        date: p.paid_on,
+        amount: p.amount,
+        deposit: p.transaction_id ? { id: p.transaction_id, posted: p.posted, amount: p.tx_amount } : null,
+        stays: (lines.all(p.id) as Row[]).map((l) => ({ id: l.stay_id ?? null, guest: [l.guest_first, l.guest_last].filter(Boolean).join(' ') || l.type, amount: l.amount })),
+        status: statusOf(p.paid_on, Boolean(p.transaction_id), `payout:${p.id}`),
+      });
+    }
+    // Airbnb stays from before the payout history: due the day after check-in.
+    const earliest = (db.prepare('SELECT MIN(paid_on) AS d FROM stay_payouts').get() as Row).d as string | null;
+    const older = db
+      .prepare(
+        `SELECT s.*, (SELECT t.id || '|' || t.posted || '|' || t.amount FROM stay_deposits d JOIN bank_transactions t ON t.id = d.transaction_id WHERE d.stay_id = s.id LIMIT 1) AS dep
+         FROM stays s WHERE s.platform = 'airbnb' AND s.status = 'accepted' AND s.payout > 0
+           AND NOT EXISTS (SELECT 1 FROM stay_payout_lines l WHERE l.stay_id = s.id)
+           AND (? IS NULL OR s.arrival < ?) AND substr(date(s.arrival, '+1 day'), 1, 4) = ?`
+      )
+      .all(earliest, earliest, year) as Row[];
+    for (const s of older) {
+      const date = shift(s.arrival, 1);
+      const [depId, depPosted, depAmount] = s.dep ? String(s.dep).split('|') : [];
+      const guest = [s.guest_first, s.guest_last].filter(Boolean).join(' ') || 'Guest';
+      items.push({
+        kind: 'stay',
+        id: s.id,
+        date,
+        amount: s.payout,
+        deposit: s.dep ? { id: Number(depId), posted: depPosted, amount: Number(depAmount) } : null,
+        stays: [{ id: s.id, guest, amount: s.payout }],
+        status: statusOf(date, Boolean(s.dep), `stay:${s.id}`),
+      });
+    }
+    // Airbnb deposits that nothing claims.
+    const inConflict = db.prepare('SELECT 1 FROM stay_conflicts WHERE transaction_id = ?');
+    const extras = (
+      db
+        .prepare(`SELECT t.id, t.posted, t.amount, t.description, t.payee FROM bank_transactions t WHERE t.amount > 0 AND t.kind = 'normal' AND substr(t.posted, 1, 4) = ? AND ${FREE} ORDER BY t.posted`)
+        .all(year) as Row[]
+    )
+      .filter((r) => incomeSource(`${r.description} ${r.payee || ''}`) === 'airbnb')
+      .map((r) => ({ id: r.id as number, posted: r.posted as string, amount: r.amount as number, conflict: Boolean(inConflict.get(r.id)) }));
+
+    const weeks = new Map<string, { week: string; items: Item[]; extras: typeof extras }>();
+    const weekFor = (key: string) => {
+      if (!weeks.has(key)) weeks.set(key, { week: key, items: [], extras: [] });
+      return weeks.get(key)!;
+    };
+    for (const i of items) weekFor(weekOf(i.date)).items.push(i);
+    for (const e of extras) weekFor(weekOf(e.posted)).extras.push(e);
+
+    // The week's state is its most pressing item's.
+    const order = ['conflict', 'missing', 'extra', 'due', 'nobank', 'paid'];
+    const out = [...weeks.values()]
+      .sort((a, b) => b.week.localeCompare(a.week))
+      .map((w) => {
+        w.items.sort((a, b) => a.date.localeCompare(b.date));
+        const expected = round(w.items.reduce((n, i) => n + i.amount, 0));
+        const matched = round(w.items.filter((i) => i.deposit).reduce((n, i) => n + i.amount, 0));
+        const unclaimed = round(w.extras.reduce((n, e) => n + e.amount, 0));
+        const states = new Set<string>(w.items.map((i) => i.status));
+        if (w.extras.some((e) => e.conflict)) states.add('conflict');
+        else if (w.extras.length) states.add('extra');
+        const status = order.find((s) => states.has(s)) || 'paid';
+        return { week: w.week, expected, matched, unmatched: round(expected - matched), unclaimed, status, items: w.items, extras: w.extras };
+      });
+    const totals = {
+      expected: round(out.reduce((n, w) => n + w.expected, 0)),
+      matched: round(out.reduce((n, w) => n + w.matched, 0)),
+      unclaimed: round(out.reduce((n, w) => n + w.unclaimed, 0)),
+      weeks: out.length,
+      weeksToCheck: out.filter((w) => w.status === 'conflict' || w.status === 'missing' || w.status === 'extra').length,
+      bankStart: start,
+    };
+    return { weeks: out, totals };
   }
 
   /* ---------- Changes by the user ---------- */
@@ -584,11 +934,6 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
   const txExists = (id: number) => {
     if (!bank.transactionById(id)) throw new Error('That transaction was not found.');
   };
-  const claimedElsewhere = (txId: number, except: { stay?: string; payout?: string }) =>
-    Boolean(
-      db.prepare('SELECT 1 FROM stay_payouts WHERE transaction_id = ? AND id != ?').get(txId, except.payout ?? '') ||
-        db.prepare('SELECT 1 FROM stay_deposits WHERE transaction_id = ? AND stay_id != ?').get(txId, except.stay ?? '')
-    );
 
   function linkStay(stayId: string, txId: number) {
     txExists(txId);
@@ -608,7 +953,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
   function linkPayout(payoutId: string, txId: number) {
     txExists(txId);
     if (!db.prepare('SELECT 1 FROM stay_payouts WHERE id = ?').get(payoutId)) throw new Error('That payout was not found.');
-    if (claimedElsewhere(txId, { payout: payoutId })) throw new Error('That deposit is already linked to something else.');
+    if (db.prepare('SELECT 1 FROM stay_deposits WHERE transaction_id = ?').get(txId)) throw new Error('That deposit is already linked to a stay.');
     db.prepare('DELETE FROM stay_link_rejections WHERE subject = ? AND transaction_id = ?').run(`payout:${payoutId}`, txId);
     db.prepare(`UPDATE stay_payouts SET transaction_id = ?, match_source = 'user' WHERE id = ?`).run(txId, payoutId);
   }
@@ -625,7 +970,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     return db.prepare('UPDATE stays SET note = ? WHERE id = ?').run(note?.trim().slice(0, 2000) || null, stayId).changes > 0;
   }
 
-  return { status, connect, disconnect, sync, due, match, list, options, get, linkStay, unlinkStay, linkPayout, unlinkPayout, setNote };
+  return { status, connect, disconnect, sync, due, match, list, options, get, conflictList, resolve, airbnbWeeks, linkStay, unlinkStay, linkPayout, unlinkPayout, setNote };
 }
 
 export type StayService = ReturnType<typeof stayService>;

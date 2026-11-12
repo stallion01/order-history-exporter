@@ -6,7 +6,7 @@ import { ArrowLeft, Link2, Mail, MapPin, Phone, Unlink } from 'lucide-react';
 import { post, useApi } from '../api';
 import { money, plural } from '../format';
 import { dateRange, localTime, longDate, partyText } from '../stays';
-import type { DepositRow, StayDetail as Detail } from '../stays';
+import type { Conflict, DepositRow, StayDetail as Detail } from '../stays';
 import { Banner, Button, Card, Empty, Loading, cx } from '../ui';
 import { PlatformBadge } from './Stays';
 
@@ -86,7 +86,7 @@ export function StayDetail() {
     </>
   );
   if (!detail.data) return <Loading />;
-  const { stay: s, lines, payouts, deposits, suggestions } = detail.data;
+  const { stay: s, lines, payouts, deposits, suggestions, conflicts } = detail.data;
   const host = lines.filter((l) => l.side === 'host');
   const guest = lines.filter((l) => l.side === 'guest');
   const checkIn = localTime(s.checkIn);
@@ -107,6 +107,9 @@ export function StayDetail() {
         </div>
       </div>
       {error && <Banner>{error}</Banner>}
+      {conflicts.map((c) => (
+        <ConflictCard key={c.deposit.id} conflict={c} stayId={s.id} busy={busy} onPick={(subjects) => run('/api/stays/conflicts/resolve', { transactionId: c.deposit.id, subjects })} />
+      ))}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Guest">
@@ -278,5 +281,47 @@ function Suggestions({ list, busy, onLink }: { list: (DepositRow & { exact: bool
         ))}
       </ul>
     </>
+  );
+}
+
+// A deposit that adds up more than one way: the user says which.
+function ConflictCard({ conflict: c, stayId, busy, onPick }: { conflict: Conflict; stayId: string; busy: boolean; onPick: (subjects: string[]) => void }) {
+  return (
+    <Card title="Conflict: which stays did this deposit pay for?" className="mb-5 border-red-300 dark:border-red-900">
+      <p className="mb-3 text-sm">
+        The deposit of <span className="font-medium">{money(c.deposit.amount)}</span> on {longDate(c.deposit.posted)} ({c.deposit.account}) adds up in more than one way, so nothing was linked. Pick the
+        one that matches your Airbnb payout report.
+      </p>
+      <div className="grid gap-3 md:grid-cols-2">
+        {c.options.map((o, n) => (
+          <div key={n} className="rounded-md border border-slate-200 p-3 text-sm dark:border-slate-700">
+            <ul className="mb-3 space-y-1">
+              {o.items.map((i) => (
+                <li key={i.subject} className="flex justify-between gap-3">
+                  <span className={cx('min-w-0', i.stayIds.includes(stayId) && 'font-medium')}>
+                    {i.kind === 'stay' ? (
+                      <Link to={`/stays/${i.id}`} className="hover:underline">
+                        {i.label}
+                      </Link>
+                    ) : (
+                      i.label
+                    )}
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">
+                      {i.kind === 'payout' ? 'Paid out ' : 'Arrived '}
+                      {longDate(i.date)}
+                      {i.detail ? ` · ${i.detail}` : ''}
+                    </span>
+                  </span>
+                  <span className="tabular-nums">{money(i.amount)}</span>
+                </li>
+              ))}
+            </ul>
+            <Button busy={busy} onClick={() => onPick(o.subjects)}>
+              This is it
+            </Button>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }

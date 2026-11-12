@@ -56,6 +56,8 @@ export interface HospitableTransaction {
   id: string;
   type?: string | null;
   date?: string | null;
+  // A stay's share of a payout is in amount; the payout line itself has paid_out_amount.
+  amount?: { amount: number | null } | null;
   paid_out_amount?: { amount: number | null } | null;
   payout?: { id: string } | null;
   reservation?: { id: string } | null;

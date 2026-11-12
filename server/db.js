@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -458,6 +458,18 @@ const SCHEMA_V12 = `
   );
 `;
 
+// Deposits that could be made up of payouts or stays in more than one way. Worked out
+// again after every sync and import; the user settles them by linking one way.
+const SCHEMA_V13 = `
+  CREATE TABLE stay_conflicts (
+    subject TEXT NOT NULL,
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    options TEXT NOT NULL,
+    PRIMARY KEY (subject, transaction_id)
+  );
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -624,6 +636,7 @@ function migrate(db, file) {
     if (version < 10) db.exec(SCHEMA_V10);
     if (version < 11) db.exec(SCHEMA_V11);
     if (version < 12) db.exec(SCHEMA_V12);
+    if (version < 13) db.exec(SCHEMA_V13);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

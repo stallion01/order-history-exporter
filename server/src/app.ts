@@ -185,7 +185,13 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
   // Stays from Hospitable, and the deposits that paid for them.
   const stays = stayService({ db: db.raw, bank, secrets: options.secrets ?? null, fetchImpl: options.fetchImpl });
-  bank.onImport(() => stays.match());
+  bank.onImport(() => {
+    try {
+      stays.match();
+    } catch (err) {
+      app.log.warn({ err }, 'Matching stays to deposits failed');
+    }
+  });
   app.decorate('stays', stays);
 
   syncRoutes(app, db, () => correlate.matchOrders());

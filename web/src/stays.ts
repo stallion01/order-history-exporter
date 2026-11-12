@@ -32,7 +32,10 @@ export interface Stay {
   payout: number | null;
   note: string | null;
   paid: boolean;
-  payment: 'paid' | 'missing' | 'upcoming' | 'none';
+  // conflict: the deposit could be made up more than one way; due: on its way;
+  // nobank: before the bank records start.
+  payment: 'paid' | 'conflict' | 'due' | 'missing' | 'nobank' | 'upcoming' | 'none';
+  expectedOn: string;
   depositDate: string | null;
 }
 
@@ -52,7 +55,7 @@ export interface HospitableStatus {
 
 export interface StayList {
   stays: Stay[];
-  totals: { stays: number; nights: number; payout: number; paid: number; missing: number; missingCount: number; guestTotal: number };
+  totals: { stays: number; nights: number; payout: number; paid: number; missing: number; missingCount: number; conflictCount: number; due: number; noBank: number; noBankCount: number; bankStart: string | null; guestTotal: number };
   byProperty: { property: string; propertyId: string | null; stays: number; nights: number; payout: number; averageNightly: number | null; occupancy: number | null }[];
   options: { properties: { id: string; name: string }[]; platforms: string[]; years: string[] };
   status: HospitableStatus;
@@ -81,6 +84,28 @@ export interface StayDetail {
   }[];
   deposits: (DepositRow & { source: string })[];
   suggestions: (DepositRow & { exact: boolean })[];
+  conflicts: Conflict[];
+}
+
+export interface Conflict {
+  deposit: DepositRow;
+  options: { subjects: string[]; total: number; items: { subject: string; kind: 'stay' | 'payout'; id: string; label: string; date: string; detail: string; amount: number; stayIds: string[] }[] }[];
+}
+
+export interface AirbnbWeek {
+  week: string;
+  expected: number;
+  matched: number;
+  unmatched: number;
+  unclaimed: number;
+  status: 'paid' | 'conflict' | 'missing' | 'extra' | 'due' | 'nobank';
+  items: { kind: 'payout' | 'stay'; id: string; date: string; amount: number; deposit: { id: number; posted: string; amount: number } | null; stays: { id: string | null; guest: string; amount: number }[]; status: string }[];
+  extras: { id: number; posted: string; amount: number; conflict: boolean }[];
+}
+
+export interface AirbnbWeeks {
+  weeks: AirbnbWeek[];
+  totals: { expected: number; matched: number; unclaimed: number; weeks: number; weeksToCheck: number; bankStart: string | null };
 }
 
 export const PLATFORM_NAMES: Record<string, string> = { airbnb: 'Airbnb', vrbo: 'Vrbo', booking: 'Booking.com', direct: 'Direct' };

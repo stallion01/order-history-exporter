@@ -178,7 +178,16 @@ Each stay is linked to the deposit that paid for it:
 - **Airbnb:** Hospitable knows each payout, the account it went to and which stays it covered. A payout is linked to the deposit of the same amount a few days later in that account, and every stay it covered shows it.
 - **Vrbo, Booking.com and others:** Hospitable has no payout records, so a stay's expected payout is matched to a deposit of the same amount within the platform's usual timing. A deposit whose description names a different platform is never used.
 
-Only clear matches are linked automatically. Otherwise the stay's page offers the likely deposits, and one click links one. Unlinking by hand stops that deposit being offered again. On the Transactions page, a linked deposit shows its guest, or how many stays it paid for.
+Matching runs after every Hospitable check and every bank import:
+
+- Payouts and deposits of the same amount pair up in date order, so a repeated amount lands in the right week.
+- A deposit that is several payouts or stays added up is linked to all of them, when only one combination fits.
+- When a deposit adds up in more than one way, nothing is linked: the stays show **Conflict**, and the stay's page lists each possible combination with a **This is it** button.
+- Money due before your bank records start shows as **Before bank records**, and money paid out in the last week as **On its way**, so neither counts as missing.
+
+Otherwise the stay's page offers the likely deposits, and one click links one. Unlinking by hand stops that deposit being offered again. On the Transactions page, a linked deposit shows its guest, or how many stays it paid for.
+
+**Airbnb by week** on the Stays page sets each week's Airbnb payouts against the deposits found for them. Weeks with a missing deposit, a conflict, or an Airbnb deposit that matches nothing are flagged, and **Only weeks to check** hides the rest.
 
 Properties are kept apart on the Stays page for your own reporting, without making them separate businesses for tax.
 
