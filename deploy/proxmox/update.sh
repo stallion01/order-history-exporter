@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Updates Expense Hub to the latest version. Runs inside the container.
+# Updates Business Hub to the latest version. Runs inside the container.
 # The database is backed up first, and upgrades itself when the server starts.
 set -euo pipefail
 

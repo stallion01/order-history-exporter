@@ -205,7 +205,7 @@ export function cpaService(options: { raw: DatabaseSync; db: OrdersDb; bank: Ban
                 ? 'Between accounts'
                 : PAID_TO_CARD.test(t.description) || ACCOUNT_NUMBER_IN_PAYMENT.test(t.description)
                   ? 'Credit card payment'
-                  : 'Payment or transfer to an account not in Expense Hub';
+                  : 'Payment or transfer to an account not in Business Hub';
         return { posted: t.posted, from: t.account, to: to?.name ?? null, amount: -t.amount, kind, description: t.description };
       });
   }

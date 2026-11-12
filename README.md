@@ -1,11 +1,10 @@
-# Expense Hub and Order History Exporter
+# Business Hub and Order History Exporter
 
-A free, open-source way to keep your business expenses on your own server:
+A free, open-source way to keep your business income and expenses on your own server:
 
-- **Expense Hub** is a web app you host yourself, for example on Proxmox, and use from a computer or phone. It has a dashboard, orders, items with categories, and tax groups for your CPA, behind a sign-in with optional two-factor authentication.
-- **The Order History Exporter** Chrome extension collects your own purchase history from online stores into Expense Hub. Repeat runs read only what's new or missing. It can also export straight to a CSV file with no server.
+- **Business Hub** is a web app you host yourself, for example on Proxmox, and use from a computer or phone. It has a dashboard, bank and card transactions, receipts, short-term rental stays, orders, items with categories, and a year-end package for your CPA, behind a sign-in with optional two-factor authentication. (It was called Expense Hub; the service, folders and address on Proxmox keep the `expense-hub` name.)
+- **The Order History Exporter** Chrome extension collects your own purchase history from online stores into Business Hub. Repeat runs read only what's new or missing. It can also export straight to a CSV file with no server.
 
-Coming next: bank and credit card feeds (SimpleFIN, plus CSV and QFX import and export), receipt photos, matching charges to orders and receipts, and an annual CPA package.
 
 | Store | How it reads orders | Tested against live pages? |
 | --- | --- | --- |
@@ -23,7 +22,7 @@ Coming next: bank and credit card feeds (SimpleFIN, plus CSV and QFX import and 
 - Your orders are read in your own browser, using the accounts you're already signed in to.
 - There are no analytics or tracking, and no service run by this project. Your orders only go to the database server you set up, if you use one.
 - It never sees your password. If a store asks you to sign in, you do that yourself on the store's page.
-- The database holds your purchases, delivery addresses and the last four digits of your cards, unencrypted, so keep it somewhere private. It lives in `server/data/` (or `/var/lib/expense-hub` on Proxmox), which git ignores.
+- The database holds your purchases, delivery addresses, the last four digits of your cards and, if you connect Hospitable, your guests' names and contact details, unencrypted, so keep it somewhere private. It lives in `server/data/` (or `/var/lib/expense-hub` on Proxmox), which git ignores.
 - The web app needs a sign-in. Passwords are stored as scrypt hashes, sessions are stored hashed, and every change is written to an audit log. The extension's access token can only sync orders, not read reports.
 - In CSV-only mode, order data stays in memory until you close the page or download the file.
 
@@ -36,13 +35,13 @@ The extension isn't on the Chrome Web Store, so you load it from this folder:
 3. Click **Load unpacked** and select the repository folder (the one containing `manifest.json`).
 4. Pin the extension and click its icon to open the exporter.
 
-## Set up Expense Hub
+## Set up Business Hub
 
-The database is [SQLite](https://sqlite.org): a single file, with no database software to install or administer. Expense Hub's server looks after it and serves the web app. It needs [Node.js](https://nodejs.org) 22.13 or newer.
+The database is [SQLite](https://sqlite.org): a single file, with no database software to install or administer. Business Hub's server looks after it and serves the web app. It needs [Node.js](https://nodejs.org) 22.13 or newer.
 
 ### On Proxmox (recommended)
 
-On the Proxmox host, as root, download and run the installer. It creates a Debian 12 container with Expense Hub, a service that starts with the container, and nightly database backups:
+On the Proxmox host, as root, download and run the installer. It creates a Debian 12 container with Business Hub, a service that starts with the container, and nightly database backups:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/stallion01/order-history-exporter/main/deploy/proxmox/install.sh -o install.sh
@@ -60,7 +59,7 @@ Then turn on private access with [Tailscale](https://tailscale.com). It's free f
 pct exec CTID -- bash /opt/expense-hub/deploy/proxmox/enable-tailscale.sh
 ```
 
-Install the Tailscale app on your phone and computers, and open the `https://` address it prints. Expense Hub isn't reachable from the internet.
+Install the Tailscale app on your phone and computers, and open the `https://` address it prints. Business Hub isn't reachable from the internet.
 
 To update later:
 
@@ -95,7 +94,7 @@ The server prints an **access token**. Open the web app, enter that token as the
 1. Choose the stores and the period.
 2. Click **Start export**. A separate browser window opens and steps through your order pages. You can leave it running in the background, but don't close it.
 3. If a store asks you to sign in, enter a code sent by text or email, or complete a security check, do it in that window and press **Continue**. The extension can't do these for you or skip them.
-4. Press **Open reports**, or open Expense Hub.
+4. Press **Open reports**, or open Business Hub.
 
 Pages load one at a time with a pause between them, so a first run over a large history takes a while. Orders are saved as they're read, so you can stop at any time and carry on later. Turning off **Open each order** is much faster, but you lose item prices, tax, shipping, payment method and delivery address until a later run with it on.
 
@@ -110,7 +109,7 @@ Everything else is skipped. To read a period again regardless, for example after
 
 ### The web app
 
-Expense Hub works on a computer or a phone. On a phone, use your browser's **Add to Home Screen** to open it like an app. Pages are filtered by period, store, category, delivery ZIP, payment method or text, and filters stay in the address so a view can be bookmarked. Click a column heading to sort by it.
+Business Hub works on a computer or a phone. On a phone, use your browser's **Add to Home Screen** to open it like an app. Pages are filtered by period, store, category, delivery ZIP, payment method or text, and filters stay in the address so a view can be bookmarked. Click a column heading to sort by it.
 
 - **Dashboard:** bank and card totals, then store spending: tax, spending by month, category, store, payment method and delivery city, your most-bought items, and each store's sync status.
 - **Transactions:** every bank and card transaction. Set its category, business or personal, or mark it a transfer or ignored. See below.
@@ -167,6 +166,21 @@ On a phone, **Receipts → Take a photo** opens the camera; on a computer, **Upl
 Each receipt is read by Claude (model `claude-opus-5-5`), using your own Anthropic API key, added under **Settings → Reading receipts**; it costs roughly one or two cents a receipt. Only the receipt and your category names are sent to Anthropic. The key is stored encrypted like the SimpleFIN access, or can be set as `ANTHROPIC_API_KEY` in `/etc/expense-hub/env`. Without a key, receipts wait, and you can fill in their details yourself.
 
 A read receipt is matched to its card or bank transaction when the amount matches and the vendor or card agrees, within a few days of the receipt's date. Otherwise likely transactions are suggested, including a higher charge where a tip was added. A receipt uploaded before its charge reaches the bank is matched when the charge arrives. One paid in cash can be recorded as a cash purchase, in an account called Cash. A matched receipt's category is used for its transaction, after your own edits and rules. Receipts you haven't looked at are listed under **To check**. Receipts are shown by month, or grouped by vendor or category, and can be filtered by period, vendor and category; vendor names are tidied, so different spellings of one store count as one.
+
+### Stays
+
+If you rent out properties through Airbnb, Vrbo or Booking.com and manage them in [Hospitable](https://hospitable.com), Business Hub can bring in every stay. In Hospitable, open **Apps**, then **API access**, and add a personal access token with read access. Paste it under **Settings → Hospitable**. It is stored encrypted like the other keys, or can be set as `HOSPITABLE_TOKEN` in `/etc/expense-hub/env`. Tokens last a year. Business Hub only reads from Hospitable.
+
+The **Stays** page lists each reservation with the guest's name, phone and email (where the platform shares them), the property, dates, party and money: what the guest paid, the platform's fees and your payout. Hospitable is checked every six hours, or press **Check Hospitable now**. The page also shows totals and nights booked per property, and the stays whose money hasn't been seen in the bank yet.
+
+Each stay is linked to the deposit that paid for it:
+
+- **Airbnb:** Hospitable knows each payout, the account it went to and which stays it covered. A payout is linked to the deposit of the same amount a few days later in that account, and every stay it covered shows it.
+- **Vrbo, Booking.com and others:** Hospitable has no payout records, so a stay's expected payout is matched to a deposit of the same amount within the platform's usual timing. A deposit whose description names a different platform is never used.
+
+Only clear matches are linked automatically. Otherwise the stay's page offers the likely deposits, and one click links one. Unlinking by hand stops that deposit being offered again. On the Transactions page, a linked deposit shows its guest, or how many stays it paid for.
+
+Properties are kept apart on the Stays page for your own reporting, without making them separate businesses for tax.
 
 ### Categories
 

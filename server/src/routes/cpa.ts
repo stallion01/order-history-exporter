@@ -76,7 +76,7 @@ export function cpaRoutes(app: FastifyInstance, cpa: CpaService, correlate: Corr
   app.get('/api/cpa/workbook.xlsx', async (request, reply) => {
     const { year, entityId, scope } = scopeOf(request);
     audit(request, 'cpa.workbook', { year, entityId });
-    return send(reply, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', `Expense Hub ${year}${slug(scope)}.xlsx`, await buildWorkbook(yearData(year, entityId, scope)));
+    return send(reply, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', `Business Hub ${year}${slug(scope)}.xlsx`, await buildWorkbook(yearData(year, entityId, scope)));
   });
 
   app.get('/api/cpa/summary.pdf', async (request, reply) => {

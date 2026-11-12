@@ -2,7 +2,7 @@
   "name": "order-history-exporter",
   "version": "0.2.0",
   "private": true,
-  "description": "Expense Hub: a self-hosted app for business expenses, with a Chrome extension that syncs store orders.",
+  "description": "Business Hub: a self-hosted app for business income and expenses, with a Chrome extension that syncs store orders.",
   "license": "GPL-3.0-or-later",
   "engines": { "node": ">=22.13" },
   "workspaces": ["server", "web"],
@@ -10,7 +10,7 @@
     "build": "npm run build -w server && npm run build -w web",
     "server": "npm run build && npm start -w server",
     "server:network": "npm run build && node --disable-warning=ExperimentalWarning server/dist/index.js --network",
-    "test": "npm run build -w server && node --disable-warning=ExperimentalWarning --test tests/unit.test.js tests/server.test.js tests/auth.test.js tests/bank.test.js tests/receipts.test.js tests/correlate.test.js tests/cpa.test.js",
+    "test": "npm run build -w server && node --disable-warning=ExperimentalWarning --test tests/unit.test.js tests/server.test.js tests/auth.test.js tests/bank.test.js tests/receipts.test.js tests/correlate.test.js tests/cpa.test.js tests/stays.test.js",
     "test:e2e": "npm run build && node --disable-warning=ExperimentalWarning --test tests/e2e.test.js",
     "icons": "node scripts/make-icons.js"
   },

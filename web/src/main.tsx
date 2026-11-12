@@ -17,6 +17,8 @@ import { YearEnd } from './pages/YearEnd';
 import { Items } from './pages/Items';
 import { Orders } from './pages/Orders';
 import { Settings } from './pages/Settings';
+import { StayDetail } from './pages/StayDetail';
+import { Stays } from './pages/Stays';
 import { Setup as SetupScreen, SignIn } from './pages/SignIn';
 import type { SignedInUser } from './pages/SignIn';
 import { Tax } from './pages/Tax';
@@ -91,6 +93,8 @@ function App() {
         <Route path="/more" element={<More />} />
         <Route path="/receipts" element={<Receipts />} />
         <Route path="/receipts/:id" element={<ReceiptDetail meta={meta} />} />
+        <Route path="/stays" element={<Stays />} />
+        <Route path="/stays/:id" element={<StayDetail />} />
         <Route path="/orders" element={<Orders meta={meta} />} />
         <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
         <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />

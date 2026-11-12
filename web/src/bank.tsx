@@ -1,7 +1,7 @@
 // Pieces shared by the Transactions, Review and Accounts pages.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeftRight, Paperclip, Search, ShoppingCart, Unlink } from 'lucide-react';
+import { ArrowLeftRight, BedDouble, Paperclip, Search, ShoppingCart, Unlink } from 'lucide-react';
 import { get, post } from './api';
 import { money } from './format';
 import { Button, Input, cx } from './ui';
@@ -60,6 +60,8 @@ export interface Transaction {
   entitySource: string | null;
   shares: Share[];
   orders: { store: string; orderId: string; amount: number }[];
+  // Stays this deposit paid for, from Hospitable.
+  stays: { id: string; guest: string | null; property: string | null; arrival: string; departure: string }[];
 }
 
 export interface SimplefinStatus {
@@ -181,6 +183,16 @@ export function TxRow({
               <Link to={`/receipts/${tx.receiptId}`} className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline dark:text-emerald-400">
                 <Paperclip className="size-3" aria-hidden />
                 Receipt
+              </Link>
+            )}
+            {tx.stays.length > 0 && (
+              <Link
+                to={tx.stays.length === 1 ? `/stays/${tx.stays[0].id}` : `/stays?deposit=${tx.id}`}
+                className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline dark:text-emerald-400"
+                title={tx.stays.map((s) => `${s.guest || 'Guest'}, ${s.property || ''} ${s.arrival} to ${s.departure}`).join('; ')}
+              >
+                <BedDouble className="size-3" aria-hidden />
+                {tx.stays.length === 1 ? `Stay: ${tx.stays[0].guest || 'guest'}` : `${tx.stays.length} stays`}
               </Link>
             )}
             {(tx.orders.length > 0 || isStoreCharge) && (

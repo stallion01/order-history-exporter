@@ -59,7 +59,7 @@ export function YearEnd({ meta, forms }: { meta: Meta | null; forms: Forms }) {
   async function get(kind: 'package.zip' | 'workbook.xlsx' | 'summary.pdf') {
     setBusy(kind);
     setError('');
-    const names = { 'package.zip': `CPA package ${year}`, 'workbook.xlsx': `Expense Hub ${year}`, 'summary.pdf': `Year-end summary ${year}` };
+    const names = { 'package.zip': `CPA package ${year}`, 'workbook.xlsx': `Business Hub ${year}`, 'summary.pdf': `Year-end summary ${year}` };
     const ext = kind.split('.')[1];
     await download(`/api/cpa/${kind}?${scope}`, `${names[kind]}${entityName ? ` ${entityName}` : ''}.${ext}`).catch((e) => setError(e.message));
     setBusy('');

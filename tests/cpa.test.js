@@ -172,7 +172,7 @@ test('a category can be cost of goods sold', async () => {
 
 test('the workbook has every sheet, lines, income, assets and owner draws', async () => {
   const response = await call('/api/cpa/workbook.xlsx?year=2026');
-  assert.match(response.headers.get('content-disposition'), /Expense Hub 2026\.xlsx/);
+  assert.match(response.headers.get('content-disposition'), /Business Hub 2026\.xlsx/);
   const book = new ExcelJS.Workbook();
   await book.xlsx.load(Buffer.from(await response.arrayBuffer()));
   assert.deepEqual(book.worksheets.map((w) => w.name), ['Summary', 'Monthly by category', 'Transactions', 'Income', 'Assets', 'Transfers', 'Needs review']);
@@ -197,7 +197,7 @@ test('the PDF and the package with receipts named by date, vendor and amount', a
   const response = await call('/api/cpa/package.zip?year=2026');
   assert.match(response.headers.get('content-disposition'), /CPA package 2026\.zip/);
   const entries = unzip(Buffer.from(await response.arrayBuffer()));
-  assert.deepEqual(entries.map((e) => e.name), ['Year-end summary 2026.pdf', 'Expense Hub 2026.xlsx', 'receipts/2026-03-12_Shell_40.00.jpg']);
+  assert.deepEqual(entries.map((e) => e.name), ['Year-end summary 2026.pdf', 'Business Hub 2026.xlsx', 'receipts/2026-03-12_Shell_40.00.jpg']);
 
   // One entity's package: its own lines only.
   const one = unzip(Buffer.from(await (await call(`/api/cpa/package.zip?year=2026&entity=${elm}`)).arrayBuffer()));

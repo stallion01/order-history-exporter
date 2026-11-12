@@ -1,7 +1,7 @@
 // The app frame: a sidebar on wide screens, a tab bar along the bottom on phones.
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { ArrowLeftRight, FileCheck2, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, Upload, Wallet } from 'lucide-react';
+import { ArrowLeftRight, BedDouble, FileCheck2, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, Upload, Wallet } from 'lucide-react';
 import { cx } from './ui';
 
 export const NAV = [
@@ -9,6 +9,7 @@ export const NAV = [
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight, phone: true },
   { to: '/review', label: 'Review', icon: Inbox, phone: true },
   { to: '/receipts', label: 'Receipts', icon: Receipt, phone: true },
+  { to: '/stays', label: 'Stays', icon: BedDouble },
   { to: '/accounts', label: 'Accounts', icon: Landmark },
   { to: '/import', label: 'Import', icon: Upload },
   { to: '/orders', label: 'Orders', icon: Package },
@@ -27,7 +28,7 @@ export function Layout({ username, onSignOut, children }: { username: string; on
       <aside className="hidden border-r border-slate-200 bg-slate-900 text-slate-100 md:sticky md:top-0 md:flex md:h-dvh md:flex-col md:self-start md:overflow-y-auto dark:border-slate-800">
         <div className="flex items-center gap-2 px-5 py-5">
           <Wallet className="size-6 text-emerald-400" aria-hidden />
-          <span className="text-lg font-semibold tracking-tight">Expense Hub</span>
+          <span className="text-lg font-semibold tracking-tight">Business Hub</span>
         </div>
         <nav aria-label="Main" className="flex-1 space-y-1 px-3">
           {NAV.map(({ to, label, icon: Icon, end }) => (
@@ -59,7 +60,7 @@ export function Layout({ username, onSignOut, children }: { username: string; on
         <header className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200 bg-slate-900 px-4 py-3 text-white md:hidden dark:border-slate-800">
           <span className="flex items-center gap-2 font-semibold">
             <Wallet className="size-5 text-emerald-400" aria-hidden />
-            Expense Hub
+            Business Hub
           </span>
           <button type="button" onClick={onSignOut} className="inline-flex items-center gap-1.5 text-sm text-slate-300" aria-label="Sign out">
             <LogOut className="size-4" aria-hidden />

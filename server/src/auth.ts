@@ -95,7 +95,7 @@ export function checkTotp(secret: string, code: string, lastStep: number, now = 
   return null;
 }
 
-export function totpUri(secret: string, username: string, issuer = 'Expense Hub'): string {
+export function totpUri(secret: string, username: string, issuer = 'Business Hub'): string {
   const label = encodeURIComponent(`${issuer}:${username}`);
   return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=${TOTP_STEP_SECONDS}`;
 }

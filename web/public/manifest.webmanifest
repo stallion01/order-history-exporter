@@ -1,6 +1,6 @@
 {
-  "name": "Expense Hub",
-  "short_name": "Expenses",
+  "name": "Business Hub",
+  "short_name": "Business",
   "description": "Business expenses, receipts and reports, hosted on your own server.",
   "start_url": "/",
   "scope": "/",

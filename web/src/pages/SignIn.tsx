@@ -15,7 +15,7 @@ function Shell({ title, subtitle, children }: { title: string; subtitle: string;
       <div className="w-full max-w-sm">
         <div className="mb-6 flex items-center justify-center gap-2 text-white">
           <Wallet className="size-7 text-emerald-400" aria-hidden />
-          <span className="text-xl font-semibold tracking-tight">Expense Hub</span>
+          <span className="text-xl font-semibold tracking-tight">Business Hub</span>
         </div>
         <div className="rounded-lg bg-white p-6 shadow-xl dark:bg-slate-900 dark:ring-1 dark:ring-slate-800">
           <h1 className="text-lg font-semibold">{title}</h1>

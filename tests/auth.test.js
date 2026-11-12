@@ -130,7 +130,7 @@ test('two-factor setup, sign-in with a code, and turning it off', async () => {
   try {
     const { cookie } = await s.request('/api/auth/setup', { setupCode: 'first-token', username: 'me', password: PASSWORD });
     const start = await s.request('/api/auth/totp/start', {}, cookie);
-    assert.match(start.body.uri, /^otpauth:\/\/totp\/Expense%20Hub%3Ame\?secret=/);
+    assert.match(start.body.uri, /^otpauth:\/\/totp\/Business%20Hub%3Ame\?secret=/);
     assert.match(start.body.qrSvg, /^<svg/);
     const secret = start.body.secret;
     const step = () => Math.floor(Date.now() / 30000);

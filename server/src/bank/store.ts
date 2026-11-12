@@ -727,6 +727,15 @@ export function createBankStore(db: DatabaseSync) {
             return { entityId: Number(entityId), percent: Number(percent) };
           })
       : [],
+    stays: row.linked_stays
+      ? String(row.linked_stays)
+          .split('\u0001')
+          .map((one) => {
+            const [id, guest, property, arrival, departure] = one.split('\u0002');
+            return { id, guest: guest || null, property: property || null, arrival, departure };
+          })
+          .sort((a, b) => a.arrival.localeCompare(b.arrival))
+      : [],
     orders: row.linked_orders
       ? String(row.linked_orders)
           .split('\u0001')
@@ -752,7 +761,11 @@ export function createBankStore(db: DatabaseSync) {
                 (SELECT r.id FROM receipts r WHERE r.transaction_id = t.id ORDER BY r.id LIMIT 1) AS receipt_id,
                 (SELECT GROUP_CONCAT(es.entity_id || ':' || es.percent) FROM tx_entity_shares es WHERE es.transaction_id = t.id) AS shares,
                 (SELECT GROUP_CONCAT(l.store || char(2) || l.order_id || char(2) || l.amount, char(1)) FROM order_links l WHERE l.transaction_id = t.id) AS linked_orders,
-                (SELECT GROUP_CONCAT(DISTINCT s.source) FROM bank_tx_sources s WHERE s.transaction_id = t.id) AS sources
+                (SELECT GROUP_CONCAT(DISTINCT s.source) FROM bank_tx_sources s WHERE s.transaction_id = t.id) AS sources,
+                (SELECT GROUP_CONCAT(st.id || char(2) || TRIM(COALESCE(st.guest_first, '') || ' ' || COALESCE(st.guest_last, '')) || char(2) || COALESCE(sp.name, '') || char(2) || st.arrival || char(2) || st.departure, char(1))
+                   FROM stays st LEFT JOIN stay_properties sp ON sp.id = st.property_id
+                   WHERE st.id IN (SELECT d.stay_id FROM stay_deposits d WHERE d.transaction_id = t.id)
+                      OR st.id IN (SELECT l.stay_id FROM stay_payout_lines l JOIN stay_payouts po ON po.id = l.payout_id WHERE po.transaction_id = t.id)) AS linked_stays
          ${base.replace('JOIN bank_accounts a ON a.id = t.account_id', 'JOIN bank_accounts a ON a.id = t.account_id LEFT JOIN bank_transactions p ON p.id = t.transfer_id LEFT JOIN bank_accounts pa ON pa.id = p.account_id')}
          ORDER BY ${column} ${order}, t.posted DESC, t.id DESC ${limit}`
       )
@@ -820,6 +833,8 @@ export function createBankStore(db: DatabaseSync) {
     db.prepare('UPDATE OR IGNORE order_links SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
     db.prepare('UPDATE OR IGNORE order_link_rejections SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
     db.prepare('UPDATE OR IGNORE assets SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
+    db.prepare('UPDATE stay_payouts SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
+    db.prepare('UPDATE OR IGNORE stay_deposits SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
     const both = db.prepare('SELECT * FROM bank_transactions WHERE id = ?');
     const from = both.get(w) as Row;
     const to = both.get(k) as Row;

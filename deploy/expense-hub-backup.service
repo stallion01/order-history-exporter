@@ -1,5 +1,5 @@
 [Unit]
-Description=Back up the Expense Hub database
+Description=Back up the Business Hub database
 
 [Service]
 Type=oneshot

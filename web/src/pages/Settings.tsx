@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Copy, Eye, KeyRound, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
+import { BedDouble, Copy, Eye, KeyRound, Plus, RefreshCw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import type { HospitableStatus } from '../stays';
+import { plural } from '../format';
 import { get, post, useApi } from '../api';
 import { Banner, Button, Card, Confirm, Field, Input, PageHeader, Select } from '../ui';
 import type { Meta } from '../filters';
@@ -434,6 +437,78 @@ function ReceiptReaderCard() {
   );
 }
 
+function HospitableCard() {
+  const status = useApi<HospitableStatus>('/api/settings/hospitable');
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function run(path: string, body: unknown = {}) {
+    setBusy(true);
+    setError('');
+    try {
+      const reply = await post<{ result?: { errors: string[] } }>(path, body);
+      if (reply.result?.errors.length) setError(reply.result.errors.join(' '));
+      setToken('');
+      status.reload();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    setBusy(false);
+  }
+  const s = status.data;
+  return (
+    <Card title="Hospitable">
+      {error && <Banner>{error}</Banner>}
+      <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
+        Brings in your Airbnb, Vrbo and Booking.com stays, with each guest and the payout, and links them to the deposits in your bank. Read only: nothing is changed in Hospitable.
+      </p>
+      {s?.connected ? (
+        <div className="space-y-3 text-sm">
+          <div className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400">
+            <BedDouble className="size-4" aria-hidden />
+            Connected{s.fromEnvironment ? ' (from the server settings file)' : ''}: {plural(s.stays, 'stay')} at {plural(s.properties, 'property').replace('propertys', 'properties')}
+          </div>
+          <p className="text-slate-600 dark:text-slate-400">
+            {s.lastSuccess ? `Last checked ${new Date(s.lastSuccess).toLocaleString()}. ` : ''}Checked every six hours. {s.payouts ? `${s.payoutsLinked} of ${plural(s.payouts, 'Airbnb payout')} matched to a deposit.` : ''}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button busy={busy} onClick={() => run('/api/stays/sync')}>
+              <RefreshCw className="size-4" aria-hidden />
+              Check now
+            </Button>
+            <Link to="/stays" className="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+              Open stays
+            </Link>
+            {!s.fromEnvironment && (
+              <Button variant="danger" busy={busy} onClick={() => run('/api/settings/hospitable/delete')}>
+                Remove token
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <form
+          className="space-y-3"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            run('/api/settings/hospitable', { token });
+          }}
+        >
+          <Field label="Hospitable access token">
+            <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" placeholder="Paste the token" />
+          </Field>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            In Hospitable, open Apps, then API access, and add a personal access token with read access, named Business Hub. It's stored encrypted on your server and never shown again. Tokens last a year.
+          </p>
+          <Button type="submit" variant="primary" busy={busy} disabled={!token.trim() || s?.canStore === false}>
+            Connect
+          </Button>
+        </form>
+      )}
+    </Card>
+  );
+}
+
 export function Settings({ user, meta, onUserChange, onSignedOut, onMetaChange }: { user: SignedInUser; meta: Meta | null; onUserChange: () => void; onSignedOut: () => void; onMetaChange: () => void }) {
   return (
     <>
@@ -442,6 +517,7 @@ export function Settings({ user, meta, onUserChange, onSignedOut, onMetaChange }
         <TwoFactorCard user={user} onChange={onUserChange} />
         <ExtensionCard />
         <ReceiptReaderCard />
+        <HospitableCard />
         <PasswordCard onSignedOut={onSignedOut} />
         <EntitiesCard entities={meta?.entities || []} onChange={onMetaChange} />
         <PlacesCard onChange={onMetaChange} entities={meta?.entities || []} />

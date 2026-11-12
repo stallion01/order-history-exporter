@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates a Debian 12 container (LXC) on Proxmox and installs Expense Hub in it.
+# Creates a Debian 12 container (LXC) on Proxmox and installs Business Hub in it.
 # Run this on the Proxmox host, as root.
 #
 # Settings (optional, as environment variables):
@@ -71,7 +71,7 @@ for _ in $(seq 1 30); do
 done
 pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1 || die "The container has no network. Check the bridge ($BRIDGE) and DHCP."
 
-say "Installing Expense Hub (this takes a few minutes)"
+say "Installing Business Hub (this takes a few minutes)"
 pct exec "$CTID" -- bash -c "apt-get update -qq && apt-get install -y -qq git ca-certificates >/dev/null"
 pct exec "$CTID" -- git clone --depth 1 --branch "$BRANCH" "$REPO" /opt/expense-hub
 pct exec "$CTID" -- bash /opt/expense-hub/deploy/proxmox/setup-in-container.sh
@@ -86,7 +86,7 @@ if [ -n "$IMPORT_DIR" ]; then
 fi
 
 IP="$(pct exec "$CTID" -- hostname -I | awk '{print $1}')"
-say "Done. Container $CTID is running Expense Hub."
+say "Done. Container $CTID is running Business Hub."
 cat <<EOF
 
 Next steps:

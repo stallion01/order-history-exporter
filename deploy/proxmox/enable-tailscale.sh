@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Puts Expense Hub on your tailnet with HTTPS. Runs inside the container.
+# Puts Business Hub on your tailnet with HTTPS. Runs inside the container.
 # Your tailnet needs MagicDNS and HTTPS certificates turned on
 # (Tailscale admin console > DNS).
 set -euo pipefail
@@ -25,5 +25,5 @@ fi
 systemctl restart expense-hub
 
 echo
-echo "Expense Hub:  https://$NAME"
+echo "Business Hub:  https://$NAME"
 echo "Open it on any device signed in to your tailnet. It isn't reachable from the internet."

@@ -47,7 +47,7 @@ export function receiptFileName(r: { date: string | null; vendor: string | null;
 
 export async function buildWorkbook(data: YearData): Promise<Buffer> {
   const book = new ExcelJS.Workbook();
-  book.creator = 'Expense Hub';
+  book.creator = 'Business Hub';
   book.created = data.generated;
 
   const sheet = (name: string, columns: { header: string; key: string; width: number; money?: boolean }[]) => {
@@ -66,7 +66,7 @@ export async function buildWorkbook(data: YearData): Promise<Buffer> {
   summary.columns = [{ width: 52 }, { width: 18, style: { numFmt: MONEY } }];
   summary.addRow([`Year-end summary ${data.year}`]).font = { bold: true, size: 14 };
   summary.addRow([data.scope]);
-  summary.addRow([`Prepared ${data.generated.toISOString().slice(0, 10)} from bank and card transactions in Expense Hub. Store charges matched to orders are split by item.`]);
+  summary.addRow([`Prepared ${data.generated.toISOString().slice(0, 10)} from bank and card transactions in Business Hub. Store charges matched to orders are split by item.`]);
   for (const g of data.summary) {
     summary.addRow([]);
     summary.addRow([`${g.entity} — ${formName(g.form)}`]).font = { bold: true, size: 12 };
@@ -216,7 +216,7 @@ export async function buildWorkbook(data: YearData): Promise<Buffer> {
 
 export function buildPdf(data: YearData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'LETTER', margin: 54, info: { Title: `Year-end summary ${data.year}`, Author: 'Expense Hub' } });
+    const doc = new PDFDocument({ size: 'LETTER', margin: 54, info: { Title: `Year-end summary ${data.year}`, Author: 'Business Hub' } });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -239,7 +239,7 @@ export function buildPdf(data: YearData): Promise<Buffer> {
     };
 
     doc.font('Helvetica-Bold').fontSize(18).text(`Year-end summary ${data.year}`);
-    doc.font('Helvetica').fontSize(10).fillColor('#475569').text(`${data.scope}. Prepared ${data.generated.toISOString().slice(0, 10)} from bank and card records in Expense Hub.`);
+    doc.font('Helvetica').fontSize(10).fillColor('#475569').text(`${data.scope}. Prepared ${data.generated.toISOString().slice(0, 10)} from bank and card records in Business Hub.`);
     doc.text('Store charges matched to their orders are split by item. Personal spending and transfers between accounts are left out.');
     doc.fillColor('#000').moveDown();
 
@@ -309,7 +309,7 @@ export async function buildPackage(data: YearData, receipts: ReturnType<CpaServi
   const [xlsx, pdf] = await Promise.all([buildWorkbook(withNames), buildPdf(withNames)]);
   return zip([
     { name: `Year-end summary ${data.year}.pdf`, data: pdf },
-    { name: `Expense Hub ${data.year}.xlsx`, data: xlsx },
+    { name: `Business Hub ${data.year}.xlsx`, data: xlsx },
     ...files,
   ]);
 }

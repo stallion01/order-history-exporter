@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -372,6 +372,92 @@ const SCHEMA_V11 = `
   UPDATE receipts SET checked_by = 'user' WHERE checked = 1;
 `;
 
+// Stays from Hospitable: the properties, each reservation with its guest and money,
+// Airbnb's payouts and what each paid for, and which bank deposit brought the money in.
+const SCHEMA_V12 = `
+  CREATE TABLE stay_properties (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    public_name TEXT,
+    city TEXT,
+    state TEXT,
+    synced_at TEXT NOT NULL
+  );
+
+  CREATE TABLE stays (
+    id TEXT PRIMARY KEY,
+    code TEXT,
+    platform TEXT NOT NULL,
+    property_id TEXT REFERENCES stay_properties (id) ON DELETE SET NULL,
+    status TEXT NOT NULL,
+    booked_at TEXT,
+    arrival TEXT NOT NULL,
+    departure TEXT NOT NULL,
+    check_in TEXT,
+    check_out TEXT,
+    nights INTEGER NOT NULL DEFAULT 0,
+    guest_first TEXT,
+    guest_last TEXT,
+    guest_email TEXT,
+    guest_phone TEXT,
+    guest_location TEXT,
+    adults INTEGER,
+    children INTEGER,
+    infants INTEGER,
+    pets INTEGER,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    guest_total REAL,
+    accommodation REAL,
+    cleaning REAL,
+    host_fees REAL,
+    taxes REAL,
+    payout REAL,
+    financials TEXT,
+    note TEXT,
+    synced_at TEXT NOT NULL
+  );
+  CREATE INDEX stays_arrival ON stays (arrival);
+
+  CREATE TABLE stay_payouts (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL,
+    amount REAL NOT NULL,
+    paid_on TEXT NOT NULL,
+    bank_account TEXT,
+    transaction_id INTEGER REFERENCES bank_transactions (id) ON DELETE SET NULL,
+    match_source TEXT,
+    synced_at TEXT NOT NULL
+  );
+  CREATE INDEX stay_payouts_tx ON stay_payouts (transaction_id);
+
+  CREATE TABLE stay_payout_lines (
+    id TEXT PRIMARY KEY,
+    payout_id TEXT NOT NULL REFERENCES stay_payouts (id) ON DELETE CASCADE,
+    stay_id TEXT REFERENCES stays (id) ON DELETE SET NULL,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    posted TEXT
+  );
+  CREATE INDEX stay_payout_lines_stay ON stay_payout_lines (stay_id);
+
+  -- Deposits for stays Hospitable has no payout for (Vrbo, Booking.com, direct).
+  CREATE TABLE stay_deposits (
+    stay_id TEXT NOT NULL REFERENCES stays (id) ON DELETE CASCADE,
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (stay_id, transaction_id)
+  );
+  CREATE INDEX stay_deposits_tx ON stay_deposits (transaction_id);
+
+  -- Matches the user turned down, so they aren't offered or made again.
+  CREATE TABLE stay_link_rejections (
+    subject TEXT NOT NULL,
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    PRIMARY KEY (subject, transaction_id)
+  );
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -537,6 +623,7 @@ function migrate(db, file) {
     if (version < 9) db.exec(SCHEMA_V9);
     if (version < 10) db.exec(SCHEMA_V10);
     if (version < 11) db.exec(SCHEMA_V11);
+    if (version < 12) db.exec(SCHEMA_V12);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

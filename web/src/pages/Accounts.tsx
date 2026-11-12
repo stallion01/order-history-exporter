@@ -305,7 +305,7 @@ function AccountCard({ account, entities, onChange }: { account: Account; entiti
         </Button>
       </div>
       <Confirm open={confirm} title={`Remove ${account.name}?`} confirmLabel="Remove account" busy={busy} onConfirm={remove} onCancel={() => setConfirm(false)}>
-        This deletes the account and its {plural(account.transactions, 'transaction')} from Expense Hub, including your edits to them. It can't be undone, except by restoring a backup.
+        This deletes the account and its {plural(account.transactions, 'transaction')} from Business Hub, including your edits to them. It can't be undone, except by restoring a backup.
         {account.simplefinId && ' While SimpleFIN is connected, the next update adds the account back; remove it in SimpleFIN Bridge to stop that.'}
       </Confirm>
     </Card>

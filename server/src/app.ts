@@ -26,6 +26,9 @@ import type { OrdersDb } from './legacy';
 import { HttpError } from './params';
 import { authRoutes, SESSION_COOKIE } from './routes/auth';
 import { reportRoutes } from './routes/reports';
+import { stayRoutes } from './routes/stays';
+import { stayService } from './stays/service';
+import type { StayService } from './stays/service';
 import { SYNC_ROUTES, syncRoutes } from './routes/sync';
 import { isPrivateAddress, sameSecret } from './security';
 
@@ -59,6 +62,7 @@ declare module 'fastify' {
   interface FastifyInstance {
     simplefin: SimplefinService | null;
     receipts: ReceiptService;
+    stays: StayService;
   }
 }
 
@@ -179,12 +183,18 @@ export function buildApp(options: AppOptions): FastifyInstance {
     if (request.method === 'POST' && reply.statusCode < 400 && /^\/api\/(items\/(category|status)|categories)/.test(request.url)) correlate.refreshLinked();
   });
 
+  // Stays from Hospitable, and the deposits that paid for them.
+  const stays = stayService({ db: db.raw, bank, secrets: options.secrets ?? null, fetchImpl: options.fetchImpl });
+  bank.onImport(() => stays.match());
+  app.decorate('stays', stays);
+
   syncRoutes(app, db, () => correlate.matchOrders());
   bankRoutes(app, bank, simplefin, categoryNames, () => correlate.entities().map((e) => e.id));
   correlationRoutes(app, correlate, bank, db);
   cpaRoutes(app, cpaService({ raw: db.raw, db, bank, correlate, receipts }), correlate);
   receiptRoutes(app, receipts, categoryNames);
   reportRoutes(app, db);
+  stayRoutes(app, stays);
   authRoutes(app, store, tokens);
 
   const webRoot = options.webRoot;

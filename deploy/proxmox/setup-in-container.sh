@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs Node.js, builds Expense Hub and starts it as a service. Runs inside the
+# Installs Node.js, builds Business Hub and starts it as a service. Runs inside the
 # container (install.sh calls it). Safe to run again.
 set -euo pipefail
 
@@ -22,7 +22,7 @@ install -d -m 700 -o expense-hub -g expense-hub "$DATA_DIR"
 install -d -m 755 "$ENV_DIR"
 if [ ! -f "$ENV_DIR/env" ]; then
   cat >"$ENV_DIR/env" <<EOF
-# Expense Hub settings. Restart after changing: systemctl restart expense-hub
+# Business Hub settings. Restart after changing: systemctl restart expense-hub
 OHE_DATA_DIR=$DATA_DIR
 OHE_HOST=127.0.0.1
 OHE_PORT=8787
@@ -47,4 +47,4 @@ if ! command -v tailscale >/dev/null; then
   curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
 fi
 
-echo "Expense Hub is running on 127.0.0.1:8787 inside this container."
+echo "Business Hub is running on 127.0.0.1:8787 inside this container."

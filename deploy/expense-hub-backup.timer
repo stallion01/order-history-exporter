@@ -1,5 +1,5 @@
 [Unit]
-Description=Nightly Expense Hub backup
+Description=Nightly Business Hub backup
 
 [Timer]
 OnCalendar=*-*-* 03:15:00

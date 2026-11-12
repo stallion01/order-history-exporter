@@ -1,4 +1,4 @@
-// Starts Expense Hub. See the README for settings.
+// Starts Business Hub. See the README for settings.
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildApp } from './app';
@@ -40,7 +40,7 @@ async function main() {
   const local = `${scheme}://127.0.0.1:${config.port}`;
   const main = config.publicHost ? `https://${config.publicHost}` : addresses.length ? `${scheme}://${addresses[0]}:${config.port}` : local;
   const setupNeeded = !db.raw.prepare('SELECT 1 FROM users LIMIT 1').get();
-  console.log('Expense Hub');
+  console.log('Business Hub');
   console.log(`  Database:     ${path.join(config.dataDir, 'orders.db')}`);
   console.log(`  Web app:      ${main}`);
   for (const address of addresses.slice(1)) console.log(`                ${scheme}://${address}:${config.port}`);
@@ -60,12 +60,22 @@ async function main() {
       .then((r) => console.log(`SimpleFIN: ${r.accounts} accounts, ${r.added} new transactions${r.errors.length ? `, problems: ${r.errors.join('; ')}` : ''}`))
       .catch((err) => console.error('SimpleFIN sync failed:', err.message));
   };
+  // Stays from Hospitable every few hours, when connected.
+  const staysIfDue = () => {
+    if (!app.stays.due()) return;
+    app.stays
+      .sync()
+      .then((r) => console.log(`Hospitable: ${r.stays} stays, ${r.linked} newly linked to deposits${r.errors.length ? `, problems: ${r.errors.join('; ')}` : ''}`))
+      .catch((err) => console.error('Hospitable sync failed:', err.message));
+  };
   const timer = setInterval(() => {
     syncIfDue();
+    staysIfDue();
     // Receipts that couldn't be read earlier (no key yet, or Anthropic busy).
     app.receipts.kick().catch((err) => console.error('Reading receipts failed:', err.message));
   }, SYNC_CHECK_MS);
   setTimeout(syncIfDue, 60 * 1000);
+  setTimeout(staysIfDue, 90 * 1000);
 
   const shutDown = async () => {
     clearInterval(timer);
