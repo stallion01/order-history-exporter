@@ -378,8 +378,37 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
       totals: { spend: sum(() => true), business: sum((l) => l.status === 'business'), personal: sum((l) => l.status === 'personal'), undecided: sum((l) => !l.status) },
       byCategory: group((l) => l.category, (k) => k),
       byEntity: group((l) => (l.entityId ? String(l.entityId) : 'none'), (k) => (k === 'none' ? 'Not assigned' : names.get(Number(k)) || 'Removed')),
+      byMonth: monthly(filters, lines),
     };
   }
+
+  // Spending (less refunds) and income for each month, oldest first, with income split
+  // by where it came from. Transfers are in neither.
+  function monthly(filters: TxFilters, lines: SpendLine[]) {
+    type Month = { month: string; spend: number; income: number; sources: Record<IncomeSource, number> };
+    const months = new Map<string, Month>();
+    const at = (month: string) =>
+      months.get(month) || months.set(month, { month, spend: 0, income: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, other: 0 } }).get(month)!;
+    for (const line of lines) at(line.posted.slice(0, 7)).spend += line.amount;
+    for (const tx of bank.listTransactions({ ...filters, kind: 'normal', direction: 'in' }).transactions) {
+      const m = at(tx.posted.slice(0, 7));
+      m.income += tx.amount;
+      m.sources[incomeSource(`${tx.payee || ''} ${tx.description}`)] += tx.amount;
+    }
+    return [...months.values()]
+      .map((m) => ({
+        ...m,
+        spend: cents(m.spend),
+        income: cents(m.income),
+        sources: Object.fromEntries(Object.entries(m.sources).map(([k, v]) => [k, cents(v)])) as Record<IncomeSource, number>,
+      }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+  }
+
+  // Where a payout came from, for showing rental income by platform.
+  type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'other';
+  const incomeSource = (text: string): IncomeSource =>
+    /airbnb/i.test(text) ? 'airbnb' : /vrbo|homeaway/i.test(text) ? 'vrbo' : /booking\.com|booking com/i.test(text) ? 'booking' : 'other';
 
   // A transaction's split, for showing it.
   function splitOf(txId: number) {

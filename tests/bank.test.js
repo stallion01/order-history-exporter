@@ -565,6 +565,25 @@ test('paying a card from checking is a transfer even when the card never shows t
   assert.deepEqual(spending.transactions.map((t) => t.amount).sort((a, b) => a - b), [-300, -60]);
 });
 
+test('spending and income by month, with income split by platform', async () => {
+  const csv = `Date,Description,Amount
+04/02/2026,AIRBNB 1234 DES:AIRBNB ID:M-TESTPAYOUT010,500.00
+04/03/2026,Homeaway.com DES:Hom ID:TESTPAYOUT011,300.00
+04/04/2026,Booking.com DES:ST-TEST012 ID:ST-TEST0012AAAA,200.00
+04/05/2026,MOBILE DEPOSIT,50.00
+04/06/2026,TRASHCO SPRINGFIELD,-100.00
+05/02/2026,AIRBNB 1234 DES:AIRBNB ID:M-TESTPAYOUT013,250.00
+05/09/2026,POWERCO DES:BILL PAY ID:900000000009,-1000.00
+`;
+  const mapping = { date: 0, description: 1, amount: 2, debit: null, credit: null, memo: null, reference: null, flip: false, dateOrder: 'mdy' };
+  const { accountId } = await post('/api/bank/import', { content: csv, fileName: 'months.csv', mapping, newAccount: { name: 'Months Checking', kind: 'checking', owner: 'business' } });
+  const { byMonth } = await get(`/api/bank/spending?account=${accountId}&preset=all`);
+  assert.deepEqual(byMonth, [
+    { month: '2026-04', spend: 100, income: 1050, sources: { airbnb: 500, vrbo: 300, booking: 200, other: 50 } },
+    { month: '2026-05', spend: 1000, income: 250, sources: { airbnb: 250, vrbo: 0, booking: 0, other: 0 } },
+  ]);
+});
+
 test('exports: CSV with every column, and an OFX that imports back as nothing new', async () => {
   const csv = await (await call(`/api/bank/export.csv?account=${cardId}`)).text();
   assert.match(csv.split('\r\n')[0], /Date,Account,Payee,Description,Memo,Amount/);

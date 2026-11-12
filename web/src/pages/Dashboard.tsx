@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useApi } from '../api';
-import { MonthlyBars, RankBars } from '../charts';
-import type { Row } from '../charts';
+import { MonthlyBars, MonthlyInOut, RankBars } from '../charts';
+import type { InOutMonth, Row } from '../charts';
 import { FilterBar, useFilters } from '../filters';
 import type { Meta } from '../filters';
 import { when } from '../bank';
@@ -57,7 +57,7 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
           </div>
           {caveats.length > 0 && <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{caveats.join(' ')}</p>}
 
-          <Card title="Spending by month" className="mt-5">
+          <Card title="Store orders by month" className="mt-5">
             <MonthlyBars rows={data.byMonth} onSelect={openMonth} />
           </Card>
 
@@ -160,7 +160,21 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
   if (range.to) period.set('to', range.to);
   for (const y of range.years || []) period.append('years', y);
   const totals = useApi<{ total: number; moneyOut: number; moneyIn: number }>(`/api/bank/transactions?${period}&limit=1`);
-  const spending = useApi<{ byCategory: { key: string; label: string; spend: number }[]; byEntity: { key: string; label: string; spend: number }[] }>(`/api/bank/spending?${period}`);
+  const spending = useApi<{ byCategory: { key: string; label: string; spend: number }[]; byEntity: { key: string; label: string; spend: number }[]; byMonth: InOutMonth[] }>(
+    `/api/bank/spending?${period}`
+  );
+  const navigate = useNavigate();
+  // A month's transactions, keeping the dashboard's other filters.
+  const openMonth = (month: string) => {
+    const [year, m] = month.split('-').map(Number);
+    const last = new Date(year, m, 0).getDate();
+    const next = params();
+    for (const key of ['preset', 'from', 'to', 'years']) next.delete(key);
+    next.set('preset', 'custom');
+    next.set('from', `${month}-01`);
+    next.set('to', `${month}-${String(last).padStart(2, '0')}`);
+    navigate(`/transactions?${next}`);
+  };
   const asRows = (rows: { key: string; label: string; spend: number }[] = []) => rows.map((r) => ({ label: r.label, key: r.key, spend: r.spend }));
   const txLink = (key: string, value: string) => `/transactions?${new URLSearchParams([...params(), [key, value]])}`;
   const link = 'text-sm text-emerald-700 hover:underline dark:text-emerald-400';
@@ -206,6 +220,11 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
           hint="Need a category, or business or personal"
         />
         <Stat label="Accounts" value={whole(accounts.data.accounts.length)} hint={sf?.connected ? `SimpleFIN updated ${when(sf.lastSuccess)}` : 'From imported files'} />
+      </div>
+      <div className="mt-5">
+        <h3 className="mb-2 text-sm font-semibold">Spending and income by month</h3>
+        <MonthlyInOut rows={spending.data?.byMonth ?? []} onSelect={openMonth} />
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Spending is net of refunds. Transfers between your accounts, including card payments, are in neither.</p>
       </div>
       <div className="mt-5 grid gap-5 lg:grid-cols-2">
         <div>
