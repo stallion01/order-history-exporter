@@ -93,6 +93,10 @@ const SPENDING_HINTS: [RegExp, string][] = [
   [/\bcpa\b|accounting|bookkeep|attorney|law office|legal/i, 'Professional Services'],
 ];
 
+// Categories that are income. Money in filed anywhere else is a refund.
+export const INCOME_CATEGORIES = ['Rental Income', 'Other Income'];
+export const REFUNDS = 'Refunds & Returns';
+
 const INCOME_HINTS: [RegExp, string][] = [
   [/refund|return|reversal|credit voucher|merchandise credit/i, 'Refunds & Returns'],
   [/airbnb|vrbo|homeaway|booking\.com|booking com\b|rent payment|tenant/i, 'Rental Income'],

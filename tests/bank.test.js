@@ -513,6 +513,37 @@ test('a savings CSV whose wording shows it came in backwards is put right on its
   assert.deepEqual(rows.map((t) => t.amount).sort((a, b) => a - b), [-20000, 0.81, 0.96, 10000]);
 });
 
+test('money back from a store is a refund that reduces its spending, not income', async () => {
+  const csv = `Date,Description,Amount
+03/02/2026,ACME TOOLS 12,-50.00
+03/09/2026,ACME TOOLS 12,-80.00
+03/10/2026,ACME TOOLS 12,20.00
+03/11/2026,GIZMO SUPPLY 7,-40.00
+03/12/2026,GIZMO SUPPLY 7,15.00
+03/15/2026,CONSULTING CLIENT LLC,500.00
+`;
+  const mapping = { date: 0, description: 1, amount: 2, debit: null, credit: null, memo: null, reference: null, flip: false, dateOrder: 'mdy' };
+  const { accountId } = await post('/api/bank/import', { content: csv, fileName: 'refunds.csv', mapping, newAccount: { name: 'Shop Card', kind: 'credit', owner: 'business' } });
+  const rows = async () => (await get(`/api/bank/transactions?account=${accountId}&kind=all&preset=all`)).transactions;
+  const acme = (await rows()).filter((t) => t.description.startsWith('ACME'));
+  await post('/api/bank/transactions/update', { ids: acme.filter((t) => t.amount < 0).map((t) => t.id), category: 'Tools & Hardware' });
+
+  const after = await rows();
+  const refund = after.find((t) => t.description.startsWith('ACME') && t.amount > 0);
+  assert.deepEqual([refund.category, refund.categorySource], ['Tools & Hardware', 'payee'], "takes the category of what's bought there");
+  const gizmo = after.find((t) => t.description.startsWith('GIZMO') && t.amount > 0);
+  assert.equal(gizmo.category, 'Refunds & Returns', 'a store with no category yet');
+  const client = after.find((t) => t.description.startsWith('CONSULTING'));
+  assert.equal(client.category, null, 'money from someone never paid is still income');
+
+  const income = await get(`/api/bank/transactions?account=${accountId}&direction=in&preset=all`);
+  assert.deepEqual(income.transactions.map((t) => t.amount), [500]);
+  const spending = await get(`/api/bank/transactions?account=${accountId}&direction=out&preset=all`);
+  assert.equal(spending.total, 5, 'purchases and the refunds against them');
+  const byCategory = Object.fromEntries((await get(`/api/bank/spending?account=${accountId}&preset=all`)).byCategory.map((c) => [c.label, c.spend]));
+  assert.equal(byCategory['Tools & Hardware'], 110, '130 spent, 20 back');
+});
+
 test('exports: CSV with every column, and an OFX that imports back as nothing new', async () => {
   const csv = await (await call(`/api/bank/export.csv?account=${cardId}`)).text();
   assert.match(csv.split('\r\n')[0], /Date,Account,Payee,Description,Memo,Amount/);

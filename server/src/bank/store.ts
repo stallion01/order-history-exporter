@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { fitIdToTransaction } from './ofx';
-import { CARD_PAYMENT_WORDS, STORE_PAYEES, TRANSFER_WORDS, categoryHint, payeeFor } from './merchant';
+import { CARD_PAYMENT_WORDS, INCOME_CATEGORIES, REFUNDS, STORE_PAYEES, TRANSFER_WORDS, categoryHint, payeeFor } from './merchant';
 import { MONEY_IN, MONEY_OUT } from './csv';
 import { toCents } from './types';
 import type { AccountKind, IncomingTransaction, Owner, Source, TxKind } from './types';
@@ -10,6 +10,9 @@ import type { AccountKind, IncomingTransaction, Owner, Source, TxKind } from './
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>;
 
+// Money back that isn't income: any positive amount with a spending category, or
+// filed as a refund. (Uncategorised money in still counts as income.)
+const REFUND_SQL = `(t.amount > 0 AND t.kind = 'normal' AND t.category IS NOT NULL AND t.category NOT IN (${INCOME_CATEGORIES.map((c) => `'${c}'`).join(', ')}))`;
 const MATCH_DAYS = 2; // the same payment's date can differ between sources
 const TRANSFER_DAYS = 5; // money can take a few days to arrive
 const DAY_MS = 86400000;
@@ -328,6 +331,20 @@ export function createBankStore(db: DatabaseSync) {
       `UPDATE bank_transactions SET category = ?, category_source = ?, status = ?, status_source = ?, kind = ?, kind_source = ?, transfer_id = ?, updated_at = ? WHERE id = ?`
     );
     const unpair = db.prepare(`UPDATE bank_transactions SET transfer_id = NULL, kind = CASE WHEN kind_source = 'auto' THEN 'normal' ELSE kind END, kind_source = CASE WHEN kind_source = 'auto' THEN NULL ELSE kind_source END WHERE id = ?`);
+    // Money back from a payee this account has paid is a refund: it takes the category
+    // of what was bought there, so it reduces that spending instead of counting as income.
+    const chargesAt = db.prepare(
+      `SELECT category, COUNT(*) AS n FROM bank_transactions WHERE account_id = ? AND payee = ? AND amount < 0 AND kind = 'normal' GROUP BY category ORDER BY category IS NULL, n DESC`
+    );
+    const refundCategory = (row: Row): string | null => {
+      if ((row.amount as number) <= 0 || !row.payee) return null;
+      // Deposits, payouts and transfers aren't refunds, whoever they're from.
+      const text = `${row.description} ${row.memo || ''}`;
+      if (MONEY_IN.test(text) || TRANSFER_WORDS.test(text)) return null;
+      const found = chargesAt.all(row.account_id, row.payee) as Row[];
+      if (!found.length) return null;
+      return (found[0].category as string | null) && !INCOME_CATEGORIES.includes(found[0].category as string) ? (found[0].category as string) : REFUNDS;
+    };
     for (const row of rows) {
       const text = `${row.description} ${row.payee || ''} ${row.memo || ''}`.toLowerCase();
       const matches = list.filter((r) => (r.accountId === null || r.accountId === row.account_id) && text.includes(r.pattern.toLowerCase()));
@@ -339,7 +356,7 @@ export function createBankStore(db: DatabaseSync) {
         const ruled = pick('category');
         const fromOrder = ruled ? null : orders?.category ?? null;
         const fromReceipt = ruled || fromOrder ? null : row.receipt_category;
-        const hint = ruled || fromOrder || fromReceipt ? null : categoryHint(row.description, row.payee || '', row.amount);
+        const hint = ruled || fromOrder || fromReceipt ? null : categoryHint(row.description, row.payee || '', row.amount) ?? refundCategory(row);
         category = ruled ?? fromOrder ?? fromReceipt ?? hint;
         categorySource = ruled ? 'rule' : fromOrder ? 'order' : fromReceipt ? 'receipt' : hint ? 'payee' : null;
       }
@@ -618,8 +635,9 @@ export function createBankStore(db: DatabaseSync) {
       clauses.push('t.kind = ?');
       params.push(kind);
     }
-    if (filters.direction === 'out') clauses.push('t.amount < 0');
-    if (filters.direction === 'in') clauses.push('t.amount > 0');
+    // Spending includes refunds (money back that reduces it); income leaves them out.
+    if (filters.direction === 'out') clauses.push(`(t.amount < 0 OR ${REFUND_SQL})`);
+    if (filters.direction === 'in') clauses.push(`(t.amount > 0 AND NOT ${REFUND_SQL})`);
     if (filters.q) {
       const like = `%${filters.q.replace(/[\\%_]/g, '\\$&')}%`;
       clauses.push(`(t.description LIKE ? ESCAPE '\\' OR t.payee LIKE ? ESCAPE '\\' OR t.memo LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\')`);
@@ -1126,6 +1144,11 @@ export function createBankStore(db: DatabaseSync) {
         }
       }
       applyRules(`t.id IN (${list})`);
+      // Refunds from the same stores follow their purchases' new category.
+      if ('category' in changes)
+        applyRules(
+          `t.amount > 0 AND (t.category_source IS NULL OR t.category_source = 'payee') AND (t.account_id, t.payee) IN (SELECT account_id, payee FROM bank_transactions WHERE id IN (${list}))`
+        );
       detectTransfers();
       return rows.length;
     });
@@ -1150,6 +1173,12 @@ export function createBankStore(db: DatabaseSync) {
       byMonth: group('substr(t.posted, 1, 7)').sort((a, b) => String(a.label).localeCompare(String(b.label))),
       byPayee: group('COALESCE(t.payee, t.description)').slice(0, 15),
     };
+  }
+
+  // Once: earlier versions counted refunds as income; give them their categories.
+  if (getSetting('refunds_categorised') !== '1') {
+    applyRules("t.amount > 0 AND (t.category_source IS NULL OR t.category_source = 'payee')");
+    setSetting('refunds_categorised', '1');
   }
 
   return {
