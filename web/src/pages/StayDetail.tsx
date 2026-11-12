@@ -230,8 +230,13 @@ export function StayDetail() {
               {!deposits.length && s.status === 'accepted' && (
                 <>
                   <p className="text-sm text-slate-600 dark:text-slate-400">
-                    {s.payment === 'upcoming' ? 'The stay is still to come.' : 'No deposit is linked yet.'} Expected: <span className="font-medium">{money(s.payout)}</span>.
+                    {s.payment === 'upcoming' ? 'The stay is still to come.' : 'No deposit is linked yet.'} Expected: <span className="font-medium">{money(s.depositAmount ?? s.payout)}</span>.
                   </p>
+                  {s.depositAmount !== null && s.payout !== null && Math.round(s.depositAmount * 100) !== Math.round(s.payout * 100) && (
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      {s.platformLabel} pays the full {money(s.depositAmount)} and bills its commission of {money(s.depositAmount - s.payout)} separately.
+                    </p>
+                  )}
                   <Suggestions list={suggestions} busy={busy} onLink={(txId) => run(`/api/stays/${encodeURIComponent(s.id)}/link`, { transactionId: txId })} />
                 </>
               )}

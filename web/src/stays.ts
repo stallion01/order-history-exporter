@@ -30,6 +30,8 @@ export interface Stay {
   hostFees: number | null;
   taxes: number | null;
   payout: number | null;
+  // What the bank should receive: for Booking.com, before its commission.
+  depositAmount: number | null;
   note: string | null;
   paid: boolean;
   // conflict: the deposit could be made up more than one way; due: on its way;

@@ -76,6 +76,18 @@ function depositWindow(stay: Row): [string, string] {
   }
 }
 
+// What the bank should receive for a stay. Booking.com pays the full amount and bills
+// its commission separately, so its deposit is the payout plus the commission.
+function depositAmount(stay: Row): number {
+  const payout = Number(stay.payout) || 0;
+  const fees = Number(stay.host_fees) || 0;
+  return platformGroup(stay.platform) === 'booking' && fees < 0 ? round(payout - fees) : payout;
+}
+
+// A deposit is a stay's only if it names the stay's platform. Direct bookings can be
+// any deposit that doesn't name a platform.
+const ownDeposit = (platform: string, named: string) => (platformGroup(platform) === 'other' ? named === 'other' : named === platformGroup(platform));
+
 function financialLines(r: HospitableReservation) {
   const f = r.financials;
   if (!f) return [];
@@ -319,14 +331,15 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
         `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account, a.last4 FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
          WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ?
            ${exactOnly ? 'AND CAST(ROUND(t.amount * 100) AS INTEGER) = ?' : ''}
-           AND (NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id) OR t.id = ?)
+           AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id)
+           AND NOT EXISTS (SELECT 1 FROM stay_payouts x WHERE x.transaction_id = t.id AND x.id != ?)
            AND NOT EXISTS (SELECT 1 FROM stay_link_rejections j WHERE j.subject = ? AND j.transaction_id = t.id)
          ORDER BY t.posted`
       )
-      .all(shift(payout.paid_on, -2), shift(payout.paid_on, exactOnly ? 7 : 14), ...(exactOnly ? [toCents(payout.amount)] : []), payout.transaction_id ?? -1, `payout:${payout.id}`) as Row[];
+      .all(shift(payout.paid_on, -2), shift(payout.paid_on, exactOnly ? 7 : 14), ...(exactOnly ? [toCents(payout.amount)] : []), payout.id, `payout:${payout.id}`) as Row[];
     const last4 = last4Of(payout.bank_account);
     const sameAccount = last4 ? rows.filter((r) => r.last4 === last4) : [];
-    return (sameAccount.length ? sameAccount : rows).filter((r) => ['airbnb', 'other'].includes(incomeSource(`${r.description} ${r.payee || ''}`)));
+    return (sameAccount.length ? sameAccount : rows).filter((r) => incomeSource(`${r.description} ${r.payee || ''}`) === 'airbnb');
   }
 
   function stayCandidates(stay: Row, exactOnly = true) {
@@ -337,16 +350,12 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
          WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ?
            ${exactOnly ? 'AND CAST(ROUND(t.amount * 100) AS INTEGER) = ?' : ''}
            AND NOT EXISTS (SELECT 1 FROM stay_payouts x WHERE x.transaction_id = t.id)
+           AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id AND d.stay_id != ?)
            AND NOT EXISTS (SELECT 1 FROM stay_link_rejections j WHERE j.subject = ? AND j.transaction_id = t.id)
          ORDER BY t.posted`
       )
-      .all(from, to, ...(exactOnly ? [toCents(stay.payout)] : []), `stay:${stay.id}`) as Row[];
-    // A deposit that names another platform isn't this stay's.
-    const mine = platformGroup(stay.platform);
-    return rows.filter((r) => {
-      const named = incomeSource(`${r.description} ${r.payee || ''}`);
-      return named === 'other' || named === mine;
-    });
+      .all(from, to, ...(exactOnly ? [toCents(depositAmount(stay))] : []), stay.id, `stay:${stay.id}`) as Row[];
+    return rows.filter((r) => ownDeposit(stay.platform, incomeSource(`${r.description} ${r.payee || ''}`)));
   }
 
   // Stays whose money Hospitable has no payout record for.
@@ -438,9 +447,9 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const left: Row[] = [];
     for (const p of payouts) {
       const cents = toCents(p.amount);
-      const options = deposits.filter((d) => d.cents === cents && fits(p, d) && between(d.posted, shift(p.paid_on, -2), shift(p.paid_on, 7)));
+      const options = deposits.filter((d) => d.named === 'airbnb' && d.cents === cents && fits(p, d) && between(d.posted, shift(p.paid_on, -2), shift(p.paid_on, 7)));
       // A deposit that says Airbnb is preferred over one that doesn't say; then the earliest.
-      const best = options.find((d) => d.named === 'airbnb') || (options.length === 1 ? options[0] : null);
+      const best = options[0] ?? null;
       if (best) {
         link.run(best.id, p.id);
         used.add(best.id);
@@ -479,11 +488,11 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const link = db.prepare(`INSERT OR IGNORE INTO stay_deposits (stay_id, transaction_id, source, created_at) VALUES (?, ?, 'auto', ?)`);
     const fits = (s: Row, d: Deposit) => {
       const [from, to] = depositWindow(s);
-      return !used.has(d.id) && between(d.posted, from, to) && (d.named === 'other' || d.named === platformGroup(s.platform)) && !rejected.has(`stay:${s.id}|${d.id}`);
+      return !used.has(d.id) && between(d.posted, from, to) && ownDeposit(s.platform, d.named) && !rejected.has(`stay:${s.id}|${d.id}`);
     };
     const left: Row[] = [];
     for (const s of stays) {
-      const cents = toCents(s.payout);
+      const cents = toCents(depositAmount(s));
       const expected = shift(s.arrival, 1);
       const options = deposits
         .filter((d) => d.cents === cents && fits(s, d))
@@ -505,7 +514,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
         .sort((a, b) => Math.abs(dayNumber(a.arrival) - dayNumber(d.posted)) - Math.abs(dayNumber(b.arrival) - dayNumber(d.posted)))
         .slice(0, MAX_POOL);
       if (pool.length < 2) continue;
-      const groups = groupsMaking(d.cents, pool.map((s) => toCents(s.payout)));
+      const groups = groupsMaking(d.cents, pool.map((s) => toCents(depositAmount(s))));
       if (groups.length === 1) {
         for (const i of groups[0]) {
           link.run(pool[i].id, d.id, now());
@@ -635,6 +644,8 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       hostFees: r.host_fees as number | null,
       taxes: r.taxes as number | null,
       payout: r.payout as number | null,
+      // What the bank should receive: for Booking.com, before its commission.
+      depositAmount: r.payout === null ? null : depositAmount(r),
       note: r.note as string | null,
       paid,
       // paid, conflict (more than one way it could have been paid), due (on its way),
@@ -749,7 +760,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     // Deposits that might be this stay's, when Hospitable has no payout for it.
     let suggestions: (ReturnType<typeof txRow> & { exact: boolean })[] = [];
     if (!payouts.length && !deposits.length && stay.status === 'accepted') {
-      const target = stay.payout ? toCents(stay.payout) : null;
+      const target = stay.payout ? toCents(depositAmount(row)) : null;
       suggestions = stayCandidates(row, false)
         .map((c) => ({ ...txRow(c), exact: target !== null && toCents(c.amount) === target }))
         .sort((a, b) => Number(b.exact) - Number(a.exact) || Math.abs(dayNumber(a.posted) - dayNumber(stay.arrival)) - Math.abs(dayNumber(b.posted) - dayNumber(stay.arrival)))

@@ -145,6 +145,8 @@ before(async () => {
     '05/04/2026,VRBO PAYMENT,500.00',
     '06/02/2026,AIRBNB 4455,640.00',
     '06/03/2026,COFFEE SHOP,-4.50',
+    '06/05/2026,BOOKING.COM DES:ST-TEST01,660.00',
+    '05/20/2026,INTEREST EARNED,0.42',
     '01/13/2026,AIRBNB PAYMENTS,550.00',
     '07/08/2026,AIRBNB PAYMENTS,430.00',
     '08/06/2026,AIRBNB PAYMENTS,200.00',
@@ -214,6 +216,16 @@ test('Vrbo stays link to deposits of their amount; equal amounts pair up in date
   assert.equal((await get('/api/stays/res-e')).deposits[0].posted, '2026-05-04');
 });
 
+test("a deposit linked to one stay isn't offered for another, and only the platform's own deposits are", async () => {
+  await post('/api/stays/res-e/unlink', { transactionId: (await get('/api/stays/res-e')).deposits[0].id });
+  const offered = (await get('/api/stays/res-e')).suggestions;
+  // res-d's deposit is taken; interest and coffee never name Vrbo.
+  assert.ok(!offered.some((s) => s.posted === '2026-05-02'));
+  assert.ok(offered.every((s) => /vrbo|homeaway/i.test(s.payee)));
+  // Unlinked by hand, so it isn't offered again either.
+  assert.ok(!offered.some((s) => s.posted === '2026-05-04'));
+});
+
 test('one deposit made of two Airbnb payouts links both', async () => {
   const [deposit] = await txByDate('2026-07-08');
   assert.deepEqual(deposit.stays.map((s) => s.guest).sort(), ['Ivy Combo', 'Jay Combo']);
@@ -272,12 +284,15 @@ test('Airbnb week by week: payouts against deposits, with unclaimed deposits', a
   await assert.rejects(get('/api/stays/airbnb-weeks?year=20x6'), /year must look like/);
 });
 
-test("a deposit naming another platform isn't offered for a stay", async () => {
+test('Booking.com is matched at the payout plus its commission, which it bills separately', async () => {
   const g = await get('/api/stays/res-g');
-  assert.equal(g.deposits.length, 0);
-  assert.ok(!g.suggestions.some((s) => /AIRBNB/i.test(s.payee)));
+  assert.equal(g.stay.payout, 640);
+  assert.equal(g.stay.depositAmount, 660);
+  assert.equal(g.deposits[0].posted, '2026-06-05');
+  // The Airbnb deposit of the payout's amount was never used.
+  assert.equal((await txByDate('2026-06-02'))[0].stays.length, 0);
   const unpaid = (await get('/api/stays?view=unpaid&property=prop-lake&property=prop-hill')).stays.map((s) => s.id);
-  assert.deepEqual(unpaid, ['res-g']);
+  assert.deepEqual(unpaid, ['res-e']);
 });
 
 test('unlinking by hand sticks, and linking it again works', async () => {
