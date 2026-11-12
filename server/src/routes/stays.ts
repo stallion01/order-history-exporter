@@ -2,7 +2,7 @@
 // Signed-in users only.
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { HttpError, queryOf } from '../params';
+import { HttpError, dateParam, queryOf } from '../params';
 import { STAY_VIEWS } from '../stays/service';
 import type { StayService, StayView } from '../stays/service';
 import type { AuthedRequest } from '../app';
@@ -53,6 +53,8 @@ export function stayRoutes(app: FastifyInstance, stays: StayService) {
       platform: several('platform', /^[a-z]{1,20}$/),
       q: query.get('q')?.slice(0, 120) || null,
       deposit,
+      from: dateParam(query.get('from'), 'from'),
+      to: dateParam(query.get('to'), 'to'),
     };
     return { ...stays.list(filters), options: stays.options(), status: stays.status() };
   });

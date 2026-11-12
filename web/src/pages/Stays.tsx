@@ -9,9 +9,10 @@ import { useFilters } from '../filters';
 import { PLATFORM_NAMES, dateRange, platformColor, shortDate } from '../stays';
 import type { Stay, StayList } from '../stays';
 import { AirbnbWeeksView } from './AirbnbWeeks';
+import { StaysCalendar } from './StaysCalendar';
 import { Banner, Button, Card, Empty, Field, Input, Loading, MultiSelect, PageHeader, Select, Stat, TD, TH, TR, cx } from '../ui';
 
-type View = 'all' | 'upcoming' | 'unpaid' | 'conflicts' | 'cancelled' | 'weeks';
+type View = 'calendar' | 'all' | 'upcoming' | 'unpaid' | 'conflicts' | 'cancelled' | 'weeks';
 
 export function PlatformBadge({ platform, label }: { platform: string; label?: string }) {
   return (
@@ -99,7 +100,10 @@ function StayRow({ stay, search }: { stay: Stay; search: string }) {
 export function Stays() {
   const filters = useFilters();
   const thisYear = String(new Date().getFullYear());
-  const view = (filters.value('view') || 'all') as View;
+  // The calendar first; a deposit's stays are a list.
+  const view = (filters.value('view') || (filters.value('deposit') ? 'all' : 'calendar')) as View;
+  // The views that list stays, with totals and filters.
+  const listView = view !== 'weeks' && view !== 'calendar';
   // A year is chosen by default, so the totals mean something; "all" shows every year.
   const yearChoice = filters.value('year') || (view === 'upcoming' ? 'all' : thisYear);
   const [search, setSearch] = useState(filters.value('q'));
@@ -107,7 +111,7 @@ export function Stays() {
 
   const query = new URLSearchParams();
   // The weekly view has its own data; the list call still brings the options and status.
-  if (view !== 'all' && view !== 'weeks') query.set('view', view);
+  if (listView && view !== 'all') query.set('view', view);
   if (yearChoice !== 'all' && !deposit) query.set('year', yearChoice);
   for (const p of filters.values('property')) query.append('property', p);
   for (const p of filters.values('platform')) query.append('platform', p);
@@ -170,7 +174,8 @@ export function Stays() {
   }
 
   const tabs: [View, string][] = [
-    ['all', 'All'],
+    ['calendar', 'Calendar'],
+    ['all', 'All stays'],
     ['upcoming', 'Upcoming'],
     ['unpaid', 'Not paid yet'],
     ['conflicts', 'Conflicts'],
@@ -213,7 +218,7 @@ export function Stays() {
         </Banner>
       )}
 
-      {data && view !== 'cancelled' && view !== 'weeks' && !deposit && (
+      {data && view !== 'cancelled' && listView && !deposit && (
         <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Stays" value={whole(data.totals.stays)} hint={plural(data.totals.nights, 'night')} />
           <Stat label="Payouts" value={money(data.totals.payout)} hint={`Guests paid ${money(data.totals.guestTotal)}`} />
@@ -259,7 +264,7 @@ export function Stays() {
             key={value}
             type="button"
             aria-pressed={view === value}
-            onClick={() => filters.set({ view: value === 'all' ? '' : value, deposit: '' })}
+            onClick={() => filters.set({ view: value === 'calendar' ? '' : value, deposit: '' })}
             className={cx(
               'rounded-full px-3 py-1.5 text-sm font-medium',
               view === value
@@ -272,55 +277,58 @@ export function Stays() {
         ))}
       </div>
 
-      <form className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4" onSubmit={(e) => e.preventDefault()} aria-label="Filters">
-        <Field label={view === 'weeks' ? 'Year' : 'Year of arrival'}>
-          <Select
-            value={yearChoice}
-            onChange={(e) =>
-              filters.set({
-                year: e.target.value === thisYear && view !== 'upcoming' ? '' : e.target.value,
-              })
-            }
-          >
-            {years.map((y) => (
-              <option key={y} value={y}>
-                {y}
-              </option>
-            ))}
-            {view !== 'weeks' && <option value="all">All years</option>}
-          </Select>
-        </Field>
-        {view !== 'weeks' && (
-          <>
-            <MultiSelect
-              label="Property"
-              allLabel="All properties"
-              options={(data?.options.properties || []).map((p): [string, string] => [p.id, p.name])}
-              selected={filters.values('property')}
-              onChange={(next) => filters.set({ property: next })}
-            />
-            <MultiSelect
-              label="Booked through"
-              allLabel="All platforms"
-              options={(data?.options.platforms || []).map((p): [string, string] => [p, PLATFORM_NAMES[p] || p])}
-              selected={filters.values('platform')}
-              onChange={(next) => filters.set({ platform: next })}
-            />
-            <Field label="Search">
-              <div className="relative">
-                <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-slate-400" aria-hidden />
-                <Input type="search" className="pl-8" placeholder="Guest, phone or code" value={search} onChange={(e) => setSearch(e.target.value)} />
-              </div>
-            </Field>
-          </>
-        )}
-      </form>
+      {view !== 'calendar' && (
+        <form className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4" onSubmit={(e) => e.preventDefault()} aria-label="Filters">
+          <Field label={view === 'weeks' ? 'Year' : 'Year of arrival'}>
+            <Select
+              value={yearChoice}
+              onChange={(e) =>
+                filters.set({
+                  year: e.target.value === thisYear && view !== 'upcoming' ? '' : e.target.value,
+                })
+              }
+            >
+              {years.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+              {listView && <option value="all">All years</option>}
+            </Select>
+          </Field>
+          {view !== 'weeks' && (
+            <>
+              <MultiSelect
+                label="Property"
+                allLabel="All properties"
+                options={(data?.options.properties || []).map((p): [string, string] => [p.id, p.name])}
+                selected={filters.values('property')}
+                onChange={(next) => filters.set({ property: next })}
+              />
+              <MultiSelect
+                label="Booked through"
+                allLabel="All platforms"
+                options={(data?.options.platforms || []).map((p): [string, string] => [p, PLATFORM_NAMES[p] || p])}
+                selected={filters.values('platform')}
+                onChange={(next) => filters.set({ platform: next })}
+              />
+              <Field label="Search">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-slate-400" aria-hidden />
+                  <Input type="search" className="pl-8" placeholder="Guest, phone or code" value={search} onChange={(e) => setSearch(e.target.value)} />
+                </div>
+              </Field>
+            </>
+          )}
+        </form>
+      )}
 
       {list.error && <Banner>{list.error.message}</Banner>}
+      {view === 'calendar' && <StaysCalendar />}
       {view === 'weeks' && <AirbnbWeeksView year={yearChoice === 'all' ? thisYear : yearChoice} />}
       {!data && list.loading && <Loading />}
 
-      {data && view !== 'cancelled' && view !== 'weeks' && !deposit && data.byProperty.length > 1 && (
+      {data && view !== 'cancelled' && listView && !deposit && data.byProperty.length > 1 && (
         <Card title="By property" className="mb-5" padded={false}>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -371,13 +379,13 @@ export function Stays() {
         </Card>
       )}
 
-      {data && view !== 'weeks' && !data.stays.length && (
+      {data && listView && !data.stays.length && (
         <Card>
           <Empty>{status?.stays ? 'No stays match.' : 'No stays yet.'}</Empty>
         </Card>
       )}
       <div className="space-y-5">
-        {view !== 'weeks' &&
+        {listView &&
           months.map((m) => (
             <Card
               key={m.key}

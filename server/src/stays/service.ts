@@ -44,6 +44,9 @@ export interface StayFilters {
   property?: string[] | null;
   platform?: string[] | null;
   q?: string | null;
+  // Stays that overlap these dates (a guest still there on from counts; one arriving on to does too).
+  from?: string | null;
+  to?: string | null;
   deposit?: number | null;
 }
 
@@ -579,6 +582,14 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     if (filters.year) {
       clauses.push(`substr(s.arrival, 1, 4) = ?`);
       params.push(filters.year);
+    }
+    if (filters.from) {
+      clauses.push('s.departure > ?');
+      params.push(filters.from);
+    }
+    if (filters.to) {
+      clauses.push('s.arrival <= ?');
+      params.push(filters.to);
     }
     if (filters.property?.length) {
       clauses.push(`s.property_id IN (${filters.property.map(() => '?').join(', ')})`);
