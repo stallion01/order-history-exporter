@@ -2,7 +2,7 @@
 // linked charge by the order's items, and keeps the businesses and properties
 // ("entities") that spending belongs to.
 import type { BankStore, OrderInfo, Share, TxFilters } from '../bank/store';
-import { incomeSource } from '../bank/merchant';
+import { incomeSource, storeName } from '../bank/merchant';
 import type { IncomeSource } from '../bank/merchant';
 import { ORDER_STORE_PAYEES } from '../bank/store';
 import { toCents } from '../bank/types';
@@ -411,7 +411,27 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
       byCategory: group((l) => l.category, (k) => k),
       byEntity: group((l) => (l.entityId ? String(l.entityId) : 'none'), (k) => (k === 'none' ? 'Not assigned' : names.get(Number(k)) || 'Removed')),
       byMonth: monthly(filters, lines),
+      byStore: byStore(lines),
     };
+  }
+
+  // Spending by store or payee, from every account (not only the stores the extension
+  // syncs), net of refunds. Spellings of one store are added together under the name
+  // used most often.
+  function byStore(lines: SpendLine[]) {
+    const groups = new Map<string, { names: Map<string, number>; key: string; spend: number }>();
+    for (const line of lines) {
+      const { key, label } = storeName(line.payee);
+      const id = key.toLowerCase();
+      const g = groups.get(id) || { names: new Map<string, number>(), key, spend: 0 };
+      g.names.set(label, (g.names.get(label) || 0) + 1);
+      g.spend += line.amount;
+      groups.set(id, g);
+    }
+    return [...groups.values()]
+      .map((g) => ({ key: g.key, label: [...g.names.entries()].sort((a, b) => b[1] - a[1])[0][0], spend: cents(g.spend) }))
+      .filter((g) => g.spend !== 0)
+      .sort((a, b) => b.spend - a.spend);
   }
 
   // Spending (less refunds) and income for each month, oldest first, with income split

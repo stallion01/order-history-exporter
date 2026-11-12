@@ -65,7 +65,7 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
             <Card title="By category">
               <RankBars rows={data.byCategory} empty="No items match these filters." linkFor={by('/items', 'category')} />
             </Card>
-            <Card title="By store">
+            <Card title="By store (online orders)">
               <RankBars rows={data.byStore} empty="No orders match these filters." linkFor={by('/orders', 'store')} />
             </Card>
             <Card title="By payment method">
@@ -160,7 +160,7 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
   if (range.to) period.set('to', range.to);
   for (const y of range.years || []) period.append('years', y);
   const totals = useApi<{ total: number; moneyOut: number; moneyIn: number }>(`/api/bank/transactions?${period}&limit=1`);
-  const spending = useApi<{ byCategory: { key: string; label: string; spend: number }[]; byEntity: { key: string; label: string; spend: number }[]; byMonth: InOutMonth[] }>(
+  const spending = useApi<{ byCategory: { key: string; label: string; spend: number }[]; byEntity: { key: string; label: string; spend: number }[]; byMonth: InOutMonth[]; byStore: { key: string; label: string; spend: number }[] }>(
     `/api/bank/spending?${period}`
   );
   const navigate = useNavigate();
@@ -238,6 +238,15 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
           <h3 className="mb-2 text-sm font-semibold">Spending by category</h3>
           <RankBars rows={asRows(spending.data?.byCategory)} empty="No spending in this period." linkFor={(row) => txLink('category', row.key === 'Uncategorized' ? 'none' : row.key!)} />
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Store charges matched to orders are split by their items.</p>
+        </div>
+        <div>
+          <h3 className="mb-2 text-sm font-semibold">Spending by store or payee</h3>
+          <RankBars
+            rows={asRows(spending.data?.byStore)}
+            empty="No spending in this period."
+            linkFor={(row) => `/transactions?${new URLSearchParams([...params(), ['q', row.key!], ['direction', 'out']])}`}
+          />
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Every store and payee on your bank and card accounts, in person or online, net of refunds.</p>
         </div>
         {(spending.data?.byEntity.length ?? 0) > 1 || spending.data?.byEntity[0]?.key !== 'none' ? (
           <div>

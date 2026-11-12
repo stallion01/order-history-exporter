@@ -24,6 +24,9 @@ const KNOWN: [RegExp, string][] = [
   [/google/i, 'Google'],
   [/microsoft|msft/i, 'Microsoft'],
   [/comcast|xfinity/i, 'Xfinity'],
+  [/duke ?energy/i, 'Duke Energy'],
+  [/menards/i, 'Menards'],
+  [/harbor freight/i, 'Harbor Freight'],
   [/verizon/i, 'Verizon'],
   [/\bat&t\b|\batt\*/i, 'AT&T'],
   [/t-mobile/i, 'T-Mobile'],
@@ -60,7 +63,9 @@ const title = (text: string) =>
 export function payeeFor(description: string): string {
   const text = description.replace(/\s+/g, ' ').trim();
   for (const [pattern, name] of KNOWN) if (pattern.test(text)) return name;
-  let name = text;
+  // Bank bill-pay and ACH text: "TRASH CO DES:5550… ID:1000… INDN:…" is Trash Co.
+  const ach = text.replace(/\s+des:.*$/i, '').trim();
+  let name = ach.length >= 3 ? ach : text;
   for (const noise of NOISE) {
     const next = name.replace(noise, '').trim();
     if (next.length >= 3) name = next;
@@ -92,6 +97,24 @@ const SPENDING_HINTS: [RegExp, string][] = [
   [/\brent\b|lease/i, 'Rent & Lease'],
   [/\bcpa\b|accounting|bookkeep|attorney|law office|legal/i, 'Professional Services'],
 ];
+
+// One name per store or payee, for adding up spending by where it went. Bank bill-pay
+// text ("DUKEENERGY DES:BILL PAY ID:9101…") becomes the payee alone, a leading "The"
+// and trailing store numbers go ("THE HOME DEPOT #3625" is Home Depot), and a Zelle
+// payment is named after who it went to. The key is what to search transactions for.
+export function storeName(text: string): { key: string; label: string } {
+  let s = text.replace(/\s+des:.*$/i, '').replace(/\s+/g, ' ').trim();
+  const zelle = s.match(/^zelle (?:transfer|payment) to (.+?)(?: for .*| conf.*|$)/i);
+  if (zelle) return { key: zelle[1].trim(), label: `Zelle to ${zelle[1].trim()}` };
+  s = s
+    .replace(/^the\s+/i, '')
+    .replace(/(\s*[#*]?\s*\d+\s*\*?)+$/, '')
+    .replace(/[\s*#-]+$/, '')
+    .trim();
+  if (!s) s = text.trim();
+  const label = payeeFor(s) || s;
+  return { key: label, label };
+}
 
 // Where income came from, for showing rental payouts by platform. The SQL below
 // must give the same answer as incomeSource for any text.

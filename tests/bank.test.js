@@ -10,7 +10,7 @@ const { openDatabase } = require('../server/db');
 const { buildApp } = require('../server/dist/app');
 const { parseOfx, writeOfx } = require('../server/dist/bank/ofx');
 const { applyMapping, guessMapping, parseAmount, parseDate, readTable } = require('../server/dist/bank/csv');
-const { payeeFor, categoryHint } = require('../server/dist/bank/merchant');
+const { payeeFor, categoryHint, storeName } = require('../server/dist/bank/merchant');
 const { similarDescriptions } = require('../server/dist/bank/store');
 const { claimToken, decodeToken } = require('../server/dist/bank/simplefin');
 const { fileSecretBox } = require('../server/dist/secrets');
@@ -241,6 +241,14 @@ test('payee names, category hints and matching descriptions', () => {
   assert.ok(similarDescriptions('SHELL OIL 57444 BOSTON MA', 'Shell Oil'));
   assert.ok(similarDescriptions('ADOBE *CREATIVE CLOUD', 'ADOBE CREATIVE CLD 800-833-6687'));
   assert.ok(!similarDescriptions('STARBUCKS #1234', 'DUNKIN #55'));
+
+  // One name per store, however the bank wrote it.
+  const names = (list) => list.map((t) => storeName(t).label);
+  assert.deepEqual(names(['THE HOME DEPOT #3625', 'The Home Depot', 'Home Depot']), ['Home Depot', 'Home Depot', 'Home Depot']);
+  assert.deepEqual(names(['POWERCO DES:BILL PAY ID:900000000001 INDN:SOMEONE', 'Powerco']), ['Powerco', 'Powerco']);
+  assert.deepEqual(names(['HARBOR FREIGHT TOOLS 2', 'Harbor Freight Tools', 'MENARDS 3092', 'LOWES #00907*']), ['Harbor Freight', 'Harbor Freight', 'Menards', "Lowe's"]);
+  assert.deepEqual(storeName('Zelle payment to Lawn Helper for "Sep 5 lawn"; Conf# abc'), { key: 'Lawn Helper', label: 'Zelle to Lawn Helper' });
+  assert.equal(payeeFor('TRASH CO SPRNGFLD DES:5550011111 ID:100000001 INDN:SOMEONE'), 'Trash CO Sprngfld', 'bill-pay codes are left out');
 });
 
 /* ---------- Through the API ---------- */
@@ -582,6 +590,8 @@ test('spending and income by month, with income split by platform', async () => 
     { month: '2026-04', spend: 100, income: 1050, sources: { airbnb: 500, vrbo: 300, booking: 200, other: 50 } },
     { month: '2026-05', spend: 1000, income: 250, sources: { airbnb: 250, vrbo: 0, booking: 0, other: 0 } },
   ]);
+  const { byStore } = await get(`/api/bank/spending?account=${accountId}&preset=all`);
+  assert.deepEqual(byStore.map((s) => [s.label, s.spend]), [['Powerco', 1000], ['Trashco Springfield', 100]]);
 
   // Clicking a piece of the chart lists exactly the transactions behind it.
   const april = `account=${accountId}&preset=custom&from=2026-04-01&to=2026-04-30`;
