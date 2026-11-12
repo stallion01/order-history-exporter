@@ -36,7 +36,11 @@ export interface Stay {
   paid: boolean;
   // conflict: the deposit could be made up more than one way; due: on its way;
   // nobank: before the bank records start.
-  payment: 'paid' | 'conflict' | 'due' | 'missing' | 'nobank' | 'upcoming' | 'none';
+  payment: 'paid' | 'partial' | 'conflict' | 'due' | 'missing' | 'nobank' | 'upcoming' | 'none';
+  // Paid towards the stay so far, held as a security deposit, and paid back.
+  received: number;
+  security: number;
+  refunded: number;
   expectedOn: string;
   depositDate: string | null;
 }
@@ -84,8 +88,11 @@ export interface StayDetail {
     lines: { type: string; amount: number; stayId: string | null; guest: string | null; arrival: string | null }[];
     suggestions: (DepositRow & { exact: boolean })[];
   }[];
-  deposits: (DepositRow & { source: string })[];
-  suggestions: (DepositRow & { exact: boolean })[];
+  // Each part of a transaction linked to the stay; balance is what is left of it.
+  deposits: (DepositRow & { source: string; purpose: 'stay' | 'security' | 'refund'; share: number; balance: number })[];
+  suggestions: (DepositRow & { exact: boolean; balance: number })[];
+  due: number;
+  refundSuggestions: (DepositRow & { exact: boolean; balance: number })[];
   conflicts: Conflict[];
 }
 

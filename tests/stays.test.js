@@ -65,6 +65,10 @@ const RESERVATIONS = [
   // Before Hospitable's payout history: two stays paid in one deposit, and one before the bank records.
   reservation('res-o', { platform: 'airbnb', property: 'prop-bay', arrival: '2026-01-10', departure: '2026-01-12', guest: 'Oak Early', payout: 220, booked: '2025-12-01' }),
   reservation('res-p', { platform: 'airbnb', property: 'prop-bay', arrival: '2026-01-11', departure: '2026-01-12', guest: 'Pine Early', payout: 330, booked: '2025-12-01' }),
+  // Direct bookings: two units the same days paid by one check with a security deposit, and one part-paid.
+  reservation('res-r', { platform: 'manual', property: 'prop-bay', arrival: '2026-09-10', departure: '2026-09-13', guest: 'Robin Pair', payout: 625, booked: '2026-08-20' }),
+  reservation('res-s', { platform: 'manual', property: 'prop-lake', arrival: '2026-09-10', departure: '2026-09-13', guest: 'Robin Pair', payout: 625, booked: '2026-08-20' }),
+  reservation('res-t', { platform: 'manual', property: 'prop-bay', arrival: '2026-10-01', departure: '2026-10-03', guest: 'Terry Part', payout: 400, booked: '2026-09-15' }),
   reservation('res-q', { platform: 'airbnb', property: 'prop-bay', arrival: '2025-12-01', departure: '2025-12-03', guest: 'Quill Early', payout: 99, booked: '2025-11-01' }),
 ];
 const payout = (id, date, dollars) => ({ id, platform: 'airbnb', bank_account: 'Test Bank Checking 4321 (USD)', amount: { amount: Math.round(dollars * 100) }, date: `${date}T00:00:00.000000Z` });
@@ -147,6 +151,9 @@ before(async () => {
     '06/03/2026,COFFEE SHOP,-4.50',
     '06/05/2026,BOOKING.COM DES:ST-TEST01,660.00',
     '05/20/2026,INTEREST EARNED,0.42',
+    '09/08/2026,BANK MOBILE DEPOSIT,1750.00',
+    '09/20/2026,CHECK 1234,-500.00',
+    '09/25/2026,ZELLE FROM T PART,150.00',
     '01/13/2026,AIRBNB PAYMENTS,550.00',
     '07/08/2026,AIRBNB PAYMENTS,430.00',
     '08/06/2026,AIRBNB PAYMENTS,200.00',
@@ -172,7 +179,7 @@ test('connecting reads properties, stays, guests and payouts', async () => {
   const { result, status } = await post('/api/settings/hospitable', { token: `Bearer ${TOKEN}` });
   assert.deepEqual(result.errors, []);
   assert.equal(result.properties, 3);
-  assert.equal(result.stays, 17);
+  assert.equal(result.stays, 20);
   assert.equal(status.connected, true);
   assert.equal(status.payouts, 7);
   // The token is kept encrypted, never as it was typed.
@@ -292,7 +299,8 @@ test('Booking.com is matched at the payout plus its commission, which it bills s
   // The Airbnb deposit of the payout's amount was never used.
   assert.equal((await txByDate('2026-06-02'))[0].stays.length, 0);
   const unpaid = (await get('/api/stays?view=unpaid&property=prop-lake&property=prop-hill')).stays.map((s) => s.id);
-  assert.deepEqual(unpaid, ['res-e']);
+  // res-s is the direct booking paid by cheque further down.
+  assert.deepEqual(unpaid, ['res-s', 'res-e']);
 });
 
 test('unlinking by hand sticks, and linking it again works', async () => {
@@ -307,14 +315,14 @@ test('unlinking by hand sticks, and linking it again works', async () => {
 
 test('the list filters by view, property, platform, year and guest, with totals per property', async () => {
   const all = await get('/api/stays?year=2026&property=prop-lake&property=prop-hill');
-  assert.equal(all.totals.stays, 6);
-  assert.equal(all.totals.nights, 3 + 3 + 4 + 2 + 2 + 3);
-  assert.equal(all.totals.payout, 412.5 + 300 + 880 + 500 + 500 + 640);
+  assert.equal(all.totals.stays, 7);
+  assert.equal(all.totals.nights, 3 + 3 + 4 + 2 + 2 + 3 + 3);
+  assert.equal(all.totals.payout, 412.5 + 300 + 880 + 500 + 500 + 640 + 625);
   const lake = all.byProperty.find((p) => p.property === 'Lake Cabin');
-  assert.equal(lake.stays, 3);
-  assert.equal(lake.averageNightly, Math.round(((412.5 + 880 + 500) / 9) * 100) / 100);
+  assert.equal(lake.stays, 4);
+  assert.equal(lake.averageNightly, Math.round(((412.5 + 880 + 500 + 625) / 12) * 100) / 100);
   assert.deepEqual(all.options.properties.map((p) => p.name), ['Bay Studio', 'Hill House', 'Lake Cabin']);
-  assert.deepEqual(all.options.platforms, ['airbnb', 'booking', 'vrbo']);
+  assert.deepEqual(all.options.platforms, ['airbnb', 'booking', 'direct', 'vrbo']);
 
   assert.deepEqual((await get('/api/stays?view=cancelled')).stays.map((s) => s.id), ['res-f']);
   assert.ok((await get('/api/stays?view=upcoming')).stays.some((s) => s.id === 'res-h'));
@@ -329,5 +337,62 @@ test('a note is kept, and disconnecting forgets the token but keeps the stays', 
   assert.equal((await get('/api/stays/res-c')).stay.note, 'Asked for late check-out');
   await post('/api/settings/hospitable/delete');
   assert.equal((await get('/api/settings/hospitable')).connected, false);
-  assert.equal((await get('/api/stays?year=2026&property=prop-lake&property=prop-hill')).totals.stays, 6);
+  assert.equal((await get('/api/stays?year=2026&property=prop-lake&property=prop-hill')).totals.stays, 7);
+});
+
+test('one check split between two stays, with the rest held as a security deposit and refunded', async () => {
+  const r = await get('/api/stays/res-r');
+  const check = r.suggestions.find((s) => s.payee.toUpperCase().includes('MOBILE DEPOSIT'));
+  assert.equal(check.balance, 1750);
+  // Only deposits that don't name a platform are offered for a direct booking.
+  assert.ok(!r.suggestions.some((s) => /airbnb|vrbo|homeaway|booking/i.test(s.payee)));
+
+  // With no amount, a link takes what the stay is due.
+  await post('/api/stays/res-r/link', { transactionId: check.id });
+  assert.equal((await get('/api/stays/res-r')).stay.payment, 'paid');
+
+  // What's left of the check is offered to the other unit.
+  const s = await get('/api/stays/res-s');
+  const left = s.suggestions.find((x) => x.id === check.id);
+  assert.equal(left.balance, 1125);
+  await post('/api/stays/res-s/link', { transactionId: check.id });
+  let after = await get('/api/stays/res-s');
+  assert.equal(after.stay.payment, 'paid');
+  const link = after.deposits.find((d) => d.id === check.id);
+  assert.equal(link.share, 625);
+  assert.equal(link.balance, 500);
+
+  // Can't take more than is left.
+  await assert.rejects(post('/api/stays/res-s/link', { transactionId: check.id, purpose: 'security', amount: 600 }), /Only 500.00 is left/);
+  await post('/api/stays/res-s/link', { transactionId: check.id, purpose: 'security' });
+  after = await get('/api/stays/res-s');
+  assert.equal(after.stay.security, 500);
+  assert.equal(after.deposits.find((d) => d.purpose === 'security').balance, 0);
+  // All used, so nobody is offered it any more.
+  assert.ok(!(await get('/api/stays/res-t')).suggestions.some((x) => x.id === check.id));
+
+  // The cheque paid back is offered as the refund, and links.
+  const refund = after.refundSuggestions[0];
+  assert.equal(refund.amount, -500);
+  assert.equal(refund.exact, true);
+  await post('/api/stays/res-s/link', { transactionId: refund.id, purpose: 'refund' });
+  after = await get('/api/stays/res-s');
+  assert.equal(after.stay.refunded, 500);
+  assert.equal(after.refundSuggestions.length, 0);
+  // The deposit shows both stays.
+  assert.deepEqual((await txByDate('2026-09-08'))[0].stays.map((x) => x.id).sort(), ['res-r', 'res-s']);
+});
+
+test('a stay paid only in part says what is still due', async () => {
+  const t = await get('/api/stays/res-t');
+  const zelle = t.suggestions.find((x) => x.balance === 150);
+  await post('/api/stays/res-t/link', { transactionId: zelle.id });
+  const after = await get('/api/stays/res-t');
+  assert.equal(after.stay.payment, 'partial');
+  assert.equal(after.stay.received, 150);
+  assert.equal(after.due, 250);
+  assert.ok((await get('/api/stays?view=unpaid')).stays.some((x) => x.id === 'res-t'));
+  // Unlinking frees it again.
+  await post('/api/stays/res-t/unlink', { transactionId: zelle.id });
+  assert.equal((await get('/api/stays/res-t')).stay.received, 0);
 });

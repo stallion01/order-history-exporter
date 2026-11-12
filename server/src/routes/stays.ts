@@ -19,6 +19,8 @@ function parse<T>(schema: z.ZodType<T>, body: unknown): T {
 }
 
 const txBody = z.object({ transactionId: z.number().int().positive() });
+// What part of a transaction is for: the stay itself, a security deposit held, or that deposit paid back.
+const PURPOSE = z.enum(['stay', 'security', 'refund']);
 
 export function stayRoutes(app: FastifyInstance, stays: StayService) {
   const audit = (request: unknown, action: string, detail?: unknown) => (request as AuthedRequest).audit(action, detail);
@@ -90,21 +92,21 @@ export function stayRoutes(app: FastifyInstance, stays: StayService) {
 
   app.post('/api/stays/:id/link', async (request) => {
     const id = idOf(request);
-    const { transactionId } = parse(txBody, request.body);
+    const body = parse(txBody.extend({ amount: z.number().positive().max(1e7).nullable().optional(), purpose: PURPOSE.optional() }), request.body);
     try {
-      stays.linkStay(id, transactionId);
+      stays.linkStay(id, body.transactionId, { amount: body.amount ?? null, purpose: body.purpose });
     } catch (err) {
       fail(err);
     }
-    audit(request, 'stay.link', { stay: id, transactionId });
+    audit(request, 'stay.link', { stay: id, ...body });
     return stays.get(id);
   });
 
   app.post('/api/stays/:id/unlink', async (request) => {
     const id = idOf(request);
-    const { transactionId } = parse(txBody, request.body);
-    stays.unlinkStay(id, transactionId);
-    audit(request, 'stay.unlink', { stay: id, transactionId });
+    const { transactionId, purpose } = parse(txBody.extend({ purpose: PURPOSE.optional() }), request.body);
+    stays.unlinkStay(id, transactionId, purpose);
+    audit(request, 'stay.unlink', { stay: id, transactionId, purpose });
     return stays.get(id);
   });
 

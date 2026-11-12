@@ -185,7 +185,7 @@ Matching runs after every Hospitable check and every bank import:
 - When a deposit adds up in more than one way, nothing is linked: the stays show **Conflict**, and the stay's page lists each possible combination with a **This is it** button.
 - Money due before your bank records start shows as **Before bank records**, and money paid out in the last week as **On its way**, so neither counts as missing.
 
-Otherwise the stay's page offers the likely deposits, and one click links one. Unlinking by hand stops that deposit being offered again. On the Transactions page, a linked deposit shows its guest, or how many stays it paid for.
+Otherwise the stay's page offers the likely deposits: only ones that name the stay's platform (direct bookings get ones that name none), and none that are already used up. One click links the amount the stay is still due, or type another amount. A deposit can be shared: whatever one stay doesn't take stays available for the next, so one cheque can pay for two units, and a stay can be paid in several parts (it shows **Part paid** until it adds up). What's left of a deposit can be held as a **security deposit**, and the cheque or transfer that pays it back is offered as the refund. Booking.com pays the full amount and bills its commission separately, so its stays are matched at the payout plus the commission. Unlinking by hand stops that deposit being offered again. On the Transactions page, a linked deposit shows its guest, or how many stays it paid for.
 
 **Airbnb by week** on the Stays page sets each week's Airbnb payouts against the deposits found for them. Weeks with a missing deposit, a conflict, or an Airbnb deposit that matches nothing are flagged, and **Only weeks to check** hides the rest.
 

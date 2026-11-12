@@ -37,6 +37,13 @@ function Payment({ stay }: { stay: Stay }) {
         No deposit yet
       </span>
     );
+  if (stay.payment === 'partial')
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400" title={`${money(stay.received)} received so far`}>
+        <TriangleAlert className="size-3.5" aria-hidden />
+        Part paid
+      </span>
+    );
   if (stay.payment === 'conflict')
     return (
       <span
@@ -165,7 +172,7 @@ export function Stays() {
   const tabs: [View, string][] = [
     ['all', 'All'],
     ['upcoming', 'Upcoming'],
-    ['unpaid', 'No deposit yet'],
+    ['unpaid', 'Not paid yet'],
     ['conflicts', 'Conflicts'],
     ['weeks', 'Airbnb by week'],
     ['cancelled', 'Cancelled'],

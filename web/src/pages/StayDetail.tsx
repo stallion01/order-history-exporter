@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { ArrowLeft, Link2, Mail, MapPin, Phone, Unlink } from 'lucide-react';
 import { post, useApi } from '../api';
-import { money, plural } from '../format';
+import { money } from '../format';
 import { dateRange, localTime, longDate, partyText } from '../stays';
 import type { Conflict, DepositRow, StayDetail as Detail } from '../stays';
 import { Banner, Button, Card, Empty, Loading, cx } from '../ui';
@@ -13,7 +13,9 @@ import { PlatformBadge } from './Stays';
 // Opens the deposit among that day's transactions.
 const depositLink = (d: DepositRow) => `/transactions?preset=custom&from=${d.posted}&to=${d.posted}`;
 
-function DepositLine({ deposit, action }: { deposit: DepositRow & { exact?: boolean }; action?: ReactNode }) {
+const PURPOSE_LABELS = { stay: 'For the stay:', security: 'Security deposit:', refund: 'Refund paid back:' };
+
+function DepositLine({ deposit, action, footer }: { deposit: DepositRow & { exact?: boolean }; action?: ReactNode; footer?: ReactNode }) {
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
       <div className="min-w-0">
@@ -24,9 +26,10 @@ function DepositLine({ deposit, action }: { deposit: DepositRow & { exact?: bool
           {longDate(deposit.posted)} · {deposit.account}
           {deposit.exact ? ' · exact amount' : ''}
         </div>
+        {footer && <div className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">{footer}</div>}
       </div>
       <div className="flex items-center gap-3">
-        <span className="font-medium tabular-nums text-emerald-700 dark:text-emerald-400">{money(deposit.amount)}</span>
+        <span className={cx('font-medium tabular-nums', deposit.amount < 0 ? 'text-slate-700 dark:text-slate-300' : 'text-emerald-700 dark:text-emerald-400')}>{money(deposit.amount)}</span>
         {action}
       </div>
     </li>
@@ -92,7 +95,6 @@ export function StayDetail() {
   const checkIn = localTime(s.checkIn);
   const checkOut = localTime(s.checkOut);
   const party = partyText(s);
-  const paidSoFar = deposits.reduce((n, d) => n + d.amount, 0);
 
   return (
     <>
@@ -208,39 +210,93 @@ export function StayDetail() {
             </div>
           ))}
 
-          {!payouts.length && (
+          {!payouts.length && s.status !== 'accepted' && !deposits.length && <Empty>This stay was {s.status}.</Empty>}
+          {!payouts.length && (s.status === 'accepted' || deposits.length > 0) && (
             <>
+              <Row label="Expected" value={money(s.depositAmount ?? s.payout)} />
+              {s.depositAmount !== null && s.payout !== null && Math.round(s.depositAmount * 100) !== Math.round(s.payout * 100) && (
+                <p className="-mt-1 mb-1 text-xs text-slate-500 dark:text-slate-400">
+                  {s.platformLabel} pays the full {money(s.depositAmount)} and bills its commission of {money(s.depositAmount - s.payout)} separately.
+                </p>
+              )}
+              <Row label="Received" value={money(s.received)} />
+              {detail.data.due > 0.005 && <Row label={s.payment === 'upcoming' ? 'Still to come' : 'Still due'} value={money(detail.data.due)} strong />}
+
               {deposits.length > 0 && (
-                <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                <ul className="mt-2 divide-y divide-slate-100 dark:divide-slate-800">
                   {deposits.map((d) => (
                     <DepositLine
-                      key={d.id}
+                      key={`${d.id}-${d.purpose}`}
                       deposit={d}
                       action={
-                        <Button busy={busy} onClick={() => run(`/api/stays/${encodeURIComponent(s.id)}/unlink`, { transactionId: d.id })} title="Not this deposit">
+                        <Button busy={busy} onClick={() => run(`/api/stays/${encodeURIComponent(s.id)}/unlink`, { transactionId: d.id, purpose: d.purpose })} title="Unlink this part">
                           <Unlink className="size-4" aria-hidden />
                           <span className="sr-only">Unlink</span>
                         </Button>
+                      }
+                      footer={
+                        <>
+                          {PURPOSE_LABELS[d.purpose]} {money(d.share)}
+                          {Math.abs(d.amount) - d.share > 0.005 ? ` of ${money(Math.abs(d.amount))}` : ''}
+                          {d.balance > 0.005 && d.purpose !== 'refund' && (
+                            <>
+                              {' · '}
+                              {money(d.balance)} left for other stays{' '}
+                              <button
+                                type="button"
+                                className="font-medium text-emerald-700 underline dark:text-emerald-400"
+                                disabled={busy}
+                                onClick={() => run(`/api/stays/${encodeURIComponent(s.id)}/link`, { transactionId: d.id, purpose: 'security' })}
+                              >
+                                Hold the {money(d.balance)} as a security deposit
+                              </button>
+                            </>
+                          )}
+                        </>
                       }
                     />
                   ))}
                 </ul>
               )}
-              {deposits.length > 1 && <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Paid in {plural(deposits.length, 'part')}, {money(paidSoFar)} in all.</p>}
-              {!deposits.length && s.status === 'accepted' && (
-                <>
-                  <p className="text-sm text-slate-600 dark:text-slate-400">
-                    {s.payment === 'upcoming' ? 'The stay is still to come.' : 'No deposit is linked yet.'} Expected: <span className="font-medium">{money(s.depositAmount ?? s.payout)}</span>.
-                  </p>
-                  {s.depositAmount !== null && s.payout !== null && Math.round(s.depositAmount * 100) !== Math.round(s.payout * 100) && (
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      {s.platformLabel} pays the full {money(s.depositAmount)} and bills its commission of {money(s.depositAmount - s.payout)} separately.
-                    </p>
-                  )}
-                  <Suggestions list={suggestions} busy={busy} onLink={(txId) => run(`/api/stays/${encodeURIComponent(s.id)}/link`, { transactionId: txId })} />
-                </>
+              {s.status === 'accepted' && detail.data.due > 0.005 && (
+                <Suggestions list={suggestions} due={detail.data.due} busy={busy} onLink={(txId, amount) => run(`/api/stays/${encodeURIComponent(s.id)}/link`, { transactionId: txId, amount })} />
               )}
-              {!deposits.length && s.status !== 'accepted' && <Empty>This stay was {s.status}.</Empty>}
+
+              {s.security > 0 && (
+                <div className="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800">
+                  <p className="text-sm font-medium">Security deposit</p>
+                  <Row label="Held" value={money(s.security)} />
+                  <Row label="Returned" value={money(s.refunded)} />
+                  {s.security - s.refunded > 0.005 ? (
+                    <>
+                      <Row label="Still to return" value={money(s.security - s.refunded)} strong />
+                      {detail.data.refundSuggestions.length ? (
+                        <>
+                          <p className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">Is it one of these payments out?</p>
+                          <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {detail.data.refundSuggestions.map((r) => (
+                              <DepositLine
+                                key={r.id}
+                                deposit={r}
+                                action={
+                                  <Button busy={busy} onClick={() => run(`/api/stays/${encodeURIComponent(s.id)}/link`, { transactionId: r.id, purpose: 'refund' })}>
+                                    <Link2 className="size-4" aria-hidden />
+                                    It's the refund
+                                  </Button>
+                                }
+                              />
+                            ))}
+                          </ul>
+                        </>
+                      ) : (
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">When the refund leaves your bank, it will be offered here to link.</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">Returned in full.</p>
+                  )}
+                </div>
+              )}
             </>
           )}
         </Card>
@@ -266,26 +322,54 @@ export function StayDetail() {
   );
 }
 
-function Suggestions({ list, busy, onLink }: { list: (DepositRow & { exact: boolean })[]; busy: boolean; onLink: (txId: number) => void }) {
+function Suggestions({ list, due, busy, onLink }: { list: (DepositRow & { exact: boolean; balance?: number })[]; due?: number; busy: boolean; onLink: (txId: number, amount?: number) => void }) {
   if (!list.length) return <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">No deposit in the bank looks like this one yet.</p>;
   return (
     <>
       <p className="mt-3 text-xs font-medium text-slate-600 dark:text-slate-400">Could be one of these:</p>
       <ul className="divide-y divide-slate-100 dark:divide-slate-800">
         {list.map((d) => (
-          <DepositLine
-            key={d.id}
-            deposit={d}
-            action={
-              <Button busy={busy} onClick={() => onLink(d.id)}>
-                <Link2 className="size-4" aria-hidden />
-                Link
-              </Button>
-            }
-          />
+          <Suggestion key={d.id} deposit={d} due={due} busy={busy} onLink={onLink} />
         ))}
       </ul>
     </>
+  );
+}
+
+// One possible deposit, with how much of it to take: what's due, up to what's left of it.
+function Suggestion({ deposit: d, due, busy, onLink }: { deposit: DepositRow & { exact: boolean; balance?: number }; due?: number; busy: boolean; onLink: (txId: number, amount?: number) => void }) {
+  const left = d.balance ?? d.amount;
+  const [amount, setAmount] = useState(() => (due !== undefined ? Math.min(due, left) : left).toFixed(2));
+  const value = Number(amount);
+  const ok = value > 0 && value <= left + 0.005;
+  return (
+    <DepositLine
+      deposit={d}
+      footer={left < d.amount - 0.005 ? `${money(left)} of it is still free` : undefined}
+      action={
+        <span className="flex items-center gap-2">
+          {due !== undefined && (
+            <label className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+              <span className="sr-only">Amount for this stay</span>$
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0.01"
+                max={left}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="w-24 rounded-md border border-slate-300 bg-white px-2 py-1 text-right text-sm tabular-nums dark:border-slate-700 dark:bg-slate-900"
+              />
+            </label>
+          )}
+          <Button busy={busy} disabled={!ok} onClick={() => onLink(d.id, due !== undefined ? Math.round(value * 100) / 100 : undefined)}>
+            <Link2 className="size-4" aria-hidden />
+            Link
+          </Button>
+        </span>
+      }
+    />
   );
 }
 

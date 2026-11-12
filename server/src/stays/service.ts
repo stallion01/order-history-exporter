@@ -321,6 +321,9 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
 
   // A deposit is free when nothing else claims it.
   const FREE = `NOT EXISTS (SELECT 1 FROM stay_payouts x WHERE x.transaction_id = t.id) AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id)`;
+  // What's left of a transaction for stays: a deposit less what stays and security
+  // deposits took, or a payment out less what refunds took.
+  const BALANCE = `ABS(t.amount) - COALESCE((SELECT SUM(d.amount) FROM stay_deposits d WHERE d.transaction_id = t.id), 0)`;
   const MAX_GROUP = 6;
   const MAX_POOL = 18;
 
@@ -346,11 +349,12 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const [from, to] = depositWindow(stay);
     const rows = db
       .prepare(
-        `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+        `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account, ${BALANCE} AS balance FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
          WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ?
            ${exactOnly ? 'AND CAST(ROUND(t.amount * 100) AS INTEGER) = ?' : ''}
            AND NOT EXISTS (SELECT 1 FROM stay_payouts x WHERE x.transaction_id = t.id)
-           AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id AND d.stay_id != ?)
+           AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id AND d.stay_id = ?)
+           AND ${BALANCE} > 0.005
            AND NOT EXISTS (SELECT 1 FROM stay_link_rejections j WHERE j.subject = ? AND j.transaction_id = t.id)
          ORDER BY t.posted`
       )
@@ -485,7 +489,8 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const rejected = rejectedSet();
     const deposits = freeDeposits(shift(stays[0].booked_at || stays[0].arrival, -60));
     const used = new Set<number>();
-    const link = db.prepare(`INSERT OR IGNORE INTO stay_deposits (stay_id, transaction_id, source, created_at) VALUES (?, ?, 'auto', ?)`);
+    const insert = db.prepare(`INSERT OR IGNORE INTO stay_deposits (stay_id, transaction_id, purpose, amount, source, created_at) VALUES (?, ?, 'stay', ?, 'auto', ?)`);
+    const link = { run: (stayId: string, txId: number, at: string) => insert.run(stayId, txId, depositAmount(stays.find((s) => s.id === stayId) as Row), at) };
     const fits = (s: Row, d: Deposit) => {
       const [from, to] = depositWindow(s);
       return !used.has(d.id) && between(d.posted, from, to) && ownDeposit(s.platform, d.named) && !rejected.has(`stay:${s.id}|${d.id}`);
@@ -594,7 +599,10 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     return { sql: `WHERE ${clauses.join(' AND ')}`, params };
   }
 
-  const PAID = `EXISTS (SELECT 1 FROM stay_deposits d WHERE d.stay_id = s.id) OR EXISTS (SELECT 1 FROM stay_payout_lines l JOIN stay_payouts p ON p.id = l.payout_id WHERE l.stay_id = s.id AND p.transaction_id IS NOT NULL)`;
+  const EXPECTED = `(CASE WHEN s.platform = 'booking' AND s.host_fees < 0 THEN s.payout - s.host_fees ELSE s.payout END)`;
+  const RECEIVED = `COALESCE((SELECT SUM(d.amount) FROM stay_deposits d WHERE d.stay_id = s.id AND d.purpose = 'stay'), 0)`;
+  // Within a dollar counts as paid: banks and platforms round differently.
+  const PAID = `(${RECEIVED} > 0 AND ${RECEIVED} >= ${EXPECTED} - 1) OR EXISTS (SELECT 1 FROM stay_payout_lines l JOIN stay_payouts p ON p.id = l.payout_id WHERE l.stay_id = s.id AND p.transaction_id IS NOT NULL)`;
 
   // The first day the bank records cover: money due before then can't be checked.
   const bankStart = () => ((db.prepare('SELECT MIN(posted) AS d FROM bank_transactions WHERE amount > 0').get() as Row).d as string | null) ?? null;
@@ -605,6 +613,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     if (r.status !== 'accepted') return 'none' as const;
     if (r.paid) return 'paid' as const;
     if (r.conflict) return 'conflict' as const;
+    if (r.received > 0) return 'partial' as const;
     if (!r.payout) return 'none' as const;
     const expected = r.expected_on as string;
     if (expected > today()) return 'upcoming' as const;
@@ -648,7 +657,11 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       depositAmount: r.payout === null ? null : depositAmount(r),
       note: r.note as string | null,
       paid,
-      // paid, conflict (more than one way it could have been paid), due (on its way),
+      received: round(Number(r.received) || 0),
+      // Part of a deposit held as a security deposit, and what's been paid back.
+      security: round(Number(r.security) || 0),
+      refunded: round(Number(r.refunded) || 0),
+      // paid, partial (some of it), conflict (more than one way it could have been paid), due (on its way),
       // missing, nobank (before the bank records start), upcoming, or none.
       payment: paymentOf(r, start),
       expectedOn: r.expected_on as string,
@@ -657,7 +670,9 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
   };
 
   const CONFLICT = `EXISTS (SELECT 1 FROM stay_conflicts c WHERE c.subject = 'stay:' || s.id OR c.subject IN (SELECT 'payout:' || l.payout_id FROM stay_payout_lines l WHERE l.stay_id = s.id))`;
-  const SELECT = `SELECT s.*, p.name AS property_name, (${PAID}) AS paid, (${CONFLICT}) AS conflict,
+  const SELECT = `SELECT s.*, p.name AS property_name, (${PAID}) AS paid, (${CONFLICT}) AS conflict, ${RECEIVED} AS received,
+      COALESCE((SELECT SUM(d.amount) FROM stay_deposits d WHERE d.stay_id = s.id AND d.purpose = 'security'), 0) AS security,
+      COALESCE((SELECT SUM(d.amount) FROM stay_deposits d WHERE d.stay_id = s.id AND d.purpose = 'refund'), 0) AS refunded,
       COALESCE((SELECT MIN(po.paid_on) FROM stay_payout_lines l JOIN stay_payouts po ON po.id = l.payout_id WHERE l.stay_id = s.id), date(s.arrival, '+1 day')) AS expected_on,
       COALESCE((SELECT MIN(t.posted) FROM stay_deposits d JOIN bank_transactions t ON t.id = d.transaction_id WHERE d.stay_id = s.id),
                (SELECT MIN(t.posted) FROM stay_payout_lines l JOIN stay_payouts po ON po.id = l.payout_id JOIN bank_transactions t ON t.id = po.transaction_id WHERE l.stay_id = s.id)) AS deposit_date
@@ -669,7 +684,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const rows = db.prepare(`${SELECT} ${sql} ORDER BY s.arrival ${asc ? 'ASC' : 'DESC'}, s.id LIMIT 2000`).all(...params) as Row[];
     const start = bankStart();
     let stays = rows.map((r) => toStay(r, start));
-    if (filters.view === 'unpaid' && !filters.deposit) stays = stays.filter((s) => s.payment === 'missing' || s.payment === 'conflict');
+    if (filters.view === 'unpaid' && !filters.deposit) stays = stays.filter((s) => s.payment === 'missing' || s.payment === 'conflict' || s.payment === 'partial');
     if (filters.view === 'conflicts' && !filters.deposit) stays = stays.filter((s) => s.payment === 'conflict');
 
     // Totals for what's listed, and per property.
@@ -678,9 +693,9 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       stays: accepted.length,
       nights: accepted.reduce((n, s) => n + (s.nights || 0), 0),
       payout: round(accepted.reduce((n, s) => n + (s.payout || 0), 0)),
-      paid: round(accepted.filter((s) => s.paid).reduce((n, s) => n + (s.payout || 0), 0)),
-      missing: round(accepted.filter((s) => s.payment === 'missing').reduce((n, s) => n + (s.payout || 0), 0)),
-      missingCount: accepted.filter((s) => s.payment === 'missing').length,
+      paid: round(accepted.reduce((n, s) => n + (s.paid ? s.payout || 0 : s.received), 0)),
+      missing: round(accepted.filter((s) => s.payment === 'missing' || s.payment === 'partial').reduce((n, s) => n + (s.depositAmount || 0) - s.received, 0)),
+      missingCount: accepted.filter((s) => s.payment === 'missing' || s.payment === 'partial').length,
       conflictCount: accepted.filter((s) => s.payment === 'conflict').length,
       due: round(accepted.filter((s) => s.payment === 'due').reduce((n, s) => n + (s.payout || 0), 0)),
       noBank: round(accepted.filter((s) => s.payment === 'nobank').reduce((n, s) => n + (s.payout || 0), 0)),
@@ -752,21 +767,25 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const deposits = (
       db
         .prepare(
-          `SELECT t.*, a.name AS account, d.source FROM stay_deposits d JOIN bank_transactions t ON t.id = d.transaction_id JOIN bank_accounts a ON a.id = t.account_id WHERE d.stay_id = ? ORDER BY t.posted`
+          `SELECT t.*, a.name AS account, d.source, d.purpose, d.amount AS share, ${BALANCE} AS balance FROM stay_deposits d
+           JOIN bank_transactions t ON t.id = d.transaction_id JOIN bank_accounts a ON a.id = t.account_id WHERE d.stay_id = ? ORDER BY t.posted, d.id`
         )
         .all(id) as Row[]
-    ).map((t) => ({ ...txRow(t), source: t.source as string }));
+    ).map((t) => ({ ...txRow(t), source: t.source as string, purpose: t.purpose as 'stay' | 'security' | 'refund', share: t.share as number, balance: round(t.balance) }));
 
-    // Deposits that might be this stay's, when Hospitable has no payout for it.
-    let suggestions: (ReturnType<typeof txRow> & { exact: boolean })[] = [];
-    if (!payouts.length && !deposits.length && stay.status === 'accepted') {
-      const target = stay.payout ? toCents(depositAmount(row)) : null;
+    // Deposits that might be this stay's, when Hospitable has no payout for it: those
+    // with something left, offered for what's still due.
+    const due = round(depositAmount(row) - stay.received);
+    let suggestions: (ReturnType<typeof txRow> & { exact: boolean; balance: number })[] = [];
+    if (!payouts.length && !stay.paid && stay.status === 'accepted') {
+      const target = due > 0 ? toCents(due) : null;
       suggestions = stayCandidates(row, false)
-        .map((c) => ({ ...txRow(c), exact: target !== null && toCents(c.amount) === target }))
+        .map((c) => ({ ...txRow(c), balance: round(c.balance), exact: target !== null && toCents(c.balance) === target }))
         .sort((a, b) => Number(b.exact) - Number(a.exact) || Math.abs(dayNumber(a.posted) - dayNumber(stay.arrival)) - Math.abs(dayNumber(b.posted) - dayNumber(stay.arrival)))
         .slice(0, 10);
     }
-    return { stay, lines, payouts, deposits, suggestions, conflicts: conflictsFor([`stay:${id}`, ...payouts.map((p) => `payout:${p.id}`)]) };
+    const held = round(stay.security - stay.refunded);
+    return { stay, lines, payouts, deposits, suggestions, due: Math.max(0, due), refundSuggestions: held > 0.005 ? refundCandidates(row, held) : [], conflicts: conflictsFor([`stay:${id}`, ...payouts.map((p) => `payout:${p.id}`)]) };
   }
 
   // What a conflict's choices are, in words: each way the deposit could be made up.
@@ -827,7 +846,10 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       for (const subject of subjects) {
         const id = subject.slice(subject.indexOf(':') + 1);
         if (subject.startsWith('payout:')) db.prepare(`UPDATE stay_payouts SET transaction_id = ?, match_source = 'user' WHERE id = ?`).run(transactionId, id);
-        else db.prepare(`INSERT INTO stay_deposits (stay_id, transaction_id, source, created_at) VALUES (?, ?, 'user', ?) ON CONFLICT DO UPDATE SET source = 'user'`).run(id, transactionId, now());
+        else {
+          const s = db.prepare('SELECT * FROM stays WHERE id = ?').get(id) as Row | undefined;
+          if (s) db.prepare(`INSERT INTO stay_deposits (stay_id, transaction_id, purpose, amount, source, created_at) VALUES (?, ?, 'stay', ?, 'user', ?) ON CONFLICT DO UPDATE SET source = 'user'`).run(id, transactionId, depositAmount(s), now());
+        }
       }
       db.prepare('DELETE FROM stay_conflicts WHERE transaction_id = ?').run(transactionId);
       db.exec('COMMIT');
@@ -946,18 +968,73 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     if (!bank.transactionById(id)) throw new Error('That transaction was not found.');
   };
 
-  function linkStay(stayId: string, txId: number) {
-    txExists(txId);
-    if (!db.prepare('SELECT 1 FROM stays WHERE id = ?').get(stayId)) throw new Error('That stay was not found.');
+  type Purpose = 'stay' | 'security' | 'refund';
+
+  // What's left of a transaction for stays (see BALANCE).
+  function balanceOf(txId: number) {
+    const row = db.prepare(`SELECT ${BALANCE} AS b FROM bank_transactions t WHERE t.id = ?`).get(txId) as Row | undefined;
+    return round(Number(row?.b) || 0);
+  }
+
+  // Payments out after a stay that could be its security deposit coming back.
+  function refundCandidates(stay: Row, held: number) {
+    return (
+      db
+        .prepare(
+          `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account, ${BALANCE} AS balance FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+           WHERE t.amount < 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ? AND ${BALANCE} > 0.005
+             AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id AND d.stay_id = ?)
+             AND NOT EXISTS (SELECT 1 FROM stay_link_rejections j WHERE j.subject = ? AND j.transaction_id = t.id)
+           ORDER BY t.posted`
+        )
+        .all(shift(stay.departure, -3), shift(stay.departure, 90), stay.id, `refund:${stay.id}`) as Row[]
+    )
+      .map((r) => ({ ...txRow(r), balance: round(r.balance), exact: toCents(r.balance) === toCents(held), text: `${r.payee || ''} ${r.description || ''}` }))
+      // The whole deposit back, or part of it (some kept for damage) by cheque, Zelle and the like; not ordinary bills.
+      .filter((r) => r.balance <= held + 0.005 && (r.exact || /\b(check|chk|cheque|zelle|venmo|paypal|cash ?app|transfer|refund)\b/i.test(r.text)))
+      .map(({ text: _text, ...r }) => r)
+      .sort((a, b) => Number(b.exact) - Number(a.exact) || a.posted.localeCompare(b.posted))
+      .slice(0, 10);
+  }
+
+  // Links part or all of a transaction to a stay: a payment for the stay, a security
+  // deposit held, or a refund paid back. With no amount, it takes what's still due (or
+  // held), up to what's left of the transaction.
+  function linkStay(stayId: string, txId: number, options: { amount?: number | null; purpose?: Purpose } = {}) {
+    const tx = bank.transactionById(txId) as Row | null;
+    if (!tx) throw new Error('That transaction was not found.');
+    const stay = db.prepare(`${SELECT} WHERE s.id = ?`).get(stayId) as Row | undefined;
+    if (!stay) throw new Error('That stay was not found.');
+    const purpose = options.purpose || 'stay';
     if (db.prepare('SELECT 1 FROM stay_payouts WHERE transaction_id = ?').get(txId)) throw new Error('That deposit is already an Airbnb payout.');
-    db.prepare('DELETE FROM stay_link_rejections WHERE subject = ? AND transaction_id = ?').run(`stay:${stayId}`, txId);
-    db.prepare(`INSERT INTO stay_deposits (stay_id, transaction_id, source, created_at) VALUES (?, ?, 'user', ?) ON CONFLICT DO UPDATE SET source = 'user'`).run(stayId, txId, now());
+    if (purpose === 'refund' ? tx.amount >= 0 : tx.amount <= 0) throw new Error(purpose === 'refund' ? 'A refund is money paid out.' : 'Only money coming in can pay for a stay.');
+    const existing = db.prepare('SELECT amount FROM stay_deposits WHERE stay_id = ? AND transaction_id = ? AND purpose = ?').get(stayId, txId, purpose) as Row | undefined;
+    const left = round(balanceOf(txId) + (Number(existing?.amount) || 0));
+    if (left <= 0.005) throw new Error('Nothing is left of that transaction to link.');
+    const wanted =
+      purpose === 'stay' ? round(depositAmount(stay) - Number(stay.received) + (Number(existing?.amount) || 0)) : purpose === 'security' ? left : round(Number(stay.security) - Number(stay.refunded) + (Number(existing?.amount) || 0));
+    const amount = round(options.amount ?? (wanted > 0.005 ? Math.min(wanted, left) : left));
+    if (!(amount > 0)) throw new Error('The amount must be more than zero.');
+    if (amount > left + 0.005) throw new Error(`Only ${left.toFixed(2)} is left of that transaction.`);
+    db.prepare('DELETE FROM stay_link_rejections WHERE subject IN (?, ?) AND transaction_id = ?').run(`stay:${stayId}`, `refund:${stayId}`, txId);
+    db.prepare(
+      `INSERT INTO stay_deposits (stay_id, transaction_id, purpose, amount, source, created_at) VALUES (?, ?, ?, ?, 'user', ?)
+       ON CONFLICT (stay_id, transaction_id, purpose) DO UPDATE SET amount = excluded.amount, source = 'user'`
+    ).run(stayId, txId, purpose, amount, now());
   }
 
   // Unlinked by hand: not matched to that deposit again.
-  function unlinkStay(stayId: string, txId: number) {
-    const removed = db.prepare('DELETE FROM stay_deposits WHERE stay_id = ? AND transaction_id = ?').run(stayId, txId).changes > 0;
-    db.prepare('INSERT OR IGNORE INTO stay_link_rejections (subject, transaction_id) VALUES (?, ?)').run(`stay:${stayId}`, txId);
+  function unlinkStay(stayId: string, txId: number, purpose?: Purpose) {
+    const removed = (
+      purpose
+        ? db.prepare('DELETE FROM stay_deposits WHERE stay_id = ? AND transaction_id = ? AND purpose = ?').run(stayId, txId, purpose)
+        : db.prepare('DELETE FROM stay_deposits WHERE stay_id = ? AND transaction_id = ?').run(stayId, txId)
+    ).changes > 0;
+    // Once nothing of it is linked to this stay, it isn't offered to the stay again.
+    if (removed && !db.prepare('SELECT 1 FROM stay_deposits WHERE stay_id = ? AND transaction_id = ?').get(stayId, txId)) {
+      const tx = bank.transactionById(txId) as Row | null;
+      db.prepare('INSERT OR IGNORE INTO stay_link_rejections (subject, transaction_id) VALUES (?, ?)').run(`${tx && tx.amount < 0 ? 'refund' : 'stay'}:${stayId}`, txId);
+    }
     return removed;
   }
 

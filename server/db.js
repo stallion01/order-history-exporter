@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -470,6 +470,35 @@ const SCHEMA_V13 = `
   );
 `;
 
+// A deposit can be shared between stays, each taking part of it, and part can be a
+// security deposit; a refund (money out) can be linked against that. Each link now
+// says how much and what for. Existing links keep the whole deposit, or each stay's
+// expected amount where one deposit paid for several.
+const SCHEMA_V14 = `
+  CREATE TABLE stay_deposits_new (
+    id INTEGER PRIMARY KEY,
+    stay_id TEXT NOT NULL REFERENCES stays (id) ON DELETE CASCADE,
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    purpose TEXT NOT NULL DEFAULT 'stay',
+    amount REAL NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (stay_id, transaction_id, purpose)
+  );
+  INSERT INTO stay_deposits_new (stay_id, transaction_id, purpose, amount, source, created_at)
+    SELECT d.stay_id, d.transaction_id, 'stay',
+      CASE WHEN (SELECT COUNT(*) FROM stay_deposits o WHERE o.transaction_id = d.transaction_id) = 1
+        THEN (SELECT t.amount FROM bank_transactions t WHERE t.id = d.transaction_id)
+        ELSE (SELECT CASE WHEN s.platform = 'booking' AND s.host_fees < 0 THEN s.payout - s.host_fees ELSE s.payout END FROM stays s WHERE s.id = d.stay_id)
+      END,
+      d.source, d.created_at
+    FROM stay_deposits d;
+  DROP TABLE stay_deposits;
+  ALTER TABLE stay_deposits_new RENAME TO stay_deposits;
+  CREATE INDEX stay_deposits_tx ON stay_deposits (transaction_id);
+  CREATE INDEX stay_deposits_stay ON stay_deposits (stay_id);
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -637,6 +666,7 @@ function migrate(db, file) {
     if (version < 11) db.exec(SCHEMA_V11);
     if (version < 12) db.exec(SCHEMA_V12);
     if (version < 13) db.exec(SCHEMA_V13);
+    if (version < 14) db.exec(SCHEMA_V14);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
