@@ -166,6 +166,14 @@ export function buildApp(options: AppOptions): FastifyInstance {
   // Store orders and the card charges that paid for them, matched whenever either arrives.
   const correlate = correlationService({ db, bank });
   bank.onImport(() => correlate.matchOrders());
+  // And once on start, so charges and orders that arrived before matching ran (an
+  // older version, or a failed run) don't wait for a click. Exact amounts with one
+  // candidate link on their own; anything ambiguous is left for the user.
+  try {
+    correlate.matchOrders();
+  } catch (err) {
+    app.log.warn({ err }, 'Matching orders to charges on start failed');
+  }
   // Item categories decide how linked charges split, so a change there flows through.
   app.addHook('onResponse', async (request, reply) => {
     if (request.method === 'POST' && reply.statusCode < 400 && /^\/api\/(items\/(category|status)|categories)/.test(request.url)) correlate.refreshLinked();

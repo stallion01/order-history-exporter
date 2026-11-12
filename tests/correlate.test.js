@@ -130,6 +130,36 @@ test('a charge on a different card is not matched; it can be linked by hand, and
   assert.deepEqual((await charge('WALMART'))[0].orders, [], 'not linked again on its own');
 });
 
+test('orders and charges already in the database are matched when the server starts', async () => {
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'eh-start-'));
+  const db2 = openDatabase(path.join(dir2, 'orders.db'));
+  // As left by a version that didn't match yet: the orders and the card charges, unlinked.
+  db2.saveOrders('amazon', [
+    { orderId: 'S1', date: '2026-05-01', total: 42.5, items: [{ name: 'Batteries', price: 42.5 }] },
+    { orderId: 'S2', date: '2026-05-02', total: 19.99, items: [{ name: 'Light Bulbs', price: 19.99 }] },
+    { orderId: 'S3', date: '2026-05-02', total: 19.99, items: [{ name: 'Light Bulbs', price: 19.99 }] },
+    // Two equal orders and two equal charges: each pairs with the closer one.
+    { orderId: 'P1', date: '2026-05-10', total: 30, items: [{ name: 'Filters', price: 30 }] },
+    { orderId: 'P2', date: '2026-05-12', total: 30, items: [{ name: 'Filters', price: 30 }] },
+  ]);
+  const raw = db2.raw;
+  const account = Number(raw.prepare(`INSERT INTO bank_accounts (name, kind, owner, created_at) VALUES ('Card', 'credit', 'business', '')`).run().lastInsertRowid);
+  const add = raw.prepare(`INSERT INTO bank_transactions (account_id, posted, amount, description, payee, created_at, updated_at) VALUES (?, ?, ?, ?, 'Amazon', '', '')`);
+  const one = Number(add.run(account, '2026-05-03', -42.5, 'AMZN Mktp US*AA11').lastInsertRowid);
+  const twin = Number(add.run(account, '2026-05-04', -19.99, 'AMZN Mktp US*BB22').lastInsertRowid);
+  const pairA = Number(add.run(account, '2026-05-12', -30, 'AMZN Mktp US*CC33').lastInsertRowid);
+  const pairB = Number(add.run(account, '2026-05-13', -30, 'AMZN Mktp US*DD44').lastInsertRowid);
+
+  const app2 = buildApp({ db: db2, tokens: { get: () => 'tok', rotate: () => 'tok' }, allowedHosts: () => true });
+  await app2.ready();
+  const links = raw.prepare('SELECT transaction_id, order_id FROM order_links ORDER BY transaction_id').all().map((r) => [r.transaction_id, r.order_id]);
+  assert.deepEqual(links, [[one, 'S1'], [pairA, 'P2'], [pairB, 'P1']], 'exact matches link; two equal orders for one charge wait for the user');
+  assert.ok(!links.some(([id]) => id === twin));
+  await app2.close();
+  db2.close();
+  fs.rmSync(dir2, { recursive: true, force: true });
+});
+
 test('changing an item category re-splits the charge', async () => {
   await post('/api/items/category', { name: 'Paper Towels', category: 'Cleaning Supplies' });
   const [tx] = await charge('1A2B3C');

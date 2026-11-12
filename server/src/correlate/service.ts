@@ -234,44 +234,74 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
     const used = new Set<number>();
     const linked: number[] = [];
 
-    for (const order of orders) {
-      const day = dayNumber(order.order_date);
-      const card = lastFour(order.payment);
-      const total = toCents(order.total);
-      const fits = charges.filter((c) => {
-        const offset = dayNumber(c.posted) - day;
-        return (
-          !used.has(c.id) &&
-          ORDER_STORE_PAYEES[order.store].includes(c.payee) &&
-          offset >= -BEFORE_ORDER_DAYS &&
-          offset <= AFTER_ORDER_DAYS &&
-          !rejected.has(`${c.id}|${order.store}|${order.order_id}`) &&
-          // A different card than the order says was used can't be it.
-          !(card && c.last4 && c.last4 !== card)
+    const taken = new Set<string>();
+    const orderKeyOf = (o: Row) => `${o.store}|${o.order_id}`;
+    const window = (charge: Row, order: Row) => {
+      const offset = dayNumber(charge.posted) - dayNumber(order.order_date);
+      return offset >= -BEFORE_ORDER_DAYS && offset <= AFTER_ORDER_DAYS;
+    };
+    // Is this order clearly the one for this charge? Not if another open order for the
+    // same amount at the same store is as close (or closer) in date: then two orders
+    // could be it, and the user decides.
+    const clearlyThis = (charge: Row, order: Row) => {
+      const mine = Math.abs(dayNumber(charge.posted) - dayNumber(order.order_date));
+      return !orders.some(
+        (o) =>
+          o !== order &&
+          !taken.has(orderKeyOf(o)) &&
+          o.store === order.store &&
+          toCents(o.total) === toCents(order.total) &&
+          window(charge, o) &&
+          !rejected.has(`${charge.id}|${o.store}|${o.order_id}`) &&
+          Math.abs(dayNumber(charge.posted) - dayNumber(o.order_date)) <= mine
+      );
+    };
+
+    // A second pass settles pairs: two equal orders and two equal charges, once the
+    // closer of each has been linked.
+    for (let pass = 0; pass < 3; pass++) {
+      let progress = false;
+      for (const order of orders) {
+        if (taken.has(orderKeyOf(order))) continue;
+        const day = dayNumber(order.order_date);
+        const card = lastFour(order.payment);
+        const total = toCents(order.total);
+        const fits = charges.filter(
+          (c) =>
+            !used.has(c.id) &&
+            ORDER_STORE_PAYEES[order.store].includes(c.payee) &&
+            window(c, order) &&
+            !rejected.has(`${c.id}|${order.store}|${order.order_id}`) &&
+            // A different card than the order says was used can't be it.
+            !(card && c.last4 && c.last4 !== card)
         );
-      });
-      let chosen: Row[] | null = null;
-      const exact = fits.filter((c) => -toCents(c.amount) === total);
-      if (exact.length === 1) chosen = exact;
-      else if (exact.length > 1) {
-        const sameCard = exact.filter((c) => card && c.last4 === card);
-        if (sameCard.length === 1) chosen = sameCard;
-        else {
-          const byDate = [...exact].sort((a, b) => Math.abs(dayNumber(a.posted) - day) - Math.abs(dayNumber(b.posted) - day));
-          if (Math.abs(dayNumber(byDate[0].posted) - day) < Math.abs(dayNumber(byDate[1].posted) - day)) chosen = [byDate[0]];
+        let chosen: Row[] | null = null;
+        const exact = fits.filter((c) => -toCents(c.amount) === total);
+        if (exact.length === 1) chosen = exact;
+        else if (exact.length > 1) {
+          const sameCard = exact.filter((c) => card && c.last4 === card);
+          if (sameCard.length === 1) chosen = sameCard;
+          else {
+            const byDate = [...exact].sort((a, b) => Math.abs(dayNumber(a.posted) - day) - Math.abs(dayNumber(b.posted) - day));
+            if (Math.abs(dayNumber(byDate[0].posted) - day) < Math.abs(dayNumber(byDate[1].posted) - day)) chosen = [byDate[0]];
+          }
+        } else {
+          // Charged in parts, one per shipment.
+          const pool = fits.filter((c) => -toCents(c.amount) < total).slice(0, 12);
+          const sets = shipmentSets(pool, total);
+          if (sets.length === 1) chosen = sets[0];
         }
-      } else {
-        // Charged in parts, one per shipment.
-        const pool = fits.filter((c) => -toCents(c.amount) < total).slice(0, 12);
-        const sets = shipmentSets(pool, total);
-        if (sets.length === 1) chosen = sets[0];
+        if (!chosen) continue;
+        if (chosen.length === 1 && !clearlyThis(chosen[0], order)) continue;
+        for (const c of chosen) {
+          link(c.id, order.store, order.order_id, 'auto', Math.abs(c.amount));
+          used.add(c.id);
+          linked.push(c.id);
+        }
+        taken.add(orderKeyOf(order));
+        progress = true;
       }
-      if (!chosen) continue;
-      for (const c of chosen) {
-        link(c.id, order.store, order.order_id, 'auto', Math.abs(c.amount));
-        used.add(c.id);
-        linked.push(c.id);
-      }
+      if (!progress) break;
     }
     if (linked.length) bank.applyRules(`t.id IN (${linked.join(',')})`);
     return linked.length;
