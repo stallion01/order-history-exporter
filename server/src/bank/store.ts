@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { fitIdToTransaction } from './ofx';
-import { CARD_PAYMENT_WORDS, INCOME_CATEGORIES, REFUNDS, STORE_PAYEES, TRANSFER_WORDS, categoryHint, payeeFor } from './merchant';
+import { ACCOUNT_NUMBER_IN_PAYMENT, CARD_NUMBER_IN_PAYMENT, CARD_PAYMENT_WORDS, INCOME_CATEGORIES, PAID_TO_CARD, REFUNDS, STORE_PAYEES, TRANSFER_WORDS, categoryHint, payeeFor } from './merchant';
 import { MONEY_IN, MONEY_OUT } from './csv';
 import { toCents } from './types';
 import type { AccountKind, IncomingTransaction, Owner, Source, TxKind } from './types';
@@ -403,9 +403,9 @@ export function createBankStore(db: DatabaseSync) {
   function detectTransfers(): number {
     const rows = db
       .prepare(
-        `SELECT t.id, t.account_id, t.posted, t.amount, t.description, a.kind AS account_kind
+        `SELECT t.id, t.account_id, t.posted, t.amount, t.description, t.memo, t.kind, a.kind AS account_kind
          FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
-         WHERE t.kind_source IS NULL AND t.kind = 'normal' AND t.transfer_id IS NULL
+         WHERE ((t.kind_source IS NULL AND t.kind = 'normal') OR (t.kind_source = 'auto' AND t.kind = 'transfer')) AND t.transfer_id IS NULL
          ORDER BY t.posted, t.id`
       )
       .all() as Row[];
@@ -438,9 +438,29 @@ export function createBankStore(db: DatabaseSync) {
       paired++;
     }
     // A payment received on a card, from an account that isn't connected here.
+    const lone = db.prepare(`UPDATE bank_transactions SET kind = 'transfer', kind_source = 'auto', updated_at = ? WHERE id = ?`);
     for (const row of rows) {
-      if (used.has(row.id) || row.account_kind !== 'credit' || row.amount <= 0 || !CARD_PAYMENT_WORDS.test(row.description)) continue;
-      db.prepare(`UPDATE bank_transactions SET kind = 'transfer', kind_source = 'auto', updated_at = ? WHERE id = ?`).run(now(), row.id);
+      if (used.has(row.id) || row.kind === 'transfer' || row.account_kind !== 'credit' || row.amount <= 0 || !CARD_PAYMENT_WORDS.test(row.description)) continue;
+      lone.run(now(), row.id);
+      used.add(row.id);
+      paired++;
+    }
+    // A payment to a card from a bank account, when the card's side isn't here (or
+    // its export leaves payments out). Card numbers seen in "payment to CRD 1234"
+    // also make "payment to ACCT# 1234" a card payment.
+    const cards = new Set<string>();
+    for (const r of db.prepare(`SELECT description FROM bank_transactions WHERE description LIKE '%payment to%'`).all() as Row[]) {
+      const found = String(r.description).match(CARD_NUMBER_IN_PAYMENT);
+      if (found) cards.add(found[1]);
+    }
+    for (const a of db.prepare(`SELECT last4 FROM bank_accounts WHERE kind = 'credit' AND last4 IS NOT NULL`).all() as Row[]) cards.add(String(a.last4));
+    for (const row of rows) {
+      if (used.has(row.id) || row.kind === 'transfer' || row.account_kind === 'credit' || row.amount >= 0) continue;
+      const text = `${row.description} ${row.memo || ''}`;
+      const toAccount = text.match(ACCOUNT_NUMBER_IN_PAYMENT);
+      if (!PAID_TO_CARD.test(text) && !(toAccount && cards.has(toAccount[1]))) continue;
+      lone.run(now(), row.id);
+      used.add(row.id);
       paired++;
     }
     return paired;
@@ -1175,6 +1195,11 @@ export function createBankStore(db: DatabaseSync) {
     };
   }
 
+  // Once: card payments from checking that earlier versions counted as spending.
+  if (getSetting('card_payments_checked') !== '1') {
+    detectTransfers();
+    setSetting('card_payments_checked', '1');
+  }
   // Once: earlier versions counted refunds as income; give them their categories.
   if (getSetting('refunds_categorised') !== '1') {
     applyRules("t.amount > 0 AND (t.category_source IS NULL OR t.category_source = 'payee')");

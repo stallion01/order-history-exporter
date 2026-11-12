@@ -120,4 +120,13 @@ export const TRANSFER_WORDS = /transfer|xfer|\bpayment\b|\bpymt\b|\bpmt\b|autopa
 // A payment received on a card, from an account that may not be connected.
 // The wording banks use for a card payment, not just the word "payment" (an "AIRBNB
 // PAYMENTS" deposit is income, not a card payment).
+// A payment from a bank account to a credit card ("Online Banking payment to CRD 1234",
+// "CHASE CREDIT CRD AUTOPAY"). The card's purchases are the spending; paying the
+// card only moves money, so it's a transfer even when the card isn't connected.
+export const PAID_TO_CARD =
+  /payment to (crd|card|credit card)\b|\bcrd \d{4}\b|credit (card|crd) (payment|pmt|pymt|autopay|epay)|\bcard ?(payment|pmt)\b|cardmember serv|\b(applecard|apple card)\b|\b(chase|citi|capital one|discover|amex|american express|barclaycard|synchrony)\b.*\b(payment|pmt|pymt|autopay|epay)\b/i;
+// The card number in such a payment, so payments to "ACCT# 1234" are recognised too.
+export const CARD_NUMBER_IN_PAYMENT = /payment to (?:crd|card|credit card)\s*#?\s*(\d{4})\b/i;
+export const ACCOUNT_NUMBER_IN_PAYMENT = /payment to acct\s*#?\s*(\d{4})\b/i;
+
 export const CARD_PAYMENT_WORDS = /payment\s*-?\s*thank you|thank you for your payment|\bautopay\b|auto pay|\b(online|mobile|electronic|internet|web|ach|e-?)\s?payment\b(?!s)|payment received|^payment$|\bpymt\b|\bpmt\b/i;

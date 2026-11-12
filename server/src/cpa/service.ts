@@ -2,6 +2,7 @@
 // (operating, cost of goods sold, capital, personal) and a Schedule C or E line;
 // capital purchases go on an asset register; and what still needs a decision is listed.
 import type { DatabaseSync } from 'node:sqlite';
+import { ACCOUNT_NUMBER_IN_PAYMENT, PAID_TO_CARD } from '../bank/merchant';
 import type { BankStore } from '../bank/store';
 import type { CorrelationService, SpendLine } from '../correlate/service';
 import type { OrdersDb } from '../legacy';
@@ -202,7 +203,9 @@ export function cpaService(options: { raw: DatabaseSync; db: OrdersDb; bank: Ban
               ? 'Owner contribution'
               : to
                 ? 'Between accounts'
-                : 'Payment or transfer to an account not in Expense Hub';
+                : PAID_TO_CARD.test(t.description) || ACCOUNT_NUMBER_IN_PAYMENT.test(t.description)
+                  ? 'Credit card payment'
+                  : 'Payment or transfer to an account not in Expense Hub';
         return { posted: t.posted, from: t.account, to: to?.name ?? null, amount: -t.amount, kind, description: t.description };
       });
   }

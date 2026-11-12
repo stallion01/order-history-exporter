@@ -544,6 +544,27 @@ test('money back from a store is a refund that reduces its spending, not income'
   assert.equal(byCategory['Tools & Hardware'], 110, '130 spent, 20 back');
 });
 
+test('paying a card from checking is a transfer even when the card never shows the payment', async () => {
+  const csv = `Date,Description,Amount
+02/09/2026,Online Banking payment to CRD 4455 Confirmation# 1000000003,-900.00
+03/02/2026,Online Scheduled Payment to ACCT# 4455 Confirmation# 1000000004,-450.00
+03/05/2026,Online Scheduled Payment to ACCT# 7788 Confirmation# 1000000005,-300.00
+03/06/2026,CHASE CREDIT CRD AUTOPAY PPD ID: 0000000001,-120.00
+03/07/2026,LAWN HELPER,-60.00
+`;
+  const mapping = { date: 0, description: 1, amount: 2, debit: null, credit: null, memo: null, reference: null, flip: false, dateOrder: 'mdy' };
+  const { accountId } = await post('/api/bank/import', { content: csv, fileName: 'chk.csv', mapping, newAccount: { name: 'Paying Checking', kind: 'checking', owner: 'business' } });
+  const rows = (await get(`/api/bank/transactions?account=${accountId}&kind=all&preset=all`)).transactions;
+  const kinds = Object.fromEntries(rows.map((t) => [t.amount, t.kind]));
+  assert.equal(kinds[-900], 'transfer', 'payment to a card');
+  assert.equal(kinds[-450], 'transfer', 'payment to the same number, written as an account');
+  assert.equal(kinds[-300], 'normal', 'an account number never seen as a card');
+  assert.equal(kinds[-120], 'transfer', "a card issuer's autopay");
+  assert.equal(kinds[-60], 'normal');
+  const spending = await get(`/api/bank/transactions?account=${accountId}&direction=out&preset=all`);
+  assert.deepEqual(spending.transactions.map((t) => t.amount).sort((a, b) => a - b), [-300, -60]);
+});
+
 test('exports: CSV with every column, and an OFX that imports back as nothing new', async () => {
   const csv = await (await call(`/api/bank/export.csv?account=${cardId}`)).text();
   assert.match(csv.split('\r\n')[0], /Date,Account,Payee,Description,Memo,Amount/);
