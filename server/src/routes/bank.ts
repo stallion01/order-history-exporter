@@ -74,6 +74,7 @@ const mappingSchema = z.object({
   memo: z.number().int().min(0).nullable(),
   reference: z.number().int().min(0).nullable(),
   flip: z.boolean(),
+  direction: z.number().int().min(0).nullable().optional(),
   dateOrder: z.enum(['mdy', 'dmy', 'ymd']),
 });
 
@@ -159,6 +160,7 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
         kind: z.enum(TX_KINDS).nullable().optional(),
         note: z.string().max(1000).nullable().optional(),
         entity: z.number().int().nullable().optional(),
+        flipSign: z.literal(true).optional(),
         shares: z
           .array(z.object({ entityId: z.number().int(), percent: z.number().gt(0).max(100) }))
           .min(2)
@@ -267,7 +269,11 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
     }
     const signature = layoutSignature(table.headers);
     const saved = bank.csvLayout(signature) as (CsvMapping & { accountId?: number }) | null;
-    const mapping: CsvMapping = body.mapping || (saved ? { ...guessMapping(table), ...saved } : guessMapping(table));
+    // A remembered layout keeps its columns, but the signs are worked out for each
+    // file: a bank often exports its card and checking accounts with the same
+    // headings, and only the card lists purchases as positive.
+    const guess = guessMapping(table);
+    const mapping: CsvMapping = body.mapping || (saved ? { ...guess, ...saved, flip: guess.flip, direction: guess.direction } : guess);
     const parsed = applyMapping(table, mapping);
     const dates = parsed.transactions.map((t) => t.posted).sort();
     return {

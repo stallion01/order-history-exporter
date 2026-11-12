@@ -181,6 +181,39 @@ Date,Details,Paid out,Paid in,Balance
   assert.deepEqual(applyMapping(savings, savingsMapping).transactions.map((t) => [t.posted, t.amount]), [['2026-11-02', 3.12], ['2026-10-31', 5000], ['2026-11-05', -500]]);
 });
 
+test('CSV: a rental account full of payouts is not mistaken for a card statement', () => {
+  // Mostly positive, because most of it is income.
+  const rental = readTable(`Date,Description,Amount
+03/01/2026,AIRBNB 4977 PAYMENTS,812.40
+03/04/2026,AIRBNB PAYMENTS,655.00
+03/07/2026,HOMEAWAY.COM PAYOUT,1210.00
+03/09/2026,BOOKING.COM BV PAYMENT,430.55
+03/12/2026,POS PURCHASE HOME DEPOT,-84.10
+03/15/2026,AIRBNB PAYMENTS,700.00
+`);
+  const mapping = guessMapping(rental);
+  assert.equal(mapping.flip, false);
+  const rows = applyMapping(rental, mapping).transactions;
+  assert.deepEqual(rows.map((t) => t.amount), [812.4, 655, 1210, 430.55, -84.1, 700]);
+  assert.deepEqual(rows.slice(0, 4).map((t) => [payeeFor(t.description), categoryHint(t.description, payeeFor(t.description), t.amount)]), [
+    ['Airbnb', 'Rental Income'],
+    ['Airbnb', 'Rental Income'],
+    ['Vrbo', 'Rental Income'],
+    ['Booking.com', 'Rental Income'],
+  ]);
+
+  // Every amount positive, with a column saying which way it went.
+  const typed = readTable(`Posting Date,Description,Amount,Type
+03/01/2026,AIRBNB PAYMENTS,812.40,Credit
+03/02/2026,SHELL OIL 57444,42.17,Debit
+03/03/2026,ACME HARDWARE,19.99,DR
+03/04/2026,VRBO PAYOUT,300.00,CR
+`);
+  const typedMapping = guessMapping(typed);
+  assert.equal(typed.headers[typedMapping.direction], 'Type');
+  assert.deepEqual(applyMapping(typed, typedMapping).transactions.map((t) => t.amount), [812.4, -42.17, -19.99, 300]);
+});
+
 test('dates and amounts in the forms banks use', () => {
   assert.equal(parseDate('1/5/2026'), '2026-01-05');
   assert.equal(parseDate('01/05/26'), '2026-01-05');
@@ -319,6 +352,37 @@ test('edits and rules: the user wins, a rule applies to later rows too', async (
   assert.equal((await get(`/api/bank/transactions?q=diner`)).total, 1);
 
   await assert.rejects(post('/api/bank/transactions/update', { ids: [diner.id], category: 'Not a category' }), /Unknown category/);
+});
+
+test('transactions imported the wrong way round can be swapped back, and stay fixed', async () => {
+  const csv = `Date,Description,Amount
+04/01/2026,AIRBNB 4977 PAYMENTS,812.40
+04/03/2026,BOOKING.COM BV PAYMENT,430.55
+04/05/2026,ACE HARDWARE 0099,-25.00
+`;
+  const wrong = { date: 0, description: 1, amount: 2, debit: null, credit: null, memo: null, reference: null, flip: true, dateOrder: 'mdy' };
+  const { accountId } = await post('/api/bank/import', { content: csv, fileName: 'rental.csv', mapping: wrong, newAccount: { name: 'Rental Checking', kind: 'checking', owner: 'business' } });
+  const list = async () => (await get(`/api/bank/transactions?account=${accountId}&kind=all&preset=all`)).transactions;
+  const airbnb = (await list()).find((t) => t.payee === 'Airbnb');
+  assert.equal(airbnb.amount, -812.4);
+  assert.equal(airbnb.category, 'Platform & Merchant Fees', 'as spending, it looked like a fee');
+
+  const payouts = (await list()).filter((t) => t.payee !== 'Ace Hardware');
+  await post('/api/bank/transactions/update', { ids: payouts.map((t) => t.id), flipSign: true });
+  const fixed = await list();
+  assert.deepEqual(
+    fixed.filter((t) => t.payee !== 'Ace Hardware').map((t) => [t.payee, t.amount, t.category]).sort(),
+    [
+      ['Airbnb', 812.4, 'Rental Income'],
+      ['Booking.com', 430.55, 'Rental Income'],
+    ]
+  );
+  // The same file imported again, now read the right way round, adds no duplicates.
+  const inspect = await post('/api/bank/import/inspect', { content: csv });
+  assert.equal(inspect.mapping.flip, false);
+  const again = await post('/api/bank/import', { content: csv, accountId, mapping: inspect.mapping });
+  assert.equal(again.added, 1, 'only the hardware row, which was still the wrong way round');
+  await assert.rejects(post('/api/bank/transactions/update', { ids: [airbnb.id], flipSign: false }));
 });
 
 test('exports: CSV with every column, and an OFX that imports back as nothing new', async () => {

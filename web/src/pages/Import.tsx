@@ -19,6 +19,7 @@ interface Mapping {
   memo: number | null;
   reference: number | null;
   flip: boolean;
+  direction?: number | null;
   dateOrder: 'mdy' | 'dmy' | 'ymd';
 }
 
@@ -319,7 +320,7 @@ function CsvMapper({ inspect, mapping, onChange }: { inspect: Extract<Inspect, {
   const twoColumns = mapping.amount === null;
   const column = (key: keyof Mapping, label: string, optional = false) => (
     <Field label={label}>
-      <Select value={mapping[key] === null ? '' : String(mapping[key])} onChange={(e) => onChange({ ...mapping, [key]: e.target.value === '' ? null : Number(e.target.value) })}>
+      <Select value={mapping[key] == null ? '' : String(mapping[key])} onChange={(e) => onChange({ ...mapping, [key]: e.target.value === '' ? null : Number(e.target.value) })}>
         {optional && <option value="">None</option>}
         {columns.map(([i, h]) => (
           <option key={i} value={i}>
@@ -357,7 +358,10 @@ function CsvMapper({ inspect, mapping, onChange }: { inspect: Extract<Inspect, {
             {column('credit', 'Money in')}
           </>
         ) : (
-          column('amount', 'Amount')
+          <>
+            {column('amount', 'Amount')}
+            {column('direction', 'Money in or out (a Debit/Credit column)', true)}
+          </>
         )}
         <Field label="Dates are written">
           <Select value={mapping.dateOrder} onChange={(e) => onChange({ ...mapping, dateOrder: e.target.value as Mapping['dateOrder'] })}>
@@ -369,7 +373,7 @@ function CsvMapper({ inspect, mapping, onChange }: { inspect: Extract<Inspect, {
         {column('memo', 'Memo (optional)', true)}
         {column('reference', 'Reference number (optional)', true)}
       </div>
-      {!twoColumns && (
+      {!twoColumns && mapping.direction == null && (
         <label className="mt-3 flex items-center gap-2 text-sm">
           <input type="checkbox" className="size-4 accent-emerald-700" checked={mapping.flip} onChange={(e) => onChange({ ...mapping, flip: e.target.checked })} />
           Purchases are shown as positive numbers (common on card statements)

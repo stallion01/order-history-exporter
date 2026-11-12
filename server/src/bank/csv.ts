@@ -14,6 +14,9 @@ export interface CsvMapping {
   reference: number | null;
   // Some cards list purchases as positive numbers. Flipping makes money out negative.
   flip: boolean;
+  // Some banks give every amount as a positive number, with a column saying which
+  // way it went ("Debit"/"Credit", "DR"/"CR"). That column decides the sign.
+  direction?: number | null;
   dateOrder: 'mdy' | 'dmy' | 'ymd';
 }
 
@@ -103,13 +106,55 @@ export function guessMapping(table: CsvTable): CsvMapping {
   if (samples.some((s) => /^\d{4}[-/.]/.test(s))) dateOrder = 'ymd';
   else if (samples.some((s) => /^(1[3-9]|2\d|3[01])[-/.]\d{1,2}[-/.]/.test(s))) dateOrder = 'dmy';
 
-  // Mostly-positive amounts usually means purchases are positive (as on many card exports).
-  let flip = false;
+  // A column that only says which way the money went.
+  let direction: number | null = null;
   if (amount !== null) {
-    const values = rows.map((r) => parseAmount(r[amount])).filter((n): n is number => n !== null && n !== 0);
-    flip = values.length >= 3 && values.filter((n) => n > 0).length / values.length > 0.7;
+    direction = headers.findIndex((h, i) => {
+      if ([date, description, amount, memo, reference].includes(i) || !/type|cr\s*\/?\s*dr|dr\s*\/?\s*cr|debit\s*\/?\s*credit|credit\s*\/?\s*debit|details|direction|indicator/i.test(h)) return false;
+      const values = rows.slice(0, 200).map((r) => (r[i] || '').trim()).filter(Boolean);
+      return values.length >= 2 && values.filter((v) => directionOf(v) !== null).length / values.length >= 0.9;
+    });
+    if (direction < 0) direction = null;
   }
-  return { date, description, amount, debit, credit, memo, reference, flip, dateOrder };
+  const signed = (row: string[]) => {
+    const n = amount === null ? null : parseAmount(row[amount]);
+    if (n === null || direction === null) return n;
+    const way = directionOf(row[direction] || '');
+    return way === null ? n : way * Math.abs(n);
+  };
+
+  // Should the amounts be flipped? Descriptions settle it when they can: a payout,
+  // deposit or card payment is money in, a purchase or withdrawal is money out. Only
+  // with nothing to go on do mostly-positive amounts mean a card that lists purchases
+  // as positive. (A rental account full of Airbnb payouts is mostly positive too.)
+  let flip = false;
+  if (amount !== null && direction === null) {
+    const values = rows.map((r) => ({ n: signed(r), text: `${r[description] || ''} ${memo === null ? '' : r[memo] || ''}` })).filter((v) => v.n !== null && v.n !== 0);
+    let asIs = 0;
+    let flipped = 0;
+    for (const { n, text } of values) {
+      const way = MONEY_IN.test(text) ? 1 : MONEY_OUT.test(text) ? -1 : 0;
+      if (!way) continue;
+      if (Math.sign(n!) === way) asIs++;
+      else flipped++;
+    }
+    if (asIs + flipped >= 2 && Math.max(asIs, flipped) / (asIs + flipped) >= 0.75) flip = flipped > asIs;
+    else flip = values.length >= 3 && values.filter((v) => v.n! > 0).length / values.length > 0.7;
+  }
+  return { date, description, amount, debit, credit, memo, reference, flip, dateOrder, direction };
+}
+
+// Wording that shows which way money went, used only to check the signs of a file.
+const MONEY_IN =
+  /payout|\bdeposit|direct dep|payroll|\bach credit|interest paid|transfer from|zelle from|from (chk|sav|checking|savings)|airbnb.*(payment|payout|transfer|\bach\b)|homeaway|vrbo.*(payout|payment)|booking\.com.*(\bbv\b|b\.v\.|payment|payout|transfer)|payment\s*-?\s*thank you|thank you for your payment|payment received|autopay payment|^payment$/i;
+const MONEY_OUT = /\bpurchase|\bpos\b|debit card|check ?card|withdrawal|\batm\b|^check\b|check #|zelle to|transfer to|to (chk|sav|checking|savings)|bill pay|\bfee\b/i;
+
+// +1 for money in, -1 for money out, null when the text says neither.
+export function directionOf(text: string): 1 | -1 | null {
+  const t = text.trim().toLowerCase();
+  if (/^(c|cr|credit|deposit|in|money in|received|incoming)$/.test(t)) return 1;
+  if (/^(d|dr|debit|withdrawal|out|money out|sent|outgoing|payment|purchase|check)$/.test(t)) return -1;
+  return null;
 }
 
 const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -185,7 +230,9 @@ export function applyMapping(table: CsvTable, mapping: CsvMapping): CsvResult {
     let amount: number | null;
     if (mapping.amount !== null) {
       amount = parseAmount(cell(row, mapping.amount));
-      if (amount !== null && mapping.flip) amount = -amount;
+      const way = mapping.direction === null || mapping.direction === undefined ? null : directionOf(cell(row, mapping.direction));
+      if (amount !== null && way !== null) amount = way * Math.abs(amount);
+      else if (amount !== null && mapping.flip) amount = -amount;
     } else {
       const out = parseAmount(cell(row, mapping.debit));
       const inn = parseAmount(cell(row, mapping.credit));

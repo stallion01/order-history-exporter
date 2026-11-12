@@ -1,7 +1,7 @@
 // Pieces shared by the Transactions, Review and Accounts pages.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Paperclip, Search, ShoppingCart, Unlink } from 'lucide-react';
+import { ArrowLeftRight, Paperclip, Search, ShoppingCart, Unlink } from 'lucide-react';
 import { get, post } from './api';
 import { money } from './format';
 import { Button, Input, cx } from './ui';
@@ -113,7 +113,7 @@ const SMALL_SELECT = 'min-h-8 w-full rounded-md border border-slate-300 bg-white
 export const txGrid = (withEntity: boolean) =>
   withEntity ? 'md:grid-cols-[auto_5.5rem_minmax(0,1fr)_12rem_8.5rem_10rem_7.5rem_7.5rem]' : 'md:grid-cols-[auto_5.5rem_minmax(0,1fr)_13rem_9.5rem_8rem_7.5rem]';
 
-export type TxChange = { category?: string | null; status?: string | null; kind?: string | null; entity?: number | null; shares?: Share[] | null };
+export type TxChange = { category?: string | null; status?: string | null; kind?: string | null; entity?: number | null; shares?: Share[] | null; flipSign?: true };
 
 export const shareText = (shares: Share[], entities: Entity[]) =>
   shares.map((s) => `${entities.find((e) => e.id === s.entityId)?.name ?? 'Removed'} ${Math.round(s.percent * 100) / 100}%`).join(' · ');
@@ -498,6 +498,18 @@ export function BulkBar({ ids, categories, entities = [], onDone }: { ids: numbe
       </Button>
       <Button className="min-h-8" disabled={busy} onClick={() => apply({ kind: 'ignored' })}>
         Ignore
+      </Button>
+      <Button
+        className="min-h-8"
+        disabled={busy}
+        title="For transactions imported the wrong way round: money in shown as spending, or the reverse"
+        onClick={() =>
+          window.confirm(`Swap money in and out for ${ids.length === 1 ? 'this transaction' : `these ${ids.length} transactions`}? Amounts with a minus lose it, and the rest gain one.`) &&
+          apply({ flipSign: true })
+        }
+      >
+        <ArrowLeftRight className="size-4" aria-hidden />
+        Swap in/out
       </Button>
       {error && <span className="text-red-700 dark:text-red-400">{error}</span>}
     </div>

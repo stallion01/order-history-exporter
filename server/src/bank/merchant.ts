@@ -15,7 +15,8 @@ const KNOWN: [RegExp, string][] = [
   [/costco/i, 'Costco'],
   [/\btarget\b/i, 'Target'],
   [/airbnb/i, 'Airbnb'],
-  [/\bvrbo\b/i, 'Vrbo'],
+  [/\bvrbo\b|homeaway/i, 'Vrbo'],
+  [/booking\.com|booking com\b/i, 'Booking.com'],
   [/paypal/i, 'PayPal'],
   [/venmo/i, 'Venmo'],
   [/zelle/i, 'Zelle'],
@@ -84,7 +85,7 @@ const SPENDING_HINTS: [RegExp, string][] = [
   [/airline|airways|delta air|united air|american air|southwest|jetblue|alaska air|spirit air|frontier air|hotel|marriott|hilton|hyatt|expedia|booking\.com|\buber\b|\blyft\b|parking|\btolls?\b|e-?zpass|amtrak/i, 'Travel'],
   [/restaurant|\bcafe\b|coffee|starbucks|dunkin|mcdonald|chipotle|doordash|grubhub|uber ?eats|pizza|\bgrill\b|diner|bistro|taqueria|sushi|burger/i, 'Meals'],
   [/facebook ads|fb ads|\bmeta ads|google ads|yelp ads|nextdoor/i, 'Advertising & Listing Fees'],
-  [/airbnb|vrbo|stripe fee|square fee|paypal fee/i, 'Platform & Merchant Fees'],
+  [/airbnb|vrbo|homeaway|stripe fee|square fee|paypal fee/i, 'Platform & Merchant Fees'],
   [/\birs\b|treasury|dept of revenue|department of revenue|tax collector|property tax|\bdmv\b|license|permit/i, 'Taxes & Licenses'],
   [/cleaning|maid|janitorial|turnover|landscap|lawn care|pest control|plumb|electrician|hvac|roofing|handyman/i, 'Cleaning & Maintenance Services'],
   [/mortgage|home loan|auto loan|loan pmt|loan payment/i, 'Loan & Mortgage Payments'],
@@ -94,7 +95,7 @@ const SPENDING_HINTS: [RegExp, string][] = [
 
 const INCOME_HINTS: [RegExp, string][] = [
   [/refund|return|reversal|credit voucher|merchandise credit/i, 'Refunds & Returns'],
-  [/airbnb|vrbo|booking\.com|rent payment|tenant/i, 'Rental Income'],
+  [/airbnb|vrbo|homeaway|booking\.com|booking com\b|rent payment|tenant/i, 'Rental Income'],
   [/interest (paid|earned|payment)|dividend|cash ?back|reward/i, 'Other Income'],
 ];
 

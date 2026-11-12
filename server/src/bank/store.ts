@@ -707,13 +707,36 @@ export function createBankStore(db: DatabaseSync) {
   // Each change is the user's own choice; null puts a field back to automatic.
   function updateTransactions(
     ids: number[],
-    changes: { category?: string | null; status?: string | null; kind?: TxKind | null; note?: string | null; entity?: number | null; shares?: Share[] | null }
+    changes: { category?: string | null; status?: string | null; kind?: TxKind | null; note?: string | null; entity?: number | null; shares?: Share[] | null; flipSign?: boolean }
   ) {
     if (!ids.length) return 0;
     const list = ids.map(Number).filter(Number.isInteger).join(',');
     return transaction(() => {
-      const rows = db.prepare(`SELECT id, transfer_id, kind_source FROM bank_transactions WHERE id IN (${list})`).all() as Row[];
+      const rows = db.prepare(`SELECT id, account_id, posted, amount, description, transfer_id, kind_source FROM bank_transactions WHERE id IN (${list})`).all() as Row[];
       const stamp = now();
+      // Imported the wrong way round (money in shown as spending, or the reverse).
+      if (changes.flipSign) {
+        const unpair = db.prepare(
+          `UPDATE bank_transactions SET transfer_id = NULL, kind = CASE WHEN kind_source = 'auto' THEN 'normal' ELSE kind END, kind_source = CASE WHEN kind_source = 'auto' THEN NULL ELSE kind_source END WHERE id = ?`
+        );
+        const csvIds = db.prepare(`SELECT external_id FROM bank_tx_sources WHERE transaction_id = ? AND source = 'csv' AND external_id LIKE 'h:%'`);
+        const addSource = db.prepare('INSERT OR IGNORE INTO bank_tx_sources (account_id, source, external_id, transaction_id) VALUES (?, ?, ?, ?)');
+        for (const row of rows) {
+          // An automatic transfer pair no longer adds up; it's looked for again below.
+          if (row.transfer_id && row.kind_source === 'auto') {
+            unpair.run(row.transfer_id);
+            unpair.run(row.id);
+          }
+          db.prepare('UPDATE bank_transactions SET amount = -amount, updated_at = ? WHERE id = ?').run(stamp, row.id);
+          // Rows from a CSV are known by a fingerprint that includes the amount. Knowing
+          // the corrected one too means importing the same file again with the right
+          // signs adds nothing.
+          if ((csvIds.all(row.id) as Row[]).length) {
+            const tx = { posted: row.posted as string, amount: -(row.amount as number), description: row.description as string, externalId: null };
+            for (let occurrence = 0; occurrence < 3; occurrence++) addSource.run(row.account_id, 'csv', rowId(tx, occurrence), row.id);
+          }
+        }
+      }
       if ('category' in changes) {
         if (changes.category) db.prepare(`UPDATE bank_transactions SET category = ?, category_source = 'user', updated_at = ? WHERE id IN (${list})`).run(changes.category, stamp);
         else db.prepare(`UPDATE bank_transactions SET category_source = NULL, updated_at = ? WHERE id IN (${list})`).run(stamp);
