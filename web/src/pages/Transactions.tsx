@@ -112,8 +112,18 @@ export function Transactions({ meta }: { meta: Meta | null }) {
           </Select>
         </Field>
         <Field label="Type">
-          <Select value={filters.value('kind') || 'normal'} onChange={(e) => filters.set({ kind: e.target.value === 'normal' ? '' : e.target.value })}>
+          <Select
+            value={filters.value('direction') && !filters.value('kind') ? (filters.value('direction') === 'out' ? 'spending' : 'income') : filters.value('kind') || 'normal'}
+            onChange={(e) => {
+              const v = e.target.value;
+              // Spending and Income are the usual transactions, split by money out or in.
+              if (v === 'spending' || v === 'income') filters.set({ kind: '', direction: v === 'spending' ? 'out' : 'in' });
+              else filters.set({ kind: v === 'normal' ? '' : v, direction: '' });
+            }}
+          >
             <option value="normal">Spending and income</option>
+            <option value="spending">Spending only</option>
+            <option value="income">Income only</option>
             <option value="transfer">Transfers</option>
             <option value="ignored">Ignored</option>
             <option value="all">Everything</option>

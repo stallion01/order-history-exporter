@@ -385,6 +385,134 @@ test('transactions imported the wrong way round can be swapped back, and stay fi
   await assert.rejects(post('/api/bank/transactions/update', { ids: [airbnb.id], flipSign: false }));
 });
 
+test('card charges that came in as income are found and put right, and a new file is checked as it comes in', async () => {
+  const cardCsv = (rows) => `Date,Description,Amount\n${rows.map(([d, n, a]) => `${d},${n},${a}`).join('\n')}\n`;
+  const qfx = (rows) => `OFXHEADER:100\n<OFX><CREDITCARDMSGSRSV1><CCSTMTTRNRS><CCSTMTRS><CURDEF>USD<CCACCTFROM><ACCTID>5555444433332222</CCACCTFROM><BANKTRANLIST>
+${rows.map(([d, a, n], i) => `<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>${d}<TRNAMT>${a}<FITID>W${d}${i}<NAME>${n}</STMTTRN>`).join('\n')}
+</BANKTRANLIST></CCSTMTRS></CCSTMTTRNRS></CREDITCARDMSGSRSV1></OFX>`;
+  // A card CSV read with charges as money in (as an older version could).
+  const asIncome = { date: 0, description: 1, amount: 2, debit: null, credit: null, memo: null, reference: null, flip: false, dateOrder: 'mdy' };
+  const firstCsv = cardCsv([
+    ['01/05/2026', 'TRASHCO SPRINGFIELD IL', '100.00'],
+    ['02/05/2026', 'TRASHCO SPRINGFIELD IL', '100.00'],
+    ['03/05/2026', 'TRASHCO SPRINGFIELD IL', '100.00'],
+    ['04/05/2026', 'TRASHCO SPRINGFIELD IL', '100.00'],
+    ['03/10/2026', 'DUKE ENERGY', '80.12'],
+  ]);
+  const { accountId } = await post('/api/bank/import', { content: firstCsv, fileName: 'card.csv', mapping: asIncome, newAccount: { name: 'Business Card', kind: 'credit', owner: 'business' } });
+  // Then the card's own QFX for February to April, with charges as money out.
+  await post('/api/bank/import', {
+    content: qfx([
+      ['20260206', '-100.00', 'TRASHCO SPRINGFIELD'],
+      ['20260305', '-100.00', 'TRASHCO SPRINGFIELD'],
+      ['20260406', '-100.00', 'TRASHCO SPRINGFIELD'],
+    ]),
+    fileName: 'card.qfx',
+    accountId,
+  });
+  const list = async () => (await get(`/api/bank/transactions?account=${accountId}&kind=all&preset=all`)).transactions;
+  assert.equal((await list()).filter((t) => /TRASHCO/.test(t.description)).length, 7, 'each charge twice, once each way');
+
+  const { problems } = await get('/api/bank/sign-problems');
+  const mine = problems.filter((p) => p.accountId === accountId);
+  assert.equal(mine.length, 1);
+  assert.match(mine[0].from, /card\.csv/);
+  assert.deepEqual([mine[0].count, mine[0].duplicates], [5, 3]);
+
+  assert.deepEqual(await post('/api/bank/sign-problems/fix', { keys: [mine[0].key] }), { flipped: 2, merged: 3 });
+  const fixed = await list();
+  assert.deepEqual(fixed.map((t) => t.amount).sort((a, b) => a - b), [-100, -100, -100, -100, -80.12]);
+  assert.equal((await get('/api/bank/sign-problems')).problems.filter((p) => p.accountId === accountId).length, 0);
+  // The CSV again, read the right way round: nothing new.
+  const inspect = await post('/api/bank/import/inspect', { content: firstCsv });
+  assert.equal(inspect.mapping.flip, true);
+  const again = await post('/api/bank/import', { content: firstCsv, accountId, mapping: inspect.mapping });
+  assert.deepEqual([again.added, again.skipped], [0, 5]);
+
+  // A new file the wrong way round is put right as it comes in, preview included.
+  const later = cardCsv([
+    ['03/05/2026', 'TRASHCO SPRINGFIELD IL', '100.00'],
+    ['04/05/2026', 'TRASHCO SPRINGFIELD IL', '100.00'],
+    ['05/05/2026', 'TRASHCO SPRINGFIELD IL', '100.00'],
+  ]);
+  const preview = await post('/api/bank/import', { content: later, accountId, mapping: asIncome, dryRun: true });
+  assert.deepEqual([preview.signsFixed, preview.added, preview.skipped + preview.merged], [3, 1, 2]);
+  const result = await post('/api/bank/import', { content: later, accountId, mapping: asIncome, fileName: 'may.csv' });
+  assert.equal(result.signsFixed, 3);
+  const may = (await list()).filter((t) => t.posted === '2026-05-05');
+  assert.deepEqual(may.map((t) => t.amount), [-100]);
+  assert.equal((await list()).length, 6);
+});
+
+test('a checking CSV imported backwards, with its payouts already swapped back by hand, is put right', async () => {
+  // As it happened: the bank's own feed, right way round...
+  const feed = (rows) => `OFXHEADER:100\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>USD<BANKACCTFROM><BANKID>1<ACCTID>99990001234<ACCTTYPE>CHECKING</BANKACCTFROM><BANKTRANLIST>
+${rows.map(([d, a, n], i) => `<STMTTRN><TRNTYPE>OTHER<DTPOSTED>${d}<TRNAMT>${a}<FITID>R${i}<NAME>${n}</STMTTRN>`).join('\n')}
+</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`;
+  const { accountId } = await post('/api/bank/import', {
+    content: feed([
+      ['20260904', '-100.00', 'TRASH CO SPRNGFLD DES:XXXXX11111 ID:XXXXX0003'],
+      ['20261006', '-100.00', 'TRASH CO SPRNGFLD DES:XXXXX11111 ID:XXXXX0004'],
+      ['20260924', '-95.00', 'POWERCO DES:BILL PAY ID:XXXXX0000001'],
+      ['20260921', '-170.00', 'Zelle payment to Lawn Helper for lawn'],
+      ['20260924', '-110.00', 'THE CITY OF SPRI DES:BILLPAY ID:CITY OF SPRINGF'],
+      ['20260915', '210.00', 'AIRBNB 1234 DES:AIRBNB ID:M-TESTPAYOUT001'],
+      ['20261013', '230.00', 'AIRBNB 1234 DES:AIRBNB ID:M-TESTPAYOUT002'],
+    ]),
+    fileName: 'feed.qfx',
+    newAccount: { name: 'Rental Checking', kind: 'other', owner: 'business' },
+  });
+  // ...then the CSV, imported backwards by an older version (stored here as it ended up)...
+  const backwards = [
+    ['2026-06-03', 100, 'TRASH CO SPRNGFLD DES:5550011111 ID:100000001'],
+    ['2026-07-06', 100, 'TRASH CO SPRNGFLD DES:5550011111 ID:100000002'],
+    ['2026-09-04', 100, 'TRASH CO SPRNGFLD DES:5550011111 ID:100000003'],
+    ['2026-10-06', 100, 'TRASH CO SPRNGFLD DES:5550011111 ID:100000004'],
+    ['2026-07-27', 105, 'POWERCO DES:BILL PAY ID:900000000001'],
+    ['2026-09-24', 95, 'POWERCO DES:BILL PAY ID:900000000001'],
+    ['2026-09-21', 170, 'Zelle payment to Lawn Helper for lawn'],
+    ['2026-09-24', 110, 'THE CITY OF SPRI DES:BILLPAY ID:CITY OF SPRINGF'],
+    ['2026-08-03', -450, 'Booking.com DES:ST-TEST001 ID:ST-TEST0001AAAA'],
+    // ...with its Airbnb payouts since swapped back by hand.
+    ['2026-07-21', 190, 'AIRBNB 1234 DES:AIRBNB ID:G-TESTPAYOUT003'],
+    ['2026-09-15', 210, 'AIRBNB 1234 DES:AIRBNB ID:M-TESTPAYOUT001'],
+    ['2026-10-13', 230, 'AIRBNB 1234 DES:AIRBNB ID:M-TESTPAYOUT002'],
+  ];
+  const add = db.raw.prepare(`INSERT INTO bank_transactions (account_id, posted, amount, description, payee, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '', '')`);
+  const source = db.raw.prepare(`INSERT INTO bank_tx_sources (account_id, source, external_id, transaction_id) VALUES (?, 'csv', ?, ?)`);
+  backwards.forEach(([posted, amount, description], i) => source.run(accountId, `h:legacy${i}`, Number(add.run(accountId, posted, amount, description, description).lastInsertRowid)));
+
+  const { problems } = await get('/api/bank/sign-problems');
+  const mine = problems.filter((p) => p.accountId === accountId);
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].from, 'CSV rows');
+  assert.equal(mine[0].count, 11, 'everything but the payout already put right and outside the feed');
+  assert.equal(mine[0].duplicates, 7);
+  assert.deepEqual(await post('/api/bank/sign-problems/fix', { keys: [mine[0].key] }), { flipped: 4, merged: 7 });
+
+  const after = (await get(`/api/bank/transactions?account=${accountId}&kind=all&preset=all`)).transactions;
+  const by = (word) => after.filter((t) => t.description.includes(word)).map((t) => t.amount).sort((a, b) => a - b);
+  assert.deepEqual(by('TRASH CO'), [-100, -100, -100, -100]);
+  assert.deepEqual(by('POWERCO'), [-105, -95]);
+  assert.deepEqual(by('AIRBNB'), [190, 210, 230], 'each payout once');
+  assert.deepEqual(by('Booking.com'), [450]);
+  assert.equal(after.length, 12);
+});
+
+test('a savings CSV whose wording shows it came in backwards is put right on its own', async () => {
+  const csv = `Date,Description,Amount
+06/30/2026,Interest Earned,-0.96
+07/22/2026,Online Banking transfer to CHK 1234 Confirmation# 1000000001,20000.00
+06/08/2026,Online Banking transfer from CHK 5678 Confirmation# 1000000002,-10000.00
+07/31/2026,Interest Earned,-0.81
+`;
+  const wrong = { date: 0, description: 1, amount: 2, debit: null, credit: null, memo: null, reference: null, flip: false, dateOrder: 'mdy' };
+  const result = await post('/api/bank/import', { content: csv, fileName: 'sav.csv', mapping: wrong, newAccount: { name: 'Savings', kind: 'savings', owner: 'business' } });
+  assert.equal(result.signsFixed, 4, 'turned round as it came in');
+  const rows = (await get(`/api/bank/transactions?account=${result.accountId}&kind=all&preset=all`)).transactions;
+  assert.deepEqual(rows.map((t) => t.amount).sort((a, b) => a - b), [-20000, 0.81, 0.96, 10000]);
+});
+
 test('exports: CSV with every column, and an OFX that imports back as nothing new', async () => {
   const csv = await (await call(`/api/bank/export.csv?account=${cardId}`)).text();
   assert.match(csv.split('\r\n')[0], /Date,Account,Payee,Description,Memo,Amount/);

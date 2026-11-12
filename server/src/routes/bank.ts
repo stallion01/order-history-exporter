@@ -151,6 +151,15 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
   });
 
 
+  // Imports whose amounts look the wrong way round, and putting them right.
+  app.get('/api/bank/sign-problems', async () => ({ problems: bank.signProblems() }));
+  app.post('/api/bank/sign-problems/fix', async (request) => {
+    const body = parse(z.object({ keys: z.array(z.string().max(100)).max(200).optional() }), request.body ?? {});
+    const result = bank.fixSignProblems(body.keys ?? null);
+    audit(request, 'bank.signs.fix', result);
+    return result;
+  });
+
   app.post('/api/bank/transactions/update', async (request) => {
     const body = parse(
       z.object({

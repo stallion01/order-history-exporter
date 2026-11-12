@@ -145,9 +145,9 @@ export function guessMapping(table: CsvTable): CsvMapping {
 }
 
 // Wording that shows which way money went, used only to check the signs of a file.
-const MONEY_IN =
-  /payout|\bdeposit|direct dep|payroll|\bach credit|interest paid|transfer from|zelle from|from (chk|sav|checking|savings)|airbnb.*(payment|payout|transfer|\bach\b)|homeaway|vrbo.*(payout|payment)|booking\.com.*(\bbv\b|b\.v\.|payment|payout|transfer)|payment\s*-?\s*thank you|thank you for your payment|payment received|autopay payment|^payment$/i;
-const MONEY_OUT = /\bpurchase|\bpos\b|debit card|check ?card|withdrawal|\batm\b|^check\b|check #|zelle to|transfer to|to (chk|sav|checking|savings)|bill pay|\bfee\b/i;
+export const MONEY_IN =
+  /payout|\bdeposit|direct dep|payroll|\bach credit|interest (paid|earned)|wire in\b|wire type:wire in|airbnb \d{3,}|transfer from|zelle from|from (chk|sav|checking|savings)|airbnb.*(payment|payout|transfer|\bach\b)|homeaway|vrbo.*(payout|payment)|booking\.com.*(\bbv\b|b\.v\.|payment|payout|transfer)|payment\s*-?\s*thank you|thank you for your payment|payment received|autopay payment|^payment$/i;
+export const MONEY_OUT = /\bpurchase|\bpos\b|debit card|check ?card|withdrawal|\batm\b|^check\b|check #|zelle to|transfer to|to (chk|sav|checking|savings)|bill pay|\bfee\b|payment to\b|wire out|wire type:wire out/i;
 
 // +1 for money in, -1 for money out, null when the text says neither.
 export function directionOf(text: string): 1 | -1 | null {

@@ -49,6 +49,7 @@ interface Summary {
   merged: number;
   skipped: number;
   transfers: number;
+  signsFixed?: number;
   firstDate: string | null;
   lastDate: string | null;
   accountId: number | null;
@@ -150,7 +151,8 @@ export function Import() {
         <Banner tone="info">
           <p>
             Imported {done.added + done.merged + done.skipped} transactions from the file
-            {done.transfers ? `, and found ${plural(done.transfers, 'transfer')} between your accounts` : ''}:
+            {done.transfers ? `, and found ${plural(done.transfers, 'transfer')} between your accounts` : ''}
+            {done.signsFixed ? `. ${plural(done.signsFixed, 'amount')} were the wrong way round compared with what's already in the account, and were turned round` : ''}:
           </p>
           <ul className="mt-1 list-disc pl-5">
             {(
@@ -285,7 +287,8 @@ export function Import() {
             <div className="mb-4 text-sm">
               <p>
                 This would add <strong>{plural(preview.added, 'new transaction')}</strong>, match {whole(preview.merged)} to ones already here, and skip {whole(preview.skipped)} already imported
-                {preview.transfers ? `. ${plural(preview.transfers, 'transfer')} between your accounts would be found` : ''}.
+                {preview.transfers ? `. ${plural(preview.transfers, 'transfer')} between your accounts would be found` : ''}
+                {preview.signsFixed ? `. ${plural(preview.signsFixed, 'amount')} are the wrong way round compared with what's already in the account, and will be turned round` : ''}.
               </p>
               {preview.examples.length > 0 && (
                 <ul className="mt-2 space-y-1 text-slate-600 dark:text-slate-300">

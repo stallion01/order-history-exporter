@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { fitIdToTransaction } from './ofx';
 import { CARD_PAYMENT_WORDS, STORE_PAYEES, TRANSFER_WORDS, categoryHint, payeeFor } from './merchant';
+import { MONEY_IN, MONEY_OUT } from './csv';
 import { toCents } from './types';
 import type { AccountKind, IncomingTransaction, Owner, Source, TxKind } from './types';
 
@@ -45,6 +46,9 @@ export interface ImportSummary {
   firstDate: string | null;
   lastDate: string | null;
   examples: { posted: string; amount: number; description: string; payee: string }[];
+  // Amounts that came in the wrong way round compared with what was already here (or,
+  // on a card, mostly money in), and were turned round.
+  signsFixed: number;
 }
 
 export interface TxFilters {
@@ -435,7 +439,11 @@ export function createBankStore(db: DatabaseSync) {
   ): ImportSummary {
     if (!account(accountId)) throw new Error('That account no longer exists.');
     return transaction(() => {
-      const summary: ImportSummary = { importId: null, added: 0, merged: 0, skipped: 0, transfers: 0, firstDate: null, lastDate: null, examples: [] };
+      const summary: ImportSummary = { importId: null, added: 0, merged: 0, skipped: 0, transfers: 0, firstDate: null, lastDate: null, examples: [], signsFixed: 0 };
+      if (incomingIsBackwards(accountId, source, incoming)) {
+        incoming = incoming.map((t) => ({ ...t, amount: -t.amount }));
+        summary.signsFixed = incoming.length;
+      }
       const findSource = db.prepare('SELECT transaction_id FROM bank_tx_sources WHERE account_id = ? AND source = ? AND external_id = ?');
       const addSource = db.prepare('INSERT OR IGNORE INTO bank_tx_sources (account_id, source, external_id, transaction_id) VALUES (?, ?, ?, ?)');
       const exported = db.prepare('SELECT id FROM bank_transactions WHERE id = ? AND account_id = ?');
@@ -498,7 +506,9 @@ export function createBankStore(db: DatabaseSync) {
       summary.transfers = detectTransfers();
       // Daily syncs that found nothing new aren't worth a line in the history.
       const quiet = source === 'simplefin' && !summary.added && !summary.merged;
-      if (!options.dryRun && !quiet) {
+      // A preview records the import too (it's all undone afterwards), so it can be checked
+      // the same way.
+      if (!quiet) {
         const importId = Number(
           db
             .prepare(
@@ -509,7 +519,20 @@ export function createBankStore(db: DatabaseSync) {
         // Which transactions this import touched, so its result can be listed.
         const remember = db.prepare('INSERT OR IGNORE INTO bank_import_rows (import_id, transaction_id, outcome) VALUES (?, ?, ?)');
         for (const [txId, outcome] of outcomes) remember.run(importId, txId, outcome);
-        summary.importId = importId;
+        if (!options.dryRun) summary.importId = importId;
+
+        // Signs that disagree with what's already here: this import is put right.
+        const mine = source === 'simplefin' ? 'simplefin' : `import:${importId}`;
+        const problems = findSignProblems(accountId).filter((p) => p.group === mine);
+        if (problems.length) {
+          const fixed = fixSigns(problems);
+          summary.signsFixed = fixed.flipped + fixed.merged;
+          summary.added -= fixed.merged;
+          summary.merged += fixed.merged;
+          const turned = new Set(problems.flatMap((p) => p.rows.map((t) => `${t.posted}|${-(t.amount as number)}`)));
+          summary.examples = summary.examples.map((e) => (turned.has(`${e.posted}|${-e.amount}`) ? { ...e, amount: -e.amount } : e));
+          if (!options.dryRun) db.prepare('UPDATE bank_imports SET added = ?, merged = ? WHERE id = ?').run(summary.added, summary.merged, importId);
+        }
       }
       return summary;
     }, Boolean(options.dryRun));
@@ -705,6 +728,358 @@ export function createBankStore(db: DatabaseSync) {
   /* ---------- Editing ---------- */
 
   // Each change is the user's own choice; null puts a field back to automatic.
+  /* ---------- Amounts the wrong way round ---------- */
+
+  const unpairStmt = () =>
+    db.prepare(
+      `UPDATE bank_transactions SET transfer_id = NULL, kind = CASE WHEN kind_source = 'auto' THEN 'normal' ELSE kind END, kind_source = CASE WHEN kind_source = 'auto' THEN NULL ELSE kind_source END WHERE id = ?`
+    );
+
+  // Turns amounts round (money in shown as spending, or the reverse). Callers re-run
+  // the rules and transfer matching afterwards.
+  function flipRows(rows: Row[]) {
+    const unpair = unpairStmt();
+    const csvIds = db.prepare(`SELECT external_id FROM bank_tx_sources WHERE transaction_id = ? AND source = 'csv' AND external_id LIKE 'h:%'`);
+    const addSource = db.prepare('INSERT OR IGNORE INTO bank_tx_sources (account_id, source, external_id, transaction_id) VALUES (?, ?, ?, ?)');
+    const flip = db.prepare('UPDATE bank_transactions SET amount = -amount, updated_at = ? WHERE id = ?');
+    for (const row of rows) {
+      // An automatic transfer pair no longer adds up; it's looked for again afterwards.
+      if (row.transfer_id && row.kind_source === 'auto') {
+        unpair.run(row.transfer_id);
+        unpair.run(row.id);
+      }
+      flip.run(now(), row.id);
+      // Rows from a CSV are known by a fingerprint that includes the amount. Knowing
+      // the corrected one too means importing the same file again with the right
+      // signs adds nothing.
+      if ((csvIds.all(row.id) as Row[]).length) {
+        const tx = { posted: row.posted as string, amount: -(row.amount as number), description: row.description as string, externalId: null };
+        for (let occurrence = 0; occurrence < 3; occurrence++) addSource.run(row.account_id, 'csv', rowId(tx, occurrence), row.id);
+      }
+    }
+  }
+
+  // One transaction that came in twice, once each way round: the wrong one's sources,
+  // receipts, order links and the user's own choices move to the right one, and the
+  // wrong one goes.
+  function mergeInto(wrong: Row, keep: Row) {
+    const w = wrong.id as number;
+    const k = keep.id as number;
+    if (wrong.transfer_id && wrong.kind_source === 'auto') unpairStmt().run(wrong.transfer_id);
+    db.prepare('UPDATE OR IGNORE bank_tx_sources SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
+    const csvIds = db.prepare(`SELECT 1 FROM bank_tx_sources WHERE transaction_id = ? AND source = 'csv' AND external_id LIKE 'h:%'`).get(k);
+    if (csvIds) {
+      const tx = { posted: wrong.posted as string, amount: -(wrong.amount as number), description: wrong.description as string, externalId: null };
+      const addSource = db.prepare('INSERT OR IGNORE INTO bank_tx_sources (account_id, source, external_id, transaction_id) VALUES (?, ?, ?, ?)');
+      for (let occurrence = 0; occurrence < 3; occurrence++) addSource.run(wrong.account_id, 'csv', rowId(tx, occurrence), k);
+    }
+    db.prepare(`UPDATE OR IGNORE bank_import_rows SET transaction_id = ?, outcome = 'merged' WHERE transaction_id = ?`).run(k, w);
+    db.prepare('UPDATE receipts SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
+    db.prepare('UPDATE OR IGNORE order_links SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
+    db.prepare('UPDATE OR IGNORE order_link_rejections SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
+    db.prepare('UPDATE OR IGNORE assets SET transaction_id = ? WHERE transaction_id = ?').run(k, w);
+    const both = db.prepare('SELECT * FROM bank_transactions WHERE id = ?');
+    const from = both.get(w) as Row;
+    const to = both.get(k) as Row;
+    if (from.category_source === 'user' && to.category_source !== 'user')
+      db.prepare(`UPDATE bank_transactions SET category = ?, category_source = 'user' WHERE id = ?`).run(from.category, k);
+    if (from.status_source === 'user' && to.status_source !== 'user') db.prepare(`UPDATE bank_transactions SET status = ?, status_source = 'user' WHERE id = ?`).run(from.status, k);
+    if (from.kind_source === 'user' && to.kind_source !== 'user') db.prepare(`UPDATE bank_transactions SET kind = ?, kind_source = 'user', transfer_id = NULL WHERE id = ?`).run(from.kind, k);
+    if (from.note && !to.note) db.prepare('UPDATE bank_transactions SET note = ? WHERE id = ?').run(from.note, k);
+    if (from.entity_source === 'user' && to.entity_source !== 'user') {
+      db.prepare('DELETE FROM tx_entity_shares WHERE transaction_id = ?').run(k);
+      db.prepare(`UPDATE OR IGNORE tx_entity_shares SET transaction_id = ? WHERE transaction_id = ?`).run(k, w);
+      db.prepare(`UPDATE bank_transactions SET entity_id = ?, entity_source = 'user' WHERE id = ?`).run(from.entity_id, k);
+    }
+    db.prepare('DELETE FROM bank_transactions WHERE id = ?').run(w);
+  }
+
+  // Finds transactions that came in the wrong way round. Each import (and all of
+  // SimpleFIN's syncs together) is judged as a whole, since one file is read one way:
+  //  - two imports that report the same charges with opposite signs disagree, and the
+  //    one with the wrong sign is worked out from the wording (a payout or deposit is
+  //    money in, a purchase or withdrawal money out), then, for a card, from which
+  //    is mostly positive (purchases outnumber payments), then by trusting the bank's
+  //    own feed over an OFX file over a CSV, whose signs had to be guessed;
+  //  - on a card, an import that is mostly money in, when the rest of the card isn't
+  //    or its wording says so, is the wrong way round on its own.
+  function findSignProblems(accountId: number | null = null) {
+    const where = accountId === null ? '' : 'AND t.account_id = ?';
+    const rows = db
+      .prepare(
+        `SELECT t.id, t.account_id, t.posted, t.amount, t.description, t.memo, t.payee, t.transfer_id, t.kind_source, a.kind AS account_kind, a.name AS account_name,
+                (SELECT r.import_id FROM bank_import_rows r WHERE r.transaction_id = t.id AND r.outcome = 'added' ORDER BY r.import_id LIMIT 1) AS import_id,
+                (SELECT s.source FROM bank_tx_sources s WHERE s.transaction_id = t.id ORDER BY s.rowid LIMIT 1) AS source,
+                (SELECT group_concat(r.import_id) FROM bank_import_rows r WHERE r.transaction_id = t.id AND r.outcome = 'merged') AS merged_imports,
+                EXISTS (SELECT 1 FROM bank_tx_sources s WHERE s.transaction_id = t.id AND s.source = 'simplefin') AS has_simplefin
+         FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+         WHERE t.amount != 0 ${where}`
+      )
+      .all(...(accountId === null ? [] : [accountId])) as Row[];
+    const importSource = new Map((db.prepare('SELECT id, source FROM bank_imports').all() as Row[]).map((r) => [r.id as number, r.source as string]));
+    const groupOf = (importId: number | null, source: string | null) =>
+      source === 'simplefin' || (importId !== null && importSource.get(importId) === 'simplefin') ? 'simplefin' : importId !== null ? `import:${importId}` : `source:${source}`;
+    const RANK: Record<string, number> = { simplefin: 3, ofx: 2, csv: 1 };
+    const rankOf = (group: string) => (group === 'simplefin' ? 3 : RANK[group.startsWith('import:') ? importSource.get(Number(group.slice(7))) || '' : group.slice(7)] ?? 0);
+
+    type Tx = Row & { group: string; touched: Set<string>; cents: number; day: number; texts: string[] };
+    const byAccount = new Map<number, Tx[]>();
+    for (const row of rows) {
+      if (row.source === 'receipt') continue; // cash recorded from a receipt
+      const group = groupOf(row.import_id as number | null, row.source as string | null);
+      const touched = new Set([group]);
+      for (const id of String(row.merged_imports || '').split(',').filter(Boolean)) touched.add(groupOf(Number(id), null));
+      if (row.has_simplefin) touched.add('simplefin');
+      const tx = Object.assign(row, { group, touched, cents: toCents(row.amount as number), day: dayNumber(row.posted as string), texts: [row.description, row.memo, row.payee].filter(Boolean) as string[] }) as Tx;
+      const list = byAccount.get(row.account_id as number) || [];
+      list.push(tx);
+      byAccount.set(row.account_id as number, list);
+    }
+
+    // Wording that says which way the money went, against the sign it has.
+    const evidence = (list: Tx[]) => {
+      let asIs = 0;
+      let flipped = 0;
+      for (const t of list) {
+        const text = t.texts.join(' ');
+        const way = MONEY_IN.test(text) ? 1 : MONEY_OUT.test(text) ? -1 : 0;
+        if (way) Math.sign(t.cents) === way ? asIs++ : flipped++;
+      }
+      return { asIs, flipped };
+    };
+    // A rough payee from the first words, the same for every row of one file.
+    const payeeKey = (t: Tx) => String(t.description).toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ').slice(0, 2).join(' ');
+    const positiveShare = (list: Tx[]) => (list.length ? list.filter((t) => t.cents > 0).length / list.length : 0);
+
+    const problems: { accountId: number; account: string; group: string; rows: Tx[]; twins: Map<number, Tx> }[] = [];
+    for (const [acct, list] of byAccount) {
+      const groups = new Map<string, Tx[]>();
+      for (const t of list) groups.set(t.group, [...(groups.get(t.group) || []), t]);
+      const card = list[0].account_kind === 'credit';
+      // Imports found to be the wrong way round: each row's copy from the right source,
+      // and payees already put right.
+      const fixOf = new Map<string, { twins: Map<number, Tx>; keep: Set<string> }>();
+
+      // Pairs of imports that disagree. Each transaction reported by both (same amount,
+      // within a couple of days, similar wording) is a pair. They disagree when most
+      // pairs, or most payees among them, have opposite signs. Counting payees as well
+      // as rows keeps the answer clear when some rows were already swapped by hand
+      // (say, every Airbnb payout): those pairs agree, but they're one payee.
+      const names = [...groups.keys()];
+      for (let i = 0; i < names.length; i++) {
+        for (let j = i + 1; j < names.length; j++) {
+          const [g, h] = [names[i], names[j]];
+          const a = groups.get(g)!;
+          const b = groups.get(h)!;
+          const merged = [...a.filter((t) => t.touched.has(h)), ...b.filter((t) => t.touched.has(g))];
+          const used = new Set<number>();
+          const pairs: [Tx, Tx][] = [];
+          for (const t of a) {
+            if (t.touched.has(h)) continue;
+            let best: Tx | null = null;
+            for (const u of b) {
+              if (used.has(u.id as number) || u.touched.has(g) || Math.abs(u.cents) !== Math.abs(t.cents) || Math.abs(u.day - t.day) > MATCH_DAYS) continue;
+              if (!u.texts.some((x) => t.texts.some((y) => similarDescriptions(x, y)))) continue;
+              // The closest date wins; on a tie, the one with the opposite sign.
+              const better = !best || Math.abs(u.day - t.day) < Math.abs(best.day - t.day) || (Math.abs(u.day - t.day) === Math.abs(best.day - t.day) && u.cents === -t.cents && best.cents !== -t.cents);
+              if (better) best = u;
+            }
+            if (best) {
+              used.add(best.id as number);
+              pairs.push([t, best]);
+            }
+          }
+          const opposite = pairs.filter(([t, u]) => t.cents === -u.cents);
+          const agreeing = pairs.length - opposite.length + merged.length;
+          const tally = (side: 0 | 1) => {
+            const byPayee = new Map<string, { opposite: number; same: number }>();
+            for (const pair of pairs) {
+              const k = payeeKey(pair[side]);
+              const v = byPayee.get(k) || { opposite: 0, same: 0 };
+              if (pair[0].cents === -pair[1].cents) v.opposite++;
+              else v.same++;
+              byPayee.set(k, v);
+            }
+            for (const t of merged) {
+              const k = payeeKey(t);
+              const v = byPayee.get(k) || { opposite: 0, same: 0 };
+              v.same++;
+              byPayee.set(k, v);
+            }
+            return byPayee;
+          };
+          const payeesA = tally(0);
+          const oppositePayees = [...payeesA.values()].filter((v) => v.opposite > v.same).length;
+          const samePayees = [...payeesA.values()].filter((v) => v.same >= v.opposite).length;
+          const disagree = (opposite.length >= 2 && opposite.length > 2 * agreeing) || (oppositePayees >= 2 && oppositePayees > 2 * samePayees);
+          if (!disagree) continue;
+
+          // Which side is wrong: the wording of the disagreeing rows, then (on a card)
+          // which is mostly money in, then which source's signs are more trustworthy.
+          const eg = evidence(opposite.map((p) => p[0]));
+          const eh = evidence(opposite.map((p) => p[1]));
+          let bad: string | null = null;
+          if (eg.flipped > eg.asIs && eh.flipped <= eh.asIs) bad = g;
+          else if (eh.flipped > eh.asIs && eg.flipped <= eg.asIs) bad = h;
+          else if (card && Math.abs(positiveShare(a) - positiveShare(b)) >= 0.2) bad = positiveShare(a) > positiveShare(b) ? g : h;
+          else if (rankOf(g) !== rankOf(h)) bad = rankOf(g) < rankOf(h) ? g : h;
+          if (!bad) continue;
+          const side = bad === g ? 0 : 1;
+          const fix = fixOf.get(bad) || { twins: new Map<number, Tx>(), keep: new Set<string>() };
+          // Every pair is one transaction reported twice: the wrong side's copy goes.
+          for (const pair of pairs) fix.twins.set(pair[side].id as number, pair[1 - side]);
+          // Payees whose pairs already agree were put right before (or were never wrong).
+          for (const [k, v] of side === 0 ? payeesA : tally(1)) if (v.same >= v.opposite) fix.keep.add(k);
+          fixOf.set(bad, fix);
+        }
+      }
+
+      for (const [g, a] of groups) {
+        if (fixOf.has(g)) continue;
+        const e = evidence(a);
+        if (e.asIs > e.flipped) continue;
+        // Wording alone, when it clearly says so: "transfer to savings" as money in,
+        // "interest earned" as money out.
+        let reversed = e.flipped >= 3 && e.flipped >= 4 * e.asIs;
+        // On a card: an import that is mostly money in, when the rest of the card isn't.
+        if (!reversed && card && a.length >= 4 && positiveShare(a) >= 0.7) {
+          const rest = list.filter((t) => t.group !== g && !fixOf.has(t.group));
+          reversed = e.flipped > e.asIs || (rest.length >= 4 && positiveShare(rest) <= 0.4);
+        }
+        if (reversed) fixOf.set(g, { twins: new Map(), keep: new Set() });
+      }
+
+      for (const [g, fix] of fixOf) {
+        // A transaction another, trusted source also reported this way round is left be.
+        const mine = groups.get(g)!.filter((t) => [...t.touched].every((x) => x === g || fixOf.has(x)) && (fix.twins.has(t.id as number) || !fix.keep.has(payeeKey(t))));
+        if (mine.length) problems.push({ accountId: acct, account: list[0].account_name as string, group: g, rows: mine, twins: fix.twins });
+      }
+    }
+    return problems;
+  }
+
+  // Before importing: does this file report, the opposite way round, what's already in
+  // the account (by the same row's id, or the same payment from another source)?
+  // When it consistently does, and its own wording doesn't say it's right, the file
+  // is the one that's backwards: what's here may already have been checked.
+  function incomingIsBackwards(accountId: number, source: Source, incoming: IncomingTransaction[]) {
+    if (incoming.length < 2) return false;
+    const dates = incoming.map((t) => t.posted).sort();
+    const shift = (date: string, days: number) => new Date((dayNumber(date) + days) * DAY_MS).toISOString().slice(0, 10);
+    const existing = db
+      .prepare('SELECT id, posted, amount, description, memo, payee FROM bank_transactions WHERE account_id = ? AND posted BETWEEN ? AND ?')
+      .all(accountId, shift(dates[0], -MATCH_DAYS), shift(dates[dates.length - 1], MATCH_DAYS)) as Row[];
+    if (!existing.length) return false;
+    const byId = new Map(existing.map((r) => [r.id as number, r]));
+    const findSource = db.prepare('SELECT transaction_id FROM bank_tx_sources WHERE account_id = ? AND source = ? AND external_id = ?');
+    const seen = new Map<string, number>();
+    let same = 0;
+    let opposite = 0;
+    const disagreeing: Row[] = [];
+    for (const tx of incoming) {
+      const cents = toCents(tx.amount);
+      if (!cents) continue;
+      const description = tx.description.replace(/\s+/g, ' ').trim().slice(0, 500) || 'Transaction';
+      const key = `${tx.posted}|${cents}|${description.toLowerCase()}`;
+      const occurrence = seen.get(key) ?? 0;
+      seen.set(key, occurrence + 1);
+      const externalId = (tx.externalId && String(tx.externalId).slice(0, 200)) || rowId({ ...tx, description }, occurrence);
+      const known = (findSource.get(accountId, source, externalId) as Row | undefined)?.transaction_id as number | undefined;
+      const stored = known === undefined ? undefined : byId.get(known);
+      if (stored) {
+        const storedCents = toCents(stored.amount as number);
+        if (storedCents === cents) same++;
+        else if (storedCents === -cents) {
+          opposite++;
+          disagreeing.push(stored);
+        }
+        continue;
+      }
+      const day = dayNumber(tx.posted);
+      const ours = [description, tx.memo, tx.payee].filter(Boolean) as string[];
+      const near = existing.filter(
+        (r) =>
+          Math.abs(toCents(r.amount as number)) === Math.abs(cents) &&
+          Math.abs(dayNumber(r.posted as string) - day) <= MATCH_DAYS &&
+          [r.description, r.memo, r.payee].filter(Boolean).some((theirs) => ours.some((mine) => similarDescriptions(theirs as string, mine)))
+      );
+      if (near.some((r) => toCents(r.amount as number) === cents)) same++;
+      else if (near.length) {
+        opposite++;
+        disagreeing.push(near[0]);
+      }
+    }
+    if (opposite < 2 || opposite <= 2 * same) return false;
+    // They disagree; which is wrong is decided as for two imports already here.
+    let asIs = 0;
+    let flipped = 0;
+    for (const tx of incoming) {
+      const text = [tx.description, tx.memo, tx.payee].filter(Boolean).join(' ');
+      const way = MONEY_IN.test(text) ? 1 : MONEY_OUT.test(text) ? -1 : 0;
+      if (way && tx.amount) Math.sign(tx.amount) === way ? asIs++ : flipped++;
+    }
+    if (asIs !== flipped) return flipped > asIs;
+    const share = (amounts: number[]) => amounts.filter((n) => n > 0).length / Math.max(amounts.length, 1);
+    if (account(accountId)?.kind === 'credit') {
+      const mine = share(incoming.map((t) => t.amount));
+      const theirs = share(existing.map((r) => r.amount as number));
+      if (Math.abs(mine - theirs) >= 0.2) return mine > theirs;
+    }
+    const RANK: Record<string, number> = { simplefin: 3, ofx: 2, csv: 1 };
+    const sourceOf = db.prepare('SELECT source FROM bank_tx_sources WHERE transaction_id = ? ORDER BY rowid LIMIT 1');
+    const ranks = disagreeing.map((r) => RANK[(sourceOf.get(r.id) as Row | undefined)?.source as string] ?? 0);
+    const theirRank = ranks.sort((a, b) => a - b)[Math.floor(ranks.length / 2)] ?? 0;
+    return (RANK[source] ?? 0) < theirRank;
+  }
+
+  // Puts them right: a transaction that also came in the right way round is merged
+  // into that one; the rest are turned round.
+  function fixSigns(problems: ReturnType<typeof findSignProblems>) {
+    let flipped = 0;
+    let merged = 0;
+    const touched: number[] = [];
+    for (const p of problems) {
+      const lone: Row[] = [];
+      for (const t of p.rows) {
+        const twin = p.twins.get(t.id as number);
+        if (twin && db.prepare('SELECT 1 FROM bank_transactions WHERE id = ?').get(twin.id)) {
+          mergeInto(t, twin);
+          touched.push(twin.id as number);
+          merged++;
+        } else {
+          lone.push(t);
+          touched.push(t.id as number);
+        }
+      }
+      flipRows(lone);
+      flipped += lone.length;
+    }
+    if (touched.length) {
+      applyRules(`t.id IN (${touched.join(',')})`);
+      detectTransfers();
+    }
+    return { flipped, merged };
+  }
+
+  const groupLabel = (group: string) => {
+    if (group === 'simplefin') return 'SimpleFIN';
+    if (group.startsWith('source:')) return `${group.slice(7).toUpperCase()} rows`;
+    const i = db.prepare('SELECT file_name, source, at FROM bank_imports WHERE id = ?').get(Number(group.slice(7))) as Row | undefined;
+    return i ? `${i.file_name || String(i.source).toUpperCase() + ' file'}, imported ${String(i.at).slice(0, 10)}` : 'An import';
+  };
+  const signProblems = () =>
+    findSignProblems().map((p) => ({
+      key: `${p.accountId}|${p.group}`,
+      accountId: p.accountId,
+      account: p.account,
+      from: groupLabel(p.group),
+      count: p.rows.length,
+      duplicates: p.rows.filter((t) => p.twins.has(t.id as number)).length,
+      examples: p.rows.slice(0, 5).map((t) => ({ id: t.id, posted: t.posted, amount: t.amount, payee: t.payee || t.description })),
+    }));
+  const fixSignProblems = (keys: string[] | null = null) =>
+    transaction(() => fixSigns(findSignProblems().filter((p) => !keys || keys.includes(`${p.accountId}|${p.group}`))));
+
   function updateTransactions(
     ids: number[],
     changes: { category?: string | null; status?: string | null; kind?: TxKind | null; note?: string | null; entity?: number | null; shares?: Share[] | null; flipSign?: boolean }
@@ -715,28 +1090,7 @@ export function createBankStore(db: DatabaseSync) {
       const rows = db.prepare(`SELECT id, account_id, posted, amount, description, transfer_id, kind_source FROM bank_transactions WHERE id IN (${list})`).all() as Row[];
       const stamp = now();
       // Imported the wrong way round (money in shown as spending, or the reverse).
-      if (changes.flipSign) {
-        const unpair = db.prepare(
-          `UPDATE bank_transactions SET transfer_id = NULL, kind = CASE WHEN kind_source = 'auto' THEN 'normal' ELSE kind END, kind_source = CASE WHEN kind_source = 'auto' THEN NULL ELSE kind_source END WHERE id = ?`
-        );
-        const csvIds = db.prepare(`SELECT external_id FROM bank_tx_sources WHERE transaction_id = ? AND source = 'csv' AND external_id LIKE 'h:%'`);
-        const addSource = db.prepare('INSERT OR IGNORE INTO bank_tx_sources (account_id, source, external_id, transaction_id) VALUES (?, ?, ?, ?)');
-        for (const row of rows) {
-          // An automatic transfer pair no longer adds up; it's looked for again below.
-          if (row.transfer_id && row.kind_source === 'auto') {
-            unpair.run(row.transfer_id);
-            unpair.run(row.id);
-          }
-          db.prepare('UPDATE bank_transactions SET amount = -amount, updated_at = ? WHERE id = ?').run(stamp, row.id);
-          // Rows from a CSV are known by a fingerprint that includes the amount. Knowing
-          // the corrected one too means importing the same file again with the right
-          // signs adds nothing.
-          if ((csvIds.all(row.id) as Row[]).length) {
-            const tx = { posted: row.posted as string, amount: -(row.amount as number), description: row.description as string, externalId: null };
-            for (let occurrence = 0; occurrence < 3; occurrence++) addSource.run(row.account_id, 'csv', rowId(tx, occurrence), row.id);
-          }
-        }
-      }
+      if (changes.flipSign) flipRows(rows);
       if ('category' in changes) {
         if (changes.category) db.prepare(`UPDATE bank_transactions SET category = ?, category_source = 'user', updated_at = ? WHERE id IN (${list})`).run(changes.category, stamp);
         else db.prepare(`UPDATE bank_transactions SET category_source = NULL, updated_at = ? WHERE id IN (${list})`).run(stamp);
@@ -826,6 +1180,8 @@ export function createBankStore(db: DatabaseSync) {
     listTransactions,
     reviewCount,
     updateTransactions,
+    signProblems,
+    fixSignProblems,
     deleteTransactions,
     spending,
     setOrderInfo: (fn: (ids: number[]) => Map<number, OrderInfo>) => {

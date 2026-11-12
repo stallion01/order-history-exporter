@@ -6,7 +6,7 @@ import { post, useApi } from '../api';
 import { BulkBar, TxRow } from '../bank';
 import type { Entity, Transaction } from '../bank';
 import type { Meta } from '../filters';
-import { whole } from '../format';
+import { money, plural, whole } from '../format';
 import { Banner, Button, Card, Empty, Field, Input, Loading, MultiSelect, PageHeader, Pager, Select, TD, TH, TR } from '../ui';
 
 const PAGE = 50;
@@ -28,6 +28,7 @@ export function Review({ meta }: { meta: Meta | null }) {
   const rules = useApi<{ rules: Rule[]; accounts: { id: number; name: string }[] }>('/api/bank/rules');
   const receipts = useApi<{ counts: { review: number } }>('/api/receipts?limit=1');
   const unmatched = useApi<{ total: number }>('/api/bank/transactions?unmatched=1&limit=1');
+  const signs = useApi<{ problems: SignProblem[] }>('/api/bank/sign-problems');
   const entities = meta?.entities || [];
   const [selected, setSelected] = useState<number[]>([]);
   const categories = meta?.categories.map((c) => c.name) || [];
@@ -35,6 +36,7 @@ export function Review({ meta }: { meta: Meta | null }) {
   const reload = () => {
     list.reload();
     rules.reload();
+    signs.reload();
   };
   const data = list.data;
 
@@ -61,6 +63,7 @@ export function Review({ meta }: { meta: Meta | null }) {
           </Link>
         </Banner>
       )}
+      {signs.data && signs.data.problems.length > 0 && <SignProblems problems={signs.data.problems} onDone={reload} />}
       <Card title={data ? `${whole(data.total)} to review` : 'To review'} padded={false} className="mb-6">
         <BulkBar ids={selected} categories={categories} entities={entities} onDone={reload} />
         {!data && list.loading && <Loading />}
@@ -231,6 +234,68 @@ function Rules({ data, categories, entities, onChange }: { data: { rules: Rule[]
           Add rule
         </Button>
       </form>
+    </Card>
+  );
+}
+
+interface SignProblem {
+  key: string;
+  accountId: number;
+  account: string;
+  from: string;
+  count: number;
+  duplicates: number;
+  examples: { id: number; posted: string; amount: number; payee: string }[];
+}
+
+// Imports whose amounts came in the wrong way round: card charges as income, or
+// deposits as spending. Usually the same charges also came in the right way round
+// from another source, so each shows up twice.
+function SignProblems({ problems, onDone }: { problems: SignProblem[]; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
+  async function fix(keys: string[]) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const done = await post<{ flipped: number; merged: number }>('/api/bank/sign-problems/fix', { keys });
+      setMessage({ tone: 'info', text: `Put right: ${plural(done.merged, 'duplicate')} removed, ${plural(done.flipped, 'amount')} turned round.` });
+      onDone();
+    } catch (e) {
+      setMessage({ tone: 'error', text: (e as Error).message });
+    }
+    setBusy(false);
+  }
+  return (
+    <Card title="Amounts the wrong way round" className="mb-6">
+      {message && <Banner tone={message.tone}>{message.text}</Banner>}
+      <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">
+        These imports have money in and money out swapped compared with the rest of the account, for example card charges showing as income. Where the same
+        transaction also came in the right way round, the wrong copy is removed; the rest are turned round. Categories, receipts and your own choices are kept.
+      </p>
+      <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+        {problems.map((p) => (
+          <li key={p.key} className="flex flex-wrap items-start justify-between gap-3 py-3">
+            <div className="min-w-0 text-sm">
+              <div className="font-medium">
+                {p.account}: {plural(p.count, 'transaction')} from {p.from}
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {p.duplicates ? `${whole(p.duplicates)} also came in the right way round. ` : ''}For example:{' '}
+                {p.examples.map((e) => `${e.payee} ${money(e.amount)} on ${e.posted}`).join(' · ')}
+              </div>
+            </div>
+            <Button disabled={busy} onClick={() => fix([p.key])}>
+              Put right
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {problems.length > 1 && (
+        <Button className="mt-2" variant="primary" disabled={busy} onClick={() => fix(problems.map((p) => p.key))}>
+          Put all of them right
+        </Button>
+      )}
     </Card>
   );
 }
