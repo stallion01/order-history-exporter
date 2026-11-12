@@ -79,6 +79,13 @@ function depositWindow(stay: Row): [string, string] {
 // What the bank should receive for a stay. Booking.com pays the full amount and bills
 // its commission separately, so its deposit is the payout plus the commission.
 function depositAmount(stay: Row): number {
+  // The user's own figure wins.
+  if (stay.expected_override !== null && stay.expected_override !== undefined) return round(Number(stay.expected_override));
+  return hospitableAmount(stay);
+}
+
+// The same, from Hospitable's figures alone.
+function hospitableAmount(stay: Row): number {
   const payout = Number(stay.payout) || 0;
   const fees = Number(stay.host_fees) || 0;
   return platformGroup(stay.platform) === 'booking' && fees < 0 ? round(payout - fees) : payout;
@@ -368,7 +375,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     return db
       .prepare(
         `SELECT s.* FROM stays s
-         WHERE s.status = 'accepted' AND s.payout > 0
+         WHERE s.status = 'accepted' AND COALESCE(s.expected_override, s.payout) > 0
            AND NOT EXISTS (SELECT 1 FROM stay_payout_lines l WHERE l.stay_id = s.id)
            AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.stay_id = s.id)
            AND (s.platform != 'airbnb' OR ? IS NULL OR s.arrival < ?)
@@ -566,7 +573,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       params.push(today());
     }
     if (view === 'unpaid' || view === 'conflicts') {
-      clauses.push(`s.payout > 0 AND s.arrival <= ? AND NOT (${PAID})`);
+      clauses.push(`COALESCE(s.expected_override, s.payout) > 0 AND s.arrival <= ? AND NOT (${PAID})`);
       params.push(today());
     }
     if (filters.year) {
@@ -599,7 +606,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     return { sql: `WHERE ${clauses.join(' AND ')}`, params };
   }
 
-  const EXPECTED = `(CASE WHEN s.platform = 'booking' AND s.host_fees < 0 THEN s.payout - s.host_fees ELSE s.payout END)`;
+  const EXPECTED = `COALESCE(s.expected_override, CASE WHEN s.platform = 'booking' AND s.host_fees < 0 THEN s.payout - s.host_fees ELSE s.payout END)`;
   const RECEIVED = `COALESCE((SELECT SUM(d.amount) FROM stay_deposits d WHERE d.stay_id = s.id AND d.purpose = 'stay'), 0)`;
   // Within a dollar counts as paid: banks and platforms round differently.
   const PAID = `(${RECEIVED} > 0 AND ${RECEIVED} >= ${EXPECTED} - 1) OR EXISTS (SELECT 1 FROM stay_payout_lines l JOIN stay_payouts p ON p.id = l.payout_id WHERE l.stay_id = s.id AND p.transaction_id IS NOT NULL)`;
@@ -614,7 +621,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     if (r.paid) return 'paid' as const;
     if (r.conflict) return 'conflict' as const;
     if (r.received > 0) return 'partial' as const;
-    if (!r.payout) return 'none' as const;
+    if (!(depositAmount(r) > 0)) return 'none' as const;
     const expected = r.expected_on as string;
     if (expected > today()) return 'upcoming' as const;
     if (start && expected < start) return 'nobank' as const;
@@ -654,7 +661,10 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       taxes: r.taxes as number | null,
       payout: r.payout as number | null,
       // What the bank should receive: for Booking.com, before its commission.
-      depositAmount: r.payout === null ? null : depositAmount(r),
+      depositAmount: r.payout === null && r.expected_override === null ? null : depositAmount(r),
+      // Set by the user in place of Hospitable's figure, which is kept alongside.
+      expectedEdited: r.expected_override !== null && r.expected_override !== undefined,
+      hospitableAmount: r.payout === null ? null : hospitableAmount(r),
       note: r.note as string | null,
       paid,
       received: round(Number(r.received) || 0),
@@ -1058,7 +1068,12 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     return db.prepare('UPDATE stays SET note = ? WHERE id = ?').run(note?.trim().slice(0, 2000) || null, stayId).changes > 0;
   }
 
-  return { status, connect, disconnect, sync, due, match, list, options, get, conflictList, resolve, airbnbWeeks, linkStay, unlinkStay, linkPayout, unlinkPayout, setNote };
+  // The amount the user expects for the stay; null goes back to Hospitable's.
+  function setExpected(stayId: string, amount: number | null) {
+    return db.prepare('UPDATE stays SET expected_override = ? WHERE id = ?').run(amount === null ? null : round(amount), stayId).changes > 0;
+  }
+
+  return { status, connect, disconnect, sync, due, match, list, options, get, conflictList, resolve, airbnbWeeks, linkStay, unlinkStay, linkPayout, unlinkPayout, setNote, setExpected };
 }
 
 export type StayService = ReturnType<typeof stayService>;

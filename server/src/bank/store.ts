@@ -475,9 +475,11 @@ export function createBankStore(db: DatabaseSync) {
     accountId: number,
     source: Source,
     incoming: IncomingTransaction[],
-    options: { dryRun?: boolean; fileName?: string | null; username?: string | null } = {}
+    options: { dryRun?: boolean; fileName?: string | null; username?: string | null; fileKey?: string | null; layout?: string | null } = {}
   ): ImportSummary {
     if (!account(accountId)) throw new Error('That account no longer exists.');
+    // As the file had them, so the import can be replayed into another account.
+    const original = incoming;
     return transaction(() => {
       const summary: ImportSummary = { importId: null, added: 0, merged: 0, skipped: 0, transfers: 0, firstDate: null, lastDate: null, examples: [], signsFixed: 0 };
       if (incomingIsBackwards(accountId, source, incoming)) {
@@ -552,10 +554,14 @@ export function createBankStore(db: DatabaseSync) {
         const importId = Number(
           db
             .prepare(
-              'INSERT INTO bank_imports (at, username, source, file_name, account_id, added, merged, skipped, first_date, last_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+              'INSERT INTO bank_imports (at, username, source, file_name, account_id, added, merged, skipped, first_date, last_date, file_key, layout) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )
-            .run(now(), options.username ?? null, source, options.fileName ?? null, accountId, summary.added, summary.merged, summary.skipped, summary.firstDate, summary.lastDate).lastInsertRowid
+            .run(now(), options.username ?? null, source, options.fileName ?? null, accountId, summary.added, summary.merged, summary.skipped, summary.firstDate, summary.lastDate, options.fileKey ?? null, options.layout ?? null).lastInsertRowid
         );
+        if (source !== 'simplefin') {
+          const line = db.prepare('INSERT INTO bank_import_lines (import_id, line, posted, amount, description, payee, memo, external_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+          original.forEach((tx, n) => line.run(importId, n, tx.posted, tx.amount, String(tx.description).slice(0, 500), tx.payee ?? null, tx.memo ?? null, tx.externalId ? String(tx.externalId).slice(0, 200) : null));
+        }
         // Which transactions this import touched, so its result can be listed.
         const remember = db.prepare('INSERT OR IGNORE INTO bank_import_rows (import_id, transaction_id, outcome) VALUES (?, ?, ?)');
         for (const [txId, outcome] of outcomes) remember.run(importId, txId, outcome);
@@ -581,6 +587,170 @@ export function createBankStore(db: DatabaseSync) {
     const summary = importTransactions(...args);
     if (!args[3]?.dryRun && summary.added) for (const listener of afterImport) listener();
     return summary;
+  }
+
+  /* ---------- Putting an import right ---------- */
+
+  // What an import did, row by row, and whether it can be replayed exactly.
+  function importDetail(id: number) {
+    const found = importById(id);
+    if (!found) return null;
+    const counts = db.prepare('SELECT outcome, COUNT(*) AS n FROM bank_import_rows WHERE import_id = ? GROUP BY outcome').all(id) as Row[];
+    const lines = (db.prepare('SELECT COUNT(*) AS n FROM bank_import_lines WHERE import_id = ?').get(id) as Row).n as number;
+    return { ...found, rows: Object.fromEntries(counts.map((c) => [c.outcome, c.n])) as Record<string, number>, replayable: lines > 0 };
+  }
+
+  // Transactions this import brought in that nothing else vouches for: no other
+  // import and no bank feed reported them too.
+  function ownedBy(imp: Row) {
+    return (
+      db
+        .prepare(
+          `SELECT t.* FROM bank_import_rows r JOIN bank_transactions t ON t.id = r.transaction_id
+           WHERE r.import_id = ? AND r.outcome = 'added'
+             AND NOT EXISTS (SELECT 1 FROM bank_import_rows o WHERE o.transaction_id = t.id AND o.import_id != r.import_id)
+             AND NOT EXISTS (SELECT 1 FROM bank_tx_sources s WHERE s.transaction_id = t.id AND s.source != ?)`
+        )
+        .all(imp.id, imp.source) as Row[]
+    );
+  }
+
+  // Takes an import back out. What it added goes (with any edits made to those
+  // transactions); what it matched to transactions already here stays, without this
+  // file's say-so.
+  function removeImport(id: number) {
+    const imp = db.prepare('SELECT * FROM bank_imports WHERE id = ?').get(id) as Row | undefined;
+    if (!imp) throw new Error('That import was not found.');
+    if (imp.source === 'simplefin') throw new Error('A SimpleFIN sync can’t be undone this way.');
+    const owned = ownedBy(imp);
+    const unpair = unpairStmt();
+    for (const t of owned) if (t.transfer_id && t.kind_source === 'auto') unpair.run(t.transfer_id);
+    // Rows matched to transactions that stay: forget this file's ids for them, unless
+    // another file of the same kind also reported them.
+    db.prepare(
+      `DELETE FROM bank_tx_sources WHERE source = ? AND account_id = ? AND transaction_id IN (
+         SELECT r.transaction_id FROM bank_import_rows r WHERE r.import_id = ? AND r.outcome IN ('merged', 'added')
+           AND NOT EXISTS (SELECT 1 FROM bank_import_rows o JOIN bank_imports oi ON oi.id = o.import_id WHERE o.transaction_id = r.transaction_id AND o.import_id != r.import_id AND oi.source = ?))`
+    ).run(imp.source, imp.account_id, id, imp.source);
+    const remove = db.prepare('DELETE FROM bank_transactions WHERE id = ?');
+    for (const t of owned) remove.run(t.id);
+    // The account won't be recognised from this file any more.
+    if (imp.file_key) db.prepare('UPDATE bank_accounts SET file_key = NULL WHERE id = ? AND file_key = ?').run(imp.account_id, imp.file_key);
+    db.prepare('DELETE FROM bank_imports WHERE id = ?').run(id);
+    return { removed: owned.length, kept: (imp.added as number) - owned.length };
+  }
+
+  function undoImport(id: number) {
+    const result = transaction(() => {
+      const r = removeImport(id);
+      detectTransfers();
+      return r;
+    });
+    for (const listener of afterImport) listener();
+    return result;
+  }
+
+  // Puts an import in the account it should have gone to. With the file's rows kept,
+  // it's taken out and imported again there, so it merges with what that account
+  // already has. Older imports (from before rows were kept) move what they added and
+  // merge it with anything the account already had.
+  function moveImport(id: number, toAccountId: number, username: string | null) {
+    const imp = db.prepare('SELECT * FROM bank_imports WHERE id = ?').get(id) as Row | undefined;
+    if (!imp) throw new Error('That import was not found.');
+    if (!account(toAccountId)) throw new Error('That account no longer exists.');
+    if (imp.account_id === toAccountId) throw new Error('The import is already in that account.');
+    if (imp.source === 'simplefin') throw new Error('A SimpleFIN sync can’t be moved.');
+    const lines = db.prepare('SELECT * FROM bank_import_lines WHERE import_id = ? ORDER BY line').all(id) as Row[];
+    if (lines.length) {
+      const incoming: IncomingTransaction[] = lines.map((l) => ({ posted: l.posted, amount: l.amount, description: l.description, payee: l.payee, memo: l.memo, externalId: l.external_id }));
+      transaction(() => {
+        removeImport(id);
+      });
+      const summary = importAndNotify(toAccountId, imp.source as Source, incoming, { fileName: imp.file_name, username, fileKey: imp.file_key, layout: imp.layout });
+      if (imp.file_key) rememberFileKey(toAccountId, imp.file_key);
+      return { replayed: true, moved: summary.added, merged: summary.merged + summary.skipped, left: 0, importId: summary.importId };
+    }
+
+    const result = transaction(() => {
+      const owned = ownedBy(imp);
+      const unpair = unpairStmt();
+      const moveSource = db.prepare('UPDATE OR IGNORE bank_tx_sources SET account_id = ? WHERE transaction_id = ? AND account_id = ?');
+      const clash = db.prepare('SELECT 1 FROM bank_tx_sources WHERE transaction_id = ? AND account_id = ?');
+      const candidates = db.prepare(
+        `SELECT t.* FROM bank_transactions t WHERE t.account_id = ? AND t.id != ? AND CAST(ROUND(t.amount * 100) AS INTEGER) = ? AND t.posted BETWEEN ? AND ?
+           AND NOT EXISTS (SELECT 1 FROM bank_import_rows r WHERE r.transaction_id = t.id AND r.import_id = ?)`
+      );
+      const shift = (date: string, days: number) => new Date((dayNumber(date) + days) * DAY_MS).toISOString().slice(0, 10);
+      let moved = 0;
+      let merged = 0;
+      for (const t of owned) {
+        if (t.transfer_id && t.kind_source === 'auto') {
+          unpair.run(t.transfer_id);
+          unpair.run(t.id);
+        }
+        db.prepare('UPDATE bank_transactions SET account_id = ?, updated_at = ? WHERE id = ?').run(toAccountId, now(), t.id);
+        moveSource.run(toAccountId, t.id, imp.account_id);
+        // The same file was already imported into the right account: this copy goes.
+        if (clash.get(t.id, imp.account_id)) {
+          db.prepare('DELETE FROM bank_transactions WHERE id = ?').run(t.id);
+          merged++;
+          continue;
+        }
+        // The right account already has this payment from another source.
+        const same = (candidates.all(toAccountId, t.id, toCents(t.amount), shift(t.posted, -MATCH_DAYS), shift(t.posted, MATCH_DAYS), id) as Row[]).filter((c) =>
+          [c.description, c.payee, c.memo].filter(Boolean).some((x) => [t.description, t.payee, t.memo].filter(Boolean).some((y) => similarDescriptions(x, y)))
+        );
+        if (same.length) {
+          const day = dayNumber(t.posted);
+          const keep = same.reduce((a, b) => (Math.abs(dayNumber(b.posted) - day) < Math.abs(dayNumber(a.posted) - day) ? b : a));
+          const fresh = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(t.id) as Row;
+          mergeInto(fresh, keep);
+          merged++;
+        } else moved++;
+      }
+      // Rows of the file that were matched to the wrong account's own transactions
+      // can't be moved; importing the file again into the right account brings them in.
+      const left = ((imp.added as number) + (imp.merged as number)) - owned.length;
+      if (imp.file_key) {
+        db.prepare('UPDATE bank_accounts SET file_key = NULL WHERE id = ? AND file_key = ?').run(imp.account_id, imp.file_key);
+        rememberFileKey(toAccountId, imp.file_key);
+      }
+      db.prepare('UPDATE bank_imports SET account_id = ? WHERE id = ?').run(toAccountId, id);
+      db.prepare(`UPDATE bank_import_rows SET outcome = 'merged' WHERE import_id = ? AND outcome = 'added' AND NOT EXISTS (SELECT 1 FROM bank_transactions t WHERE t.id = transaction_id AND t.account_id = ?)`).run(id, toAccountId);
+      const all = db.prepare('SELECT id FROM bank_transactions WHERE account_id = ? AND id IN (SELECT transaction_id FROM bank_import_rows WHERE import_id = ?)').all(toAccountId, id) as Row[];
+      if (all.length) applyRules(`t.id IN (${all.map((r) => Number(r.id)).join(',')})`);
+      detectTransfers();
+      return { replayed: false, moved, merged, left: Math.max(0, left), importId: id };
+    });
+    if (imp.layout) {
+      const saved = csvLayout(imp.layout) as Row | null;
+      if (saved) saveCsvLayout(imp.layout, { ...saved, accountId: toAccountId, accountIds: [...new Set([...(saved.accountIds || []), toAccountId])] });
+    }
+    for (const listener of afterImport) listener();
+    return result;
+  }
+
+  // Which account a file's rows are already in: each account's count of rows with the
+  // same amount, near the same date, and a similar description. A file that overlaps
+  // an account's history is almost certainly that account's.
+  function accountOverlap(incoming: IncomingTransaction[]) {
+    const sample = incoming.slice(0, 300);
+    if (!sample.length) return [];
+    const find = db.prepare(
+      `SELECT t.account_id, t.description, t.payee, t.memo FROM bank_transactions t WHERE CAST(ROUND(t.amount * 100) AS INTEGER) = ? AND t.posted BETWEEN ? AND ?`
+    );
+    const shift = (date: string, days: number) => new Date((dayNumber(date) + days) * DAY_MS).toISOString().slice(0, 10);
+    const hits = new Map<number, number>();
+    for (const tx of sample) {
+      const seen = new Set<number>();
+      for (const c of find.all(toCents(tx.amount), shift(tx.posted, -MATCH_DAYS), shift(tx.posted, MATCH_DAYS)) as Row[]) {
+        if (seen.has(c.account_id)) continue;
+        if (![c.description, c.payee, c.memo].filter(Boolean).some((x) => similarDescriptions(x, tx.description))) continue;
+        seen.add(c.account_id);
+        hits.set(c.account_id, (hits.get(c.account_id) || 0) + 1);
+      }
+    }
+    return [...hits.entries()].map(([accountId, n]) => ({ accountId, hits: n, of: sample.length })).sort((a, b) => b.hits - a.hits);
   }
 
   const imports = (limit = 20, id: number | null = null) =>
@@ -1248,6 +1418,10 @@ export function createBankStore(db: DatabaseSync) {
     onImport: (listener: () => void) => afterImport.push(listener),
     imports,
     importById,
+    importDetail,
+    undoImport,
+    moveImport,
+    accountOverlap,
     csvLayout,
     saveCsvLayout,
     listTransactions,

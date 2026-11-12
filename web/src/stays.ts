@@ -32,6 +32,9 @@ export interface Stay {
   payout: number | null;
   // What the bank should receive: for Booking.com, before its commission.
   depositAmount: number | null;
+  // The user's own expected amount is in depositAmount; Hospitable's is kept here.
+  expectedEdited: boolean;
+  hospitableAmount: number | null;
   note: string | null;
   paid: boolean;
   // conflict: the deposit could be made up more than one way; due: on its way;

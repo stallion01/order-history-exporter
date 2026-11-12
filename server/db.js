@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 16;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -499,6 +499,30 @@ const SCHEMA_V14 = `
   CREATE INDEX stay_deposits_stay ON stay_deposits (stay_id);
 `;
 
+// The amount the user expects for a stay, in place of what Hospitable says. Syncing
+// never touches it.
+const SCHEMA_V15 = `
+  ALTER TABLE stays ADD COLUMN expected_override REAL;
+`;
+
+// Each file import keeps its rows, so it can be undone or moved to the right account
+// and imported again there; and how its account was recognised, to forget that too.
+const SCHEMA_V16 = `
+  ALTER TABLE bank_imports ADD COLUMN file_key TEXT;
+  ALTER TABLE bank_imports ADD COLUMN layout TEXT;
+  CREATE TABLE bank_import_lines (
+    import_id INTEGER NOT NULL REFERENCES bank_imports (id) ON DELETE CASCADE,
+    line INTEGER NOT NULL,
+    posted TEXT NOT NULL,
+    amount REAL NOT NULL,
+    description TEXT NOT NULL,
+    payee TEXT,
+    memo TEXT,
+    external_id TEXT,
+    PRIMARY KEY (import_id, line)
+  );
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -667,6 +691,8 @@ function migrate(db, file) {
     if (version < 12) db.exec(SCHEMA_V12);
     if (version < 13) db.exec(SCHEMA_V13);
     if (version < 14) db.exec(SCHEMA_V14);
+    if (version < 15) db.exec(SCHEMA_V15);
+    if (version < 16) db.exec(SCHEMA_V16);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

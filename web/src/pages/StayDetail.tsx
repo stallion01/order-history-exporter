@@ -36,6 +36,99 @@ function DepositLine({ deposit, action, footer }: { deposit: DepositRow & { exac
   );
 }
 
+const MoneyInput = ({ value, onChange, max, label }: { value: string; onChange: (v: string) => void; max?: number; label: string }) => (
+  <label className="inline-flex items-center gap-1">
+    <span className="sr-only">{label}</span>$
+    <input
+      type="number"
+      inputMode="decimal"
+      step="0.01"
+      min="0"
+      max={max}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      autoFocus
+      className="w-28 rounded-md border border-slate-300 bg-white px-2 py-1 text-right text-sm tabular-nums dark:border-slate-700 dark:bg-slate-900"
+    />
+  </label>
+);
+
+// A money row the user can change: the expected amount for the stay.
+function AmountEdit({ label, value, busy, onSave }: { label: string; value: number; busy: boolean; onSave: (amount: number) => Promise<void> | void }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const n = Number(text);
+  if (!editing)
+    return (
+      <Row
+        label={label}
+        value={
+          <span className="inline-flex items-center gap-2">
+            {money(value)}
+            <button type="button" className="text-xs font-medium text-emerald-700 underline dark:text-emerald-400" onClick={() => (setText(value.toFixed(2)), setEditing(true))}>
+              Edit
+            </button>
+          </span>
+        }
+      />
+    );
+  return (
+    <form
+      className="flex flex-wrap items-center justify-between gap-2 py-1.5 text-sm"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        await onSave(Math.round(n * 100) / 100);
+        setEditing(false);
+      }}
+    >
+      <span className="text-slate-600 dark:text-slate-400">{label}</span>
+      <span className="flex items-center gap-2">
+        <MoneyInput value={text} onChange={setText} label={label} />
+        <Button type="submit" busy={busy} disabled={!(n >= 0) || text === ''}>
+          Save
+        </Button>
+        <Button type="button" onClick={() => setEditing(false)}>
+          Cancel
+        </Button>
+      </span>
+    </form>
+  );
+}
+
+// How much of a linked transaction counts for the stay, changeable up to what's left of it.
+function ShareEdit({ label, value, max, busy, onSave }: { label: string; value: number; max: number; busy: boolean; onSave: (amount: number) => Promise<void> | void }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const n = Number(text);
+  if (!editing)
+    return (
+      <>
+        {label} {money(value)}{' '}
+        <button type="button" className="font-medium text-emerald-700 underline dark:text-emerald-400" onClick={() => (setText(value.toFixed(2)), setEditing(true))}>
+          change
+        </button>
+      </>
+    );
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      {label}
+      <MoneyInput value={text} onChange={setText} max={max} label={label} />
+      <Button
+        busy={busy}
+        disabled={!(n > 0) || n > max + 0.005}
+        onClick={async () => {
+          await onSave(Math.round(n * 100) / 100);
+          setEditing(false);
+        }}
+      >
+        Save
+      </Button>
+      <Button onClick={() => setEditing(false)}>Cancel</Button>
+      {n > max + 0.005 && <span className="text-red-700 dark:text-red-400">Only {money(max)} is available.</span>}
+    </span>
+  );
+}
+
 function Row({ label, value, strong }: { label: string; value: ReactNode; strong?: boolean }) {
   return (
     <div className={cx('flex justify-between gap-3 py-1.5 text-sm', strong && 'border-t border-slate-200 pt-2 font-semibold dark:border-slate-700')}>
@@ -213,8 +306,21 @@ export function StayDetail() {
           {!payouts.length && s.status !== 'accepted' && !deposits.length && <Empty>This stay was {s.status}.</Empty>}
           {!payouts.length && (s.status === 'accepted' || deposits.length > 0) && (
             <>
-              <Row label="Expected" value={money(s.depositAmount ?? s.payout)} />
-              {s.depositAmount !== null && s.payout !== null && Math.round(s.depositAmount * 100) !== Math.round(s.payout * 100) && (
+              <AmountEdit
+                label="Expected"
+                value={s.depositAmount ?? s.payout ?? 0}
+                busy={busy}
+                onSave={(amount) => run(`/api/stays/${encodeURIComponent(s.id)}`, { expected: amount })}
+              />
+              {s.expectedEdited && (
+                <p className="-mt-1 mb-1 text-xs text-slate-500 dark:text-slate-400">
+                  Set by you. Hospitable says {money(s.hospitableAmount)}.{' '}
+                  <button type="button" className="font-medium text-emerald-700 underline dark:text-emerald-400" disabled={busy} onClick={() => run(`/api/stays/${encodeURIComponent(s.id)}`, { expected: null })}>
+                    Use Hospitable's
+                  </button>
+                </p>
+              )}
+              {!s.expectedEdited && s.depositAmount !== null && s.payout !== null && Math.round(s.depositAmount * 100) !== Math.round(s.payout * 100) && (
                 <p className="-mt-1 mb-1 text-xs text-slate-500 dark:text-slate-400">
                   {s.platformLabel} pays the full {money(s.depositAmount)} and bills its commission of {money(s.depositAmount - s.payout)} separately.
                 </p>
@@ -236,7 +342,13 @@ export function StayDetail() {
                       }
                       footer={
                         <>
-                          {PURPOSE_LABELS[d.purpose]} {money(d.share)}
+                          <ShareEdit
+                            label={PURPOSE_LABELS[d.purpose]}
+                            value={d.share}
+                            max={d.share + d.balance}
+                            busy={busy}
+                            onSave={(amount) => run(`/api/stays/${encodeURIComponent(s.id)}/link`, { transactionId: d.id, purpose: d.purpose, amount })}
+                          />
                           {Math.abs(d.amount) - d.share > 0.005 ? ` of ${money(Math.abs(d.amount))}` : ''}
                           {d.balance > 0.005 && d.purpose !== 'refund' && (
                             <>

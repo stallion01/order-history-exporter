@@ -286,7 +286,7 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
       throw new HttpError(400, (err as Error).message);
     }
     const signature = layoutSignature(table.headers);
-    const saved = bank.csvLayout(signature) as (CsvMapping & { accountId?: number }) | null;
+    const saved = bank.csvLayout(signature) as (CsvMapping & { accountId?: number; accountIds?: number[] }) | null;
     // A remembered layout keeps its columns, but the signs are worked out for each
     // file: a bank often exports its card and checking accounts with the same
     // headings, and only the card lists purchases as positive.
@@ -294,13 +294,23 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
     const mapping: CsvMapping = body.mapping || (saved ? { ...guess, ...saved, flip: guess.flip, direction: guess.direction } : guess);
     const parsed = applyMapping(table, mapping);
     const dates = parsed.transactions.map((t) => t.posted).sort();
+    // Which account: the one whose history the file overlaps, if one clearly does;
+    // otherwise the account this layout was last used for, unless several share it.
+    const overlap = bank.accountOverlap(parsed.transactions).filter((o) => bank.account(o.accountId));
+    const best = overlap[0];
+    const clear = best && best.hits >= Math.min(3, best.of) && (!overlap[1] || overlap[1].hits * 2 <= best.hits);
+    const layoutAccounts = (saved?.accountIds || (saved?.accountId ? [saved.accountId] : [])).filter((id) => bank.account(id));
+    const accountId = clear ? best.accountId : layoutAccounts.length === 1 ? layoutAccounts[0] : null;
+    const accountReason = clear ? 'overlap' : accountId ? 'layout' : layoutAccounts.length > 1 ? 'shared-layout' : null;
     return {
       type: 'csv',
+      accountReason,
+      overlap: clear ? best.hits : 0,
       headers: table.headers,
       sample: table.rows.slice(0, 5),
       mapping,
       remembered: Boolean(saved),
-      accountId: saved?.accountId && bank.account(saved.accountId) ? saved.accountId : null,
+      accountId,
       count: parsed.transactions.length,
       firstDate: dates[0] || null,
       lastDate: dates[dates.length - 1] || null,
@@ -360,12 +370,21 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
       temporary = Boolean(body.dryRun);
     }
     try {
-      const summary = bank.importTransactions(accountId as number, source, transactions, { dryRun: body.dryRun, fileName: body.fileName || null, username: user(request) });
+      const summary = bank.importTransactions(accountId as number, source, transactions, {
+        dryRun: body.dryRun,
+        fileName: body.fileName || null,
+        username: user(request),
+        fileKey: accountNumber ? bank.fileKey(accountNumber) : null,
+        layout: layout?.signature ?? null,
+      });
       if (!body.dryRun) {
         if (accountNumber) bank.rememberFileKey(accountId as number, bank.fileKey(accountNumber));
         if (balance) bank.setBalance(accountId as number, balance.amount, balance.date);
-        // This bank's column layout and account, for its next file.
-        if (layout) bank.saveCsvLayout(layout.signature, { ...layout.mapping, accountId });
+        // This bank's column layout and the accounts that use it, for its next file.
+        if (layout) {
+          const before = bank.csvLayout(layout.signature) as { accountIds?: number[] } | null;
+          bank.saveCsvLayout(layout.signature, { ...layout.mapping, accountId, accountIds: [...new Set([...(before?.accountIds || []), accountId as number])] });
+        }
         audit(request, 'bank.import', { accountId, source, fileName: body.fileName, ...summary, examples: undefined });
       }
       return { ...summary, accountId: temporary ? null : accountId };
@@ -377,9 +396,38 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
   app.get('/api/bank/imports', async () => ({ imports: bank.imports() }));
 
   app.get('/api/bank/imports/:id', async (request) => {
-    const found = bank.importById(Number((request.params as { id: string }).id));
+    const found = bank.importDetail(Number((request.params as { id: string }).id));
     if (!found) throw new HttpError(404, 'That import was not found.');
     return found;
+  });
+
+  // Takes an import back out.
+  app.post('/api/bank/imports/:id/undo', async (request) => {
+    const id = Number((request.params as { id: string }).id);
+    if (!Number.isInteger(id)) throw new HttpError(404, 'That import was not found.');
+    let result;
+    try {
+      result = bank.undoImport(id);
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+    audit(request, 'bank.import.undo', { importId: id, ...result });
+    return result;
+  });
+
+  // Puts an import in the account it should have gone to.
+  app.post('/api/bank/imports/:id/move', async (request) => {
+    const id = Number((request.params as { id: string }).id);
+    if (!Number.isInteger(id)) throw new HttpError(404, 'That import was not found.');
+    const body = parse(z.object({ accountId: z.number().int().positive() }), request.body);
+    let result;
+    try {
+      result = bank.moveImport(id, body.accountId, user(request));
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+    audit(request, 'bank.import.move', { ...result, from: id, accountId: body.accountId });
+    return result;
   });
 
   /* ---------- Exporting ---------- */

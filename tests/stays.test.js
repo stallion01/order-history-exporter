@@ -396,3 +396,34 @@ test('a stay paid only in part says what is still due', async () => {
   await post('/api/stays/res-t/unlink', { transactionId: zelle.id });
   assert.equal((await get('/api/stays/res-t')).stay.received, 0);
 });
+
+test('the expected amount and each linked share can be changed by hand', async () => {
+  // Hospitable says 400; the guest was charged 150 in the end.
+  await post('/api/stays/res-t', { expected: 150 });
+  let t = await get('/api/stays/res-t');
+  assert.equal(t.stay.depositAmount, 150);
+  assert.equal(t.stay.expectedEdited, true);
+  assert.equal(t.stay.hospitableAmount, 400);
+  assert.equal(t.due, 150);
+  // Unlinked by hand in an earlier test, so it isn't offered; it can still be linked.
+  assert.ok(!t.suggestions.some((x) => x.balance === 150));
+  const [zelle] = await txByDate('2026-09-25');
+  await post('/api/stays/res-t/link', { transactionId: zelle.id });
+  assert.equal((await get('/api/stays/res-t')).stay.payment, 'paid');
+
+  // Only part of the transfer was for the stay.
+  await post('/api/stays/res-t/link', { transactionId: zelle.id, purpose: 'stay', amount: 100 });
+  t = await get('/api/stays/res-t');
+  assert.equal(t.stay.received, 100);
+  assert.equal(t.stay.payment, 'partial');
+  assert.equal(t.deposits[0].balance, 50);
+  await assert.rejects(post('/api/stays/res-t/link', { transactionId: zelle.id, purpose: 'stay', amount: 151 }), /Only 150.00 is left/);
+
+  // Back to Hospitable's figure.
+  await post('/api/stays/res-t', { expected: null });
+  t = await get('/api/stays/res-t');
+  assert.equal(t.stay.expectedEdited, false);
+  assert.equal(t.stay.depositAmount, 400);
+  assert.equal(t.due, 300);
+  await assert.rejects(post('/api/stays/res-t', { expected: -5 }), /expected/);
+});

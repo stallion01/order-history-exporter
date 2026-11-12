@@ -85,8 +85,15 @@ export function stayRoutes(app: FastifyInstance, stays: StayService) {
 
   app.post('/api/stays/:id', async (request) => {
     const id = idOf(request);
-    const body = parse(z.object({ note: z.string().max(2000).nullable() }), request.body);
-    if (!stays.setNote(id, body.note)) throw new HttpError(404, 'That stay was not found.');
+    const body = parse(z.object({ note: z.string().max(2000).nullable().optional(), expected: z.number().min(0).max(1e7).nullable().optional() }), request.body);
+    if (!stays.get(id)) throw new HttpError(404, 'That stay was not found.');
+    if (body.note !== undefined) stays.setNote(id, body.note);
+    if (body.expected !== undefined) {
+      stays.setExpected(id, body.expected);
+      audit(request, 'stay.expected', { stay: id, expected: body.expected });
+      // A new figure can make a deposit fit.
+      stays.match();
+    }
     return stays.get(id);
   });
 

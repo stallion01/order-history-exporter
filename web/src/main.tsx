@@ -8,6 +8,7 @@ import { Layout } from './Layout';
 import { Accounts } from './pages/Accounts';
 import { Dashboard } from './pages/Dashboard';
 import { Import } from './pages/Import';
+import { ImportDetail } from './pages/ImportHistory';
 import { More } from './pages/More';
 import { ReceiptDetail } from './pages/ReceiptDetail';
 import { Receipts } from './pages/Receipts';
@@ -90,6 +91,7 @@ function App() {
         <Route path="/review" element={<Review meta={meta} />} />
         <Route path="/accounts" element={<Accounts meta={meta} />} />
         <Route path="/import" element={<Import />} />
+        <Route path="/import/:id" element={<ImportDetail />} />
         <Route path="/more" element={<More />} />
         <Route path="/receipts" element={<Receipts />} />
         <Route path="/receipts/:id" element={<ReceiptDetail meta={meta} />} />

@@ -1,12 +1,13 @@
 // Imports a bank or card statement file: OFX, QFX, QBO or CSV.
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
+import { ImportHistory } from './ImportHistory';
 import { FileUp } from 'lucide-react';
 import { post, useApi } from '../api';
 import { Amount, KIND_LABELS, OWNER_LABELS, importLink } from '../bank';
 import type { Account } from '../bank';
 import { money, plural, whole } from '../format';
-import { Banner, Button, Card, Field, Input, PageHeader, Select, TD, TH, TR } from '../ui';
+import { Banner, Button, Card, Field, Input, PageHeader, Select, TD, TH, TR, cx } from '../ui';
 
 const MAX_BYTES = 15 * 1024 * 1024;
 
@@ -35,6 +36,10 @@ type Inspect =
       mapping: Mapping;
       remembered: boolean;
       accountId: number | null;
+      // Why that account: the file overlaps its transactions, the layout was last used for it,
+      // or several accounts share the layout and none could be picked.
+      accountReason: 'overlap' | 'layout' | 'shared-layout' | null;
+      overlap: number;
       count: number;
       firstDate: string | null;
       lastDate: string | null;
@@ -68,6 +73,7 @@ export function Import() {
   const [newAccount, setNewAccount] = useState({ name: '', kind: 'checking' as Account['kind'], owner: 'mixed' as Account['owner'] });
   const [preview, setPreview] = useState<Summary | null>(null);
   const [done, setDone] = useState<Summary | null>(null);
+  const flash = (useLocation().state as { flash?: string } | null)?.flash;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const input = useRef<HTMLInputElement>(null);
@@ -146,6 +152,7 @@ export function Import() {
   return (
     <>
       <PageHeader title="Import a statement" description="Bring in transactions from a file your bank or card lets you download: OFX, QFX, QBO or CSV. Anything already here is recognised and not added twice." />
+      {flash && !done && <Banner tone="info">{flash}</Banner>}
       {error && <Banner>{error}</Banner>}
       {done && (
         <Banner tone="info">
@@ -275,6 +282,13 @@ export function Import() {
               </>
             )}
           </div>
+          {inspect.type === 'csv' && inspect.accountReason && (
+            <p className={cx('mt-3 text-sm', inspect.accountReason === 'overlap' ? 'text-slate-600 dark:text-slate-300' : 'text-amber-700 dark:text-amber-400')}>
+              {inspect.accountReason === 'overlap' && `Chosen because ${plural(inspect.overlap, 'transaction')} in this file are already in that account.`}
+              {inspect.accountReason === 'layout' && 'Chosen because the last file with these columns went there. Check it: a bank exports all its accounts the same way.'}
+              {inspect.accountReason === 'shared-layout' && 'Several of your accounts use files like this one, so choose which account it is.'}
+            </p>
+          )}
           <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
             If SimpleFIN already feeds this account, choose that account: transactions both sources report are matched, not doubled.
           </p>
@@ -314,6 +328,8 @@ export function Import() {
           </div>
         </Card>
       )}
+
+      <ImportHistory refresh={done?.importId} />
     </>
   );
 }
