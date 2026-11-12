@@ -49,7 +49,8 @@ export function MonthlyBars({ rows, onSelect }: { rows: Row[]; onSelect?: (row: 
     const observer = new ResizeObserver(([entry]) => setWidth(Math.max(280, Math.floor(entry.contentRect.width))));
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+    // Again once there is a chart to measure (the data usually arrives after the first draw).
+  }, [rows.length > 0]);
 
   const months = fillMonths(rows);
   if (!months.length) return <p className="py-6 text-center text-sm text-slate-500">No dated spending matches these filters.</p>;
@@ -163,7 +164,8 @@ export function MonthlyInOut({ rows, onSelect }: { rows: InOutMonth[]; onSelect?
     const observer = new ResizeObserver(([entry]) => setWidth(Math.max(280, Math.floor(entry.contentRect.width))));
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+    // Again once there is a chart to measure (the data usually arrives after the first draw).
+  }, [rows.length > 0]);
 
   // Every month in the span, so a quiet month shows as a gap.
   const months: InOutMonth[] = [];

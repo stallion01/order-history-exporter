@@ -1,7 +1,7 @@
 // Transactions that need a decision, and the rules that save making it again.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react';
 import { post, useApi } from '../api';
 import { BulkBar, TxRow } from '../bank';
 import type { Entity, Transaction } from '../bank';
@@ -39,6 +39,22 @@ export function Review({ meta }: { meta: Meta | null }) {
     signs.reload();
   };
   const data = list.data;
+  // Whether the rules panel is showing, remembered on this device.
+  const [rulesOpen, setRulesOpen] = useState(() => {
+    try {
+      return localStorage.getItem('review-rules-open') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const showRules = (open: boolean) => {
+    setRulesOpen(open);
+    try {
+      localStorage.setItem('review-rules-open', open ? '1' : '0');
+    } catch {
+      // Private browsing: it just isn't remembered.
+    }
+  };
 
   return (
     <>
@@ -93,7 +109,24 @@ export function Review({ meta }: { meta: Meta | null }) {
       {/* On wider screens the rules stay in view at the bottom, scrolling on their own,
           while the page scrolls through the transactions above them. */}
       <div className="md:sticky md:bottom-0 md:z-20 md:-mx-1 md:px-1 md:pb-2">
-        <Rules data={rules.data} categories={categories} entities={entities} onChange={reload} />
+        {/* A tab in the middle slides the rules down out of the way, and back up. */}
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => showRules(!rulesOpen)}
+            aria-expanded={rulesOpen}
+            aria-controls="review-rules"
+            className="-mb-px inline-flex items-center gap-1.5 rounded-t-lg border border-b-0 border-slate-200 bg-white px-4 py-1.5 text-xs font-medium text-slate-700 shadow-[0_-6px_14px_-8px_rgba(15,23,42,0.35)] hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            {rulesOpen ? <ChevronDown className="size-4" aria-hidden /> : <ChevronUp className="size-4" aria-hidden />}
+            {rulesOpen ? 'Hide rules' : `Show rules${rules.data?.rules.length ? ` (${rules.data.rules.length})` : ''}`}
+          </button>
+        </div>
+        <div id="review-rules" className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${rulesOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+          <div className="min-h-0 overflow-hidden" inert={!rulesOpen}>
+            <Rules data={rules.data} categories={categories} entities={entities} onChange={reload} />
+          </div>
+        </div>
       </div>
     </>
   );
