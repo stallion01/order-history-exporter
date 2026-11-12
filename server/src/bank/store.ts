@@ -2,7 +2,8 @@
 import crypto from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { fitIdToTransaction } from './ofx';
-import { ACCOUNT_NUMBER_IN_PAYMENT, CARD_NUMBER_IN_PAYMENT, CARD_PAYMENT_WORDS, INCOME_CATEGORIES, PAID_TO_CARD, REFUNDS, STORE_PAYEES, TRANSFER_WORDS, categoryHint, payeeFor } from './merchant';
+import { ACCOUNT_NUMBER_IN_PAYMENT, CARD_NUMBER_IN_PAYMENT, CARD_PAYMENT_WORDS, INCOME_CATEGORIES, PAID_TO_CARD, REFUNDS, STORE_PAYEES, TRANSFER_WORDS, categoryHint, incomeSourceSql, payeeFor } from './merchant';
+import type { IncomeSource } from './merchant';
 import { MONEY_IN, MONEY_OUT } from './csv';
 import { toCents } from './types';
 import type { AccountKind, IncomingTransaction, Owner, Source, TxKind } from './types';
@@ -63,6 +64,8 @@ export interface TxFilters {
   status?: string | null; // business, personal, none
   kind?: string | null; // normal (default), transfer, ignored, all
   direction?: 'in' | 'out' | null;
+  // Income from one platform (Airbnb, Vrbo, Booking.com) or anything else.
+  source?: IncomeSource | null;
   q?: string | null;
   review?: boolean;
   // Entities (ids), or 'none' for transactions belonging to no entity.
@@ -658,6 +661,7 @@ export function createBankStore(db: DatabaseSync) {
     // Spending includes refunds (money back that reduces it); income leaves them out.
     if (filters.direction === 'out') clauses.push(`(t.amount < 0 OR ${REFUND_SQL})`);
     if (filters.direction === 'in') clauses.push(`(t.amount > 0 AND NOT ${REFUND_SQL})`);
+    if (filters.source) clauses.push(incomeSourceSql(filters.source, "lower(COALESCE(t.payee, '') || ' ' || t.description)"));
     if (filters.q) {
       const like = `%${filters.q.replace(/[\\%_]/g, '\\$&')}%`;
       clauses.push(`(t.description LIKE ? ESCAPE '\\' OR t.payee LIKE ? ESCAPE '\\' OR t.memo LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\')`);

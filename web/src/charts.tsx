@@ -153,7 +153,11 @@ const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 // Spending and income side by side for each month, in two colours with a legend, and
 // both figures (and the difference) on hover or focus. Clicking a month opens its
 // transactions.
-export function MonthlyInOut({ rows, onSelect }: { rows: InOutMonth[]; onSelect?: (month: string) => void }) {
+// What was clicked: one month's spending, or its income from one source. Without a
+// part, the whole month.
+export type MonthPart = 'spend' | IncomeSource;
+
+export function MonthlyInOut({ rows, onSelect }: { rows: InOutMonth[]; onSelect?: (month: string, part?: MonthPart) => void }) {
   const holder = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [active, setActive] = useState<number | null>(null);
@@ -197,7 +201,19 @@ export function MonthlyInOut({ rows, onSelect }: { rows: InOutMonth[]; onSelect?
   const labelEvery = Math.ceil(52 / slot);
   const shown = active === null ? null : months[active];
 
-  const bar = (value: number, left: number, fill: string) => {
+  // A click on one bar, or one piece of the income stack, opens just that.
+  const pick = (month: string, part: MonthPart) =>
+    onSelect
+      ? {
+          onClick: (e: { stopPropagation: () => void }) => {
+            e.stopPropagation();
+            onSelect(month, part);
+          },
+          style: { cursor: 'pointer' },
+        }
+      : {};
+
+  const bar = (value: number, left: number, fill: string, month: string) => {
     const barTop = y(Math.max(value, 0));
     const barHeight = Math.max(value ? 1 : 0, Math.abs(y(value) - y(0)));
     if (!barHeight) return null;
@@ -208,7 +224,7 @@ export function MonthlyInOut({ rows, onSelect }: { rows: InOutMonth[]; onSelect?
       value >= 0
         ? `M${left},${end}V${barTop + r}Q${left},${barTop} ${left + r},${barTop}H${right - r}Q${right},${barTop} ${right},${barTop + r}V${end}Z`
         : `M${left},${barTop}V${end - r}Q${left},${end} ${left + r},${end}H${right - r}Q${right},${end} ${right},${end - r}V${barTop}Z`;
-    return <path d={d} className={fill} />;
+    return <path d={d} className={fill} {...pick(month, 'spend')} />;
   };
 
   // Income as a stack, one segment per platform, rounded only at the top. Segments
@@ -226,7 +242,7 @@ export function MonthlyInOut({ rows, onSelect }: { rows: InOutMonth[]; onSelect?
       const h = Math.max(1, lowY - top);
       const r = last ? Math.min(3, h, barWidth / 2) : 0;
       const d = `M${left},${top + h}V${top + r}Q${left},${top} ${left + r},${top}H${right - r}Q${right},${top} ${right},${top + r}V${top + h}Z`;
-      return <path key={p.key} d={d} className={p.fill} opacity={on ? 0.8 : 1} />;
+      return <path key={p.key} d={d} className={p.fill} opacity={on ? 0.8 : 1} {...pick(month.month, p.key)} />;
     });
   };
 
@@ -271,7 +287,7 @@ export function MonthlyInOut({ rows, onSelect }: { rows: InOutMonth[]; onSelect?
               className={`outline-none ${onSelect ? 'cursor-pointer' : ''}`}
             >
               <rect x={x} y={margin.top} width={slot} height={plot} fill="transparent" />
-              {bar(month.spend, left, on ? 'fill-[var(--color-bar-hover)]' : 'fill-[var(--color-bar)]')}
+              {bar(month.spend, left, on ? 'fill-[var(--color-bar-hover)]' : 'fill-[var(--color-bar)]', month.month)}
               {stack(month, left + barWidth + 2, on)}
               {index % labelEvery === 0 && (
                 <text x={x + slot / 2} y={height - 8} textAnchor="middle" className="fill-slate-500 text-[11px] dark:fill-slate-400">

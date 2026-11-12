@@ -2,6 +2,8 @@
 // linked charge by the order's items, and keeps the businesses and properties
 // ("entities") that spending belongs to.
 import type { BankStore, OrderInfo, Share, TxFilters } from '../bank/store';
+import { incomeSource } from '../bank/merchant';
+import type { IncomeSource } from '../bank/merchant';
 import { ORDER_STORE_PAYEES } from '../bank/store';
 import { toCents } from '../bank/types';
 import type { OrdersDb } from '../legacy';
@@ -404,11 +406,6 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
       }))
       .sort((a, b) => a.month.localeCompare(b.month));
   }
-
-  // Where a payout came from, for showing rental income by platform.
-  type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'other';
-  const incomeSource = (text: string): IncomeSource =>
-    /airbnb/i.test(text) ? 'airbnb' : /vrbo|homeaway/i.test(text) ? 'vrbo' : /booking\.com|booking com/i.test(text) ? 'booking' : 'other';
 
   // A transaction's split, for showing it.
   function splitOf(txId: number) {

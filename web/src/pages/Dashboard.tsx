@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useApi } from '../api';
 import { MonthlyBars, MonthlyInOut, RankBars } from '../charts';
-import type { InOutMonth, Row } from '../charts';
+import type { InOutMonth, MonthPart, Row } from '../charts';
 import { FilterBar, useFilters } from '../filters';
 import type { Meta } from '../filters';
 import { when } from '../bank';
@@ -164,8 +164,9 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
     `/api/bank/spending?${period}`
   );
   const navigate = useNavigate();
-  // A month's transactions, keeping the dashboard's other filters.
-  const openMonth = (month: string) => {
+  // A month's transactions, keeping the dashboard's other filters: all of them, its
+  // spending, or its income from one source.
+  const openMonth = (month: string, part?: MonthPart) => {
     const [year, m] = month.split('-').map(Number);
     const last = new Date(year, m, 0).getDate();
     const next = params();
@@ -173,6 +174,12 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
     next.set('preset', 'custom');
     next.set('from', `${month}-01`);
     next.set('to', `${month}-${String(last).padStart(2, '0')}`);
+    for (const key of ['direction', 'source', 'kind']) next.delete(key);
+    if (part === 'spend') next.set('direction', 'out');
+    else if (part) {
+      next.set('direction', 'in');
+      next.set('source', part);
+    }
     navigate(`/transactions?${next}`);
   };
   const asRows = (rows: { key: string; label: string; spend: number }[] = []) => rows.map((r) => ({ label: r.label, key: r.key, spend: r.spend }));

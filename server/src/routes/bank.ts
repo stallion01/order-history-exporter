@@ -1,5 +1,7 @@
 // Bank and card accounts, transactions, imports, exports, rules and SimpleFIN.
 // Signed-in users only.
+import { INCOME_SOURCE_NAMES } from '../bank/merchant';
+import type { IncomeSource } from '../bank/merchant';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { applyMapping, guessMapping, layoutSignature, readTable } from '../bank/csv';
@@ -28,6 +30,12 @@ function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   return result.data;
 }
 
+const sourceOf = (value: string | null): IncomeSource | null => {
+  if (!value) return null;
+  if (!INCOME_SOURCE_NAMES.includes(value as IncomeSource)) throw new HttpError(400, 'Unknown income source.');
+  return value as IncomeSource;
+};
+
 export function txFiltersFrom(query: Query): TxFilters {
   const years = query.getAll('years').filter(Boolean);
   if (years.some((y) => !YEAR.test(y))) throw new HttpError(400, 'years must look like 2025.');
@@ -51,6 +59,7 @@ export function txFiltersFrom(query: Query): TxFilters {
     status,
     kind,
     direction: direction === 'in' || direction === 'out' ? direction : null,
+    source: sourceOf(query.get('source')),
     q: query.get('q') || null,
     review: query.get('review') === '1',
     importId,

@@ -582,6 +582,16 @@ test('spending and income by month, with income split by platform', async () => 
     { month: '2026-04', spend: 100, income: 1050, sources: { airbnb: 500, vrbo: 300, booking: 200, other: 50 } },
     { month: '2026-05', spend: 1000, income: 250, sources: { airbnb: 250, vrbo: 0, booking: 0, other: 0 } },
   ]);
+
+  // Clicking a piece of the chart lists exactly the transactions behind it.
+  const april = `account=${accountId}&preset=custom&from=2026-04-01&to=2026-04-30`;
+  const sum = async (extra) => (await get(`/api/bank/transactions?${april}&${extra}`)).transactions.reduce((t, x) => t + x.amount, 0);
+  assert.equal(await sum('direction=in&source=airbnb'), 500);
+  assert.equal(await sum('direction=in&source=vrbo'), 300);
+  assert.equal(await sum('direction=in&source=booking'), 200);
+  assert.equal(await sum('direction=in&source=other'), 50);
+  assert.equal(await sum('direction=out'), -100);
+  assert.equal((await call(`/api/bank/transactions?source=expedia`)).status, 400);
 });
 
 test('exports: CSV with every column, and an OFX that imports back as nothing new', async () => {

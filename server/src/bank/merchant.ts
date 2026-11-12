@@ -93,6 +93,27 @@ const SPENDING_HINTS: [RegExp, string][] = [
   [/\bcpa\b|accounting|bookkeep|attorney|law office|legal/i, 'Professional Services'],
 ];
 
+// Where income came from, for showing rental payouts by platform. The SQL below
+// must give the same answer as incomeSource for any text.
+export type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'other';
+export const INCOME_SOURCE_NAMES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'other'];
+export const incomeSource = (text: string): IncomeSource => {
+  const t = text.toLowerCase();
+  if (t.includes('airbnb')) return 'airbnb';
+  if (t.includes('vrbo') || t.includes('homeaway')) return 'vrbo';
+  if (t.includes('booking.com') || t.includes('booking com')) return 'booking';
+  return 'other';
+};
+export function incomeSourceSql(source: IncomeSource, text: string) {
+  const airbnb = `${text} LIKE '%airbnb%'`;
+  const vrbo = `(${text} LIKE '%vrbo%' OR ${text} LIKE '%homeaway%')`;
+  const booking = `(${text} LIKE '%booking.com%' OR ${text} LIKE '%booking com%')`;
+  if (source === 'airbnb') return airbnb;
+  if (source === 'vrbo') return `(${vrbo} AND NOT ${airbnb})`;
+  if (source === 'booking') return `(${booking} AND NOT ${airbnb} AND NOT ${vrbo})`;
+  return `(NOT ${airbnb} AND NOT ${vrbo} AND NOT ${booking})`;
+}
+
 // Categories that are income. Money in filed anywhere else is a refund.
 export const INCOME_CATEGORIES = ['Rental Income', 'Other Income'];
 export const REFUNDS = 'Refunds & Returns';
