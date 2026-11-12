@@ -18,6 +18,9 @@ const ReceiptSchema = z.object({
   card_last4: z.string().nullable().describe('Last four digits of the card used, if printed.'),
   payment_method: z.string().nullable().describe('e.g. "Visa", "Amex", "Cash", "Debit".'),
   category: z.string().nullable().describe('One of the listed categories, or null if none fits.'),
+  category_confidence: z
+    .enum(['high', 'medium', 'low'])
+    .describe('How sure you are of the category: high only when the vendor and items leave no real doubt which listed category it is.'),
   items: z.array(
     z.object({
       description: z.string(),

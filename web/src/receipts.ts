@@ -30,6 +30,8 @@ export interface Receipt {
   readerNotes: string | null;
   note: string | null;
   checked: boolean;
+  // Who confirmed it: the user, or the reader on its own when it was sure.
+  checkedBy: 'user' | 'auto' | null;
   transactionId: number | null;
   matchSource: 'auto' | 'user' | null;
   transaction: { id: number; posted: string; amount: number; payee: string | null; description: string; account: string } | null;

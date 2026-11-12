@@ -205,7 +205,7 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
       <p className="mb-5 text-sm text-slate-600 dark:text-slate-400">
         {STATUS_LABELS[r.status]}
         {r.confidence && r.status === 'read' ? ` · ${r.confidence} confidence` : ''}
-        {r.checked ? ' · checked by you' : r.status === 'read' ? ' · not checked yet' : ''}
+        {r.checked ? (r.checkedBy === 'auto' ? ' · confirmed automatically' : ' · checked by you') : r.status === 'read' ? ' · not checked yet' : ''}
       </p>
       {message && <Banner tone={message.tone}>{message.text}</Banner>}
       {r.readError && <Banner tone={r.status === 'failed' ? 'error' : 'warning'}>{r.readError}</Banner>}

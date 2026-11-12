@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -366,6 +366,12 @@ const SCHEMA_V10 = `
   );
 `;
 
+// Who confirmed a receipt: the user, or the reader when it was sure of everything.
+const SCHEMA_V11 = `
+  ALTER TABLE receipts ADD COLUMN checked_by TEXT;
+  UPDATE receipts SET checked_by = 'user' WHERE checked = 1;
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -530,6 +536,7 @@ function migrate(db, file) {
     if (version < 8) db.exec(SCHEMA_V8);
     if (version < 9) db.exec(SCHEMA_V9);
     if (version < 10) db.exec(SCHEMA_V10);
+    if (version < 11) db.exec(SCHEMA_V11);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

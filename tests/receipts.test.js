@@ -26,6 +26,9 @@ const READINGS = {
   diner: { vendor: 'Blue Plate Diner', date: '2026-03-09', total: 40, tax: 3, card_last4: null, category: 'Meals' },
   cash: { vendor: 'Farmers Market', date: '2026-03-10', total: 12.5, tax: null, card_last4: null, category: null },
   later: { vendor: 'Corner Store', date: '2026-03-20', total: 9.99, tax: null, card_last4: null, category: null },
+  sure: { vendor: 'Paint Barn', date: '2026-04-02', total: 61.2, tax: 4, card_last4: null, category: 'Building & Repair Materials', category_confidence: 'high' },
+  unsure: { vendor: 'Odds and Ends', date: '2026-04-03', total: 18, tax: null, card_last4: null, category: 'Office Supplies', category_confidence: 'medium' },
+  smudged: { vendor: 'Paint Barn', date: '2026-04-04', total: 33, tax: null, card_last4: null, category: 'Building & Repair Materials', category_confidence: 'high', confidence: 'low' },
 };
 async function fakeReader(file) {
   const label = file.data.subarray(3).toString('latin1').trim();
@@ -272,4 +275,31 @@ test('the Anthropic API key is stored encrypted and never shown again', async ()
   assert.ok(!stored.includes('sk-ant'));
   assert.ok(!JSON.stringify(await get('/api/settings/anthropic')).includes('xxxx'));
   assert.equal((await post('/api/settings/anthropic/delete')).set, false);
+});
+
+test('a receipt the reader is sure of is confirmed on its own; anything doubtful waits for a check', async () => {
+  const before = (await get('/api/receipts?preset=all')).counts.review;
+  const sure = (await upload('sure')).id;
+  const unsure = (await upload('unsure')).id;
+  const smudged = (await upload('smudged')).id;
+  await settled();
+  const read = async (id) => (await get(`/api/receipts/${id}`)).receipt;
+  const confirmed = await read(sure);
+  assert.equal(confirmed.checked, true);
+  assert.equal(confirmed.checkedBy, 'auto');
+  // Unsure of the category, or of the total and date: the user checks it.
+  for (const id of [unsure, smudged]) {
+    const r = await read(id);
+    assert.equal(r.checked, false);
+    assert.equal(r.checkedBy, null);
+  }
+  assert.equal((await get('/api/receipts?preset=all')).counts.review, before + 2);
+
+  // A save by the user makes it theirs, and reading again doesn't undo that.
+  await post(`/api/receipts/${sure}`, { category: 'Office Supplies' });
+  await post(`/api/receipts/${sure}/read`);
+  await settled();
+  const mine = await read(sure);
+  assert.equal(mine.checkedBy, 'user');
+  assert.equal(mine.category, 'Office Supplies');
 });

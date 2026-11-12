@@ -10,6 +10,7 @@ import type { BankStore } from '../bank/store';
 import { toCents } from '../bank/types';
 import type { SecretBox } from '../secrets';
 import { ReaderError } from './reader';
+import type { ReceiptReading } from './reader';
 import type { ReceiptReader } from './reader';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -130,6 +131,7 @@ export function receiptService(options: {
     readerNotes: row.reader_notes,
     note: row.note,
     checked: Boolean(row.checked),
+    checkedBy: (row.checked ? row.checked_by || 'user' : null) as 'user' | 'auto' | null,
     transactionId: row.transaction_id,
     matchSource: row.match_source,
     transaction: row.tx_id
@@ -321,6 +323,21 @@ export function receiptService(options: {
 
   /* ---------- Reading ---------- */
 
+  // The reader is sure enough that the user needn't confirm: a real receipt, high
+  // confidence in the amount and date and in the category, and nothing missing.
+  function sureOf(r: ReceiptReading, category: string | null) {
+    return (
+      r.is_receipt &&
+      r.confidence === 'high' &&
+      r.category_confidence === 'high' &&
+      Boolean(category) &&
+      Boolean(r.vendor?.trim()) &&
+      Boolean(validDate(r.date)) &&
+      money(r.total) !== null &&
+      (money(r.total) as number) > 0
+    );
+  }
+
   let running: Promise<void> | null = null;
 
   async function readOne(id: number) {
@@ -335,10 +352,12 @@ export function receiptService(options: {
       const fresh = getRow(id);
       if (!fresh) return 'gone';
       const keep = Boolean(fresh.checked);
+      // Sure of the amount, date, vendor and category: nothing for the user to check.
+      const sure = !keep && sureOf(r, category);
       db.prepare(
         `UPDATE receipts SET status = 'read', read_error = ?, read_at = ?, read_model = ?, input_tokens = ?, output_tokens = ?,
            vendor = ?, receipt_date = ?, currency = ?, subtotal = ?, tax = ?, tip = ?, total = ?, card_last4 = ?, payment_method = ?,
-           category = ?, items = ?, confidence = ?, reader_notes = ?, updated_at = ? WHERE id = ?`
+           category = ?, items = ?, confidence = ?, reader_notes = ?, checked = ?, checked_by = ?, updated_at = ? WHERE id = ?`
       ).run(
         r.is_receipt ? null : "This doesn't look like a receipt.",
         now(),
@@ -358,6 +377,8 @@ export function receiptService(options: {
         JSON.stringify(r.items.slice(0, 200).map((i) => ({ description: i.description.slice(0, 200), quantity: i.quantity, unitPrice: money(i.unit_price), amount: money(i.amount) }))),
         r.confidence,
         r.notes?.slice(0, 500) ?? null,
+        keep || sure ? 1 : 0,
+        keep ? fresh.checked_by || 'user' : sure ? 'auto' : null,
         now(),
         id
       );
@@ -413,7 +434,7 @@ export function receiptService(options: {
     if ('cardLast4' in edit) fields.push(['card_last4', (edit.cardLast4 || '').replace(/\D/g, '').slice(-4) || null]);
     if ('category' in edit) fields.push(['category', edit.category || null]);
     if ('note' in edit) fields.push(['note', edit.note?.trim().slice(0, 1000) || null]);
-    fields.push(['checked', edit.checked === false ? 0 : 1]);
+    fields.push(['checked', edit.checked === false ? 0 : 1], ['checked_by', edit.checked === false ? null : 'user']);
     // Someone filled it in by hand, so it no longer waits on the reader.
     if (row.status !== 'read' && ('total' in edit || 'vendor' in edit)) fields.push(['status', 'read'], ['read_error', null]);
     fields.push(['updated_at', now()]);
@@ -509,7 +530,7 @@ export function receiptService(options: {
     const row = getRow(id);
     if (!row?.transaction_id) return false;
     // Unlinked by hand, so it isn't matched again automatically.
-    db.prepare(`UPDATE receipts SET transaction_id = NULL, match_source = 'user', checked = 1, updated_at = ? WHERE id = ?`).run(now(), id);
+    db.prepare(`UPDATE receipts SET transaction_id = NULL, match_source = 'user', checked = 1, checked_by = 'user', updated_at = ? WHERE id = ?`).run(now(), id);
     bank.applyRules(`t.id = ${Number(row.transaction_id)}`);
     return true;
   }
