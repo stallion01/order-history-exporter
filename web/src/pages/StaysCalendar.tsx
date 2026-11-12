@@ -1,6 +1,6 @@
 // Stays at a glance: one row per unit, one column per day, each booking a coloured bar
 // from the afternoon it starts to the morning it ends, as a hotel's booking chart shows.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircle2, ChevronLeft, ChevronRight, Clock, TriangleAlert } from 'lucide-react';
 import { useApi } from '../api';
@@ -57,11 +57,9 @@ function StatusIcon({ payment }: { payment: Stay['payment'] }) {
   return null;
 }
 
-export function StaysCalendar() {
-  const filters = useFilters();
+// One month: its own card, scrolling sideways when the days don't fit.
+function MonthCalendar({ month, colorBy, wide }: { month: string; colorBy: ColorBy; wide: boolean }) {
   const now = new Date();
-  const month = /^\d{4}-\d{2}$/.test(filters.value('month')) ? filters.value('month') : `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
-  const colorBy: ColorBy = filters.value('color') === 'payment' ? 'payment' : 'platform';
   const [year, mon] = month.split('-').map(Number);
   const days = new Date(year, mon, 0).getDate();
   const first = `${month}-01`;
@@ -77,9 +75,7 @@ export function StaysCalendar() {
     if (!box || !loaded || box.scrollWidth <= box.clientWidth || !today.startsWith(month)) return;
     const perDay = (box.scrollWidth - 144) / days;
     box.scrollLeft = Math.max(0, (Number(today.slice(8)) - 3) * perDay);
-  }, [loaded, month, today, days]);
-
-  const go = (to: string) => filters.set({ month: to === `${now.getFullYear()}-${pad(now.getMonth() + 1)}` ? '' : to });
+  }, [loaded, month, today, days, wide]);
 
   // The units: every property, plus any stay with none.
   const stays = (data.data?.stays || []).filter((s) => s.status === 'accepted');
@@ -95,7 +91,8 @@ export function StaysCalendar() {
   const unitCount = Math.max(units.length, 1);
 
   // Two grid columns a day, so a stay can start at midday and end at midday.
-  const columns = `minmax(7.5rem, 9rem) repeat(${days * 2}, minmax(0.75rem, 1fr))`;
+  const half = wide ? 1.2 : 0.75;
+  const columns = `minmax(7.5rem, 9rem) repeat(${days * 2}, minmax(${half}rem, 1fr))`;
   const dayCell = (i: number) => ({ gridColumn: `${2 + i * 2} / span 2`, gridRow: 1 });
   const weekend = (i: number) => {
     const d = new Date(year, mon - 1, i + 1).getDay();
@@ -105,45 +102,22 @@ export function StaysCalendar() {
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Button onClick={() => go(shiftMonth(month, -1))} aria-label="Previous month">
-            <ChevronLeft className="size-4" aria-hidden />
-          </Button>
-          <h2 className="min-w-36 text-center text-lg font-semibold tracking-tight">
-            {new Date(year, mon - 1, 1).toLocaleString(undefined, { month: 'long' })} {year}
-          </h2>
-          <Button onClick={() => go(shiftMonth(month, 1))} aria-label="Next month">
-            <ChevronRight className="size-4" aria-hidden />
-          </Button>
-          <Button onClick={() => go(`${now.getFullYear()}-${pad(now.getMonth() + 1)}`)}>Today</Button>
-        </div>
-        <div className="flex items-center gap-3">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3">
+        <h2 className={cx('text-lg font-semibold tracking-tight', today.startsWith(month) && 'text-emerald-700 dark:text-emerald-400')}>
+          {new Date(year, mon - 1, 1).toLocaleString(undefined, { month: 'long' })} {year}
+        </h2>
+        {data.data && (
           <span className="text-sm text-slate-600 dark:text-slate-400">
             {plural(stays.length, 'stay')} · {Math.round((totalNights / (days * unitCount)) * 100)}% of nights booked
           </span>
-          <div className="flex rounded-md border border-slate-300 p-0.5 text-xs font-medium dark:border-slate-700" role="group" aria-label="Colour by">
-            {(['platform', 'payment'] as ColorBy[]).map((c) => (
-              <button
-                key={c}
-                type="button"
-                aria-pressed={colorBy === c}
-                onClick={() => filters.set({ color: c === 'platform' ? '' : c })}
-                className={cx('rounded px-2.5 py-1', colorBy === c ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'text-slate-600 dark:text-slate-300')}
-              >
-                {c === 'platform' ? 'By platform' : 'By payment'}
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
-
       {data.error && <Banner>{data.error.message}</Banner>}
       {!data.data && data.loading && <Loading />}
       {data.data && (
         <Card padded={false} className="overflow-hidden">
           <div ref={scroller} className="overflow-x-auto">
-            <div style={{ minWidth: `calc(9rem + ${days * 1.6}rem)` }}>
+            <div style={{ minWidth: `calc(9rem + ${days * half * 2}rem)` }}>
               {/* Days across the top */}
               <div className="grid border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/60" style={{ gridTemplateColumns: columns }}>
                 <div
@@ -269,6 +243,72 @@ export function StaysCalendar() {
           </div>
         </Card>
       )}
+    </>
+  );
+}
+
+// A computer's screen: three months, last, this and next. A phone: one.
+function useWide() {
+  const query = '(min-width: 768px)';
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const change = () => setWide(list.matches);
+    list.addEventListener('change', change);
+    return () => list.removeEventListener('change', change);
+  }, []);
+  return wide;
+}
+
+export function StaysCalendar() {
+  const filters = useFilters();
+  const wide = useWide();
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+  const month = /^\d{4}-\d{2}$/.test(filters.value('month')) ? filters.value('month') : thisMonth;
+  const colorBy: ColorBy = filters.value('color') === 'payment' ? 'payment' : 'platform';
+  const go = (to: string) => filters.set({ month: to === thisMonth ? '' : to });
+  const months = wide ? [shiftMonth(month, -1), month, shiftMonth(month, 1)] : [month];
+  const label = (m: string) => {
+    const [y, n] = m.split('-').map(Number);
+    return `${MONTHS[n - 1]} ${y}`;
+  };
+
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Button onClick={() => go(shiftMonth(month, -1))} aria-label="Earlier month">
+            <ChevronLeft className="size-4" aria-hidden />
+          </Button>
+          <span className="min-w-36 text-center text-sm font-medium">{wide ? `${label(months[0])} to ${label(months[2])}` : label(month)}</span>
+          <Button onClick={() => go(shiftMonth(month, 1))} aria-label="Later month">
+            <ChevronRight className="size-4" aria-hidden />
+          </Button>
+          <Button onClick={() => go(thisMonth)}>Today</Button>
+        </div>
+        <div className="flex rounded-md border border-slate-300 p-0.5 text-xs font-medium dark:border-slate-700" role="group" aria-label="Colour by">
+          {(['platform', 'payment'] as ColorBy[]).map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-pressed={colorBy === c}
+              onClick={() => filters.set({ color: c === 'platform' ? '' : c })}
+              className={cx('rounded px-2.5 py-1', colorBy === c ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'text-slate-600 dark:text-slate-300')}
+            >
+              {c === 'platform' ? 'By platform' : 'By payment'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        {months.map((m) => (
+          <section key={m}>
+            <MonthCalendar month={m} colorBy={colorBy} wide={wide} />
+          </section>
+        ))}
+      </div>
 
       {/* What the colours mean */}
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-600 dark:text-slate-400">
