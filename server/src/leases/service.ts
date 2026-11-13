@@ -184,6 +184,10 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
       collected,
       owed: Math.max(0, cents(dueSoFar - collected)),
       depositHeld: cents(depositIn - depositOut),
+      // The deposit as received, when it first came in, and what was paid back or kept for rent.
+      depositIn,
+      depositOut,
+      depositDate: (payments.filter((p) => p.purpose === 'deposit').map((p) => p.paid_on as string).sort()[0] ?? null) as string | null,
       unverified: payments.filter((p) => !p.verified).length,
     };
   }

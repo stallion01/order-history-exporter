@@ -24,6 +24,10 @@ export interface Lease {
   collected: number;
   owed: number;
   depositHeld: number;
+  // The deposit as received, what was paid back or kept for rent, and when it came in.
+  depositIn: number;
+  depositOut: number;
+  depositDate: string | null;
   unverified: number;
   // Names that appear on this tenant's bank deposits, used to find their rent.
   payers: string | null;

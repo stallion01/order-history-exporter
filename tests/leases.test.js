@@ -91,6 +91,7 @@ test('payments outside the bank become rent and deposit transactions', async () 
 
   assert.equal(detail.lease.collected, 1950);
   assert.equal(detail.lease.depositHeld, 0);
+  assert.deepEqual([detail.lease.depositIn, detail.lease.depositOut, detail.lease.depositDate], [400, 400, '2026-01-14'], 'the deposit, what went back or was kept, and when it came in');
   assert.equal(detail.lease.unverified, 1);
   assert.deepEqual(detail.schedule.map((m) => m.state), ['paid', 'paid', 'partial', 'due']);
 });

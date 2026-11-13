@@ -43,7 +43,7 @@ export function RentRollCard({ query }: { query: string }) {
             <tr>
               <th className="sticky left-0 bg-white pr-2 text-left font-medium text-slate-500 dark:bg-slate-900">Unit</th>
               {roll.months.map((m) => (
-                <th key={m} className="min-w-9 font-medium text-slate-500" scope="col">
+                <th key={m} className="min-w-14 font-medium text-slate-500" scope="col">
                   {monthLabel(m, true).split(' ')[0]}
                   {m.endsWith('-01') && <div className="font-normal text-slate-400">{m.slice(2, 4)}</div>}
                 </th>
@@ -61,9 +61,15 @@ export function RentRollCard({ query }: { query: string }) {
                   const state = shown(c.state, u.cash);
                   const tenant = c.leases.map((l) => l.tenant).join(', ');
                   const title = `${u.unit}, ${monthLabel(c.month)}: ${LABEL[state]}${c.expected ? ` (${money(c.paid)} of ${money(c.expected)})` : ''}${tenant ? ` · ${tenant}` : ''}`;
+                  const share = c.expected ? Math.round((c.paid / c.expected) * 100) : 0;
                   const box = (
-                    <span className={cx('flex h-7 items-center justify-center rounded text-[10px] font-semibold tabular-nums', TONE[state])}>
-                      {state === 'partial' ? `${Math.round((c.paid / c.expected) * 100)}%` : ''}
+                    <span className={cx('flex h-10 flex-col items-center justify-center rounded px-1 leading-tight tabular-nums', TONE[state])}>
+                      {c.paid > 0 && (
+                        <>
+                          <span className="text-[11px] font-semibold">{wholeMoney(c.paid)}</span>
+                          <span className="text-[10px] opacity-80">{share}%</span>
+                        </>
+                      )}
                     </span>
                   );
                   return (
@@ -96,29 +102,26 @@ export function RentRollCard({ query }: { query: string }) {
   );
 }
 
-// Rent due each month as a pale bar, with rent received drawn over it.
+// Rent received each month, with the amount over each bar.
 function CollectedChart({ totals }: { totals: RentRoll['totals'] }) {
-  const top = Math.max(1, ...totals.flatMap((t) => [t.expected, t.collected]));
-  const due = totals.reduce((n, t) => n + t.expected, 0);
+  const top = Math.max(1, ...totals.map((t) => t.collected));
   const got = totals.reduce((n, t) => n + t.collected, 0);
   return (
     <div className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-sm font-semibold">Rent collected against rent due</h3>
-        <span className="text-xs text-slate-600 dark:text-slate-400">
-          {wholeMoney(got)} of {wholeMoney(due)} over 12 months{due > 0 && ` (${Math.round((got / due) * 100)}%)`}
-        </span>
+        <h3 className="text-sm font-semibold">Rent collected by month</h3>
+        <span className="text-xs text-slate-600 dark:text-slate-400">{wholeMoney(got)} over 12 months</span>
       </div>
-      <div className="mt-3 flex h-36 items-end gap-1" role="img" aria-label="Rent collected against rent due, by month">
+      <div className="mt-3 flex h-40 items-end gap-1" role="img" aria-label="Rent collected by month">
         {totals.map((t) => (
-          <div key={t.month} className="flex h-full flex-1 flex-col justify-end" title={`${monthLabel(t.month)}: ${money(t.collected)} collected of ${money(t.expected)} due`}>
-            <div className="relative w-full" style={{ height: `${(Math.max(t.expected, t.collected) / top) * 100}%` }}>
-              <div className="absolute inset-x-0 bottom-0 rounded-t bg-slate-200 dark:bg-slate-700" style={{ height: `${t.expected ? (t.expected / Math.max(t.expected, t.collected)) * 100 : 0}%` }} />
-              <div
-                className="absolute inset-x-1 bottom-0 rounded-t bg-emerald-500"
-                style={{ height: `${t.collected ? (t.collected / Math.max(t.expected, t.collected)) * 100 : 0}%` }}
-              />
-            </div>
+          <div key={t.month} className="flex h-full min-w-0 flex-1 flex-col justify-end" title={`${monthLabel(t.month)}: ${money(t.collected)} collected`}>
+            {/* Upright on wide screens; on its side on phones, where bars are narrow. */}
+            {t.collected > 0 && (
+              <span className="mb-1 self-center whitespace-nowrap text-[10px] font-semibold tabular-nums text-slate-700 [writing-mode:vertical-rl] rotate-180 sm:mb-0.5 sm:rotate-0 sm:text-[11px] sm:[writing-mode:horizontal-tb] dark:text-slate-300">
+                {wholeMoney(t.collected)}
+              </span>
+            )}
+            <div className="w-full rounded-t bg-emerald-500" style={{ height: `${(t.collected / top) * 85}%` }} />
           </div>
         ))}
       </div>
@@ -128,14 +131,6 @@ function CollectedChart({ totals }: { totals: RentRoll['totals'] }) {
             {monthLabel(t.month, true).split(' ')[0]}
           </span>
         ))}
-      </div>
-      <div className="mt-2 flex gap-4 text-xs text-slate-600 dark:text-slate-400">
-        <span className="flex items-center gap-1.5">
-          <span className="size-3 rounded-sm bg-slate-200 dark:bg-slate-700" aria-hidden /> Due
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="size-3 rounded-sm bg-emerald-500" aria-hidden /> Collected
-        </span>
       </div>
     </div>
   );
@@ -239,5 +234,70 @@ export function ExpiryWarning() {
         </Button>
       </div>
     </dialog>
+  );
+}
+
+// Security deposits: what each tenant paid in, when, what went back or was kept
+// for rent, and what is still held. Current tenants first, then past ones.
+export function DepositList({ leases }: { leases: Lease[] }) {
+  const byName = (a: Lease, b: Lease) => a.unit.localeCompare(b.unit, undefined, { numeric: true, sensitivity: 'base' });
+  const rows = leases.filter((l) => l.depositIn > 0 || l.depositHeld !== 0).sort((a, b) => Number(a.status === 'ended') - Number(b.status === 'ended') || byName(a, b));
+  const held = rows.reduce((n, l) => n + l.depositHeld, 0);
+  const missing = leases.filter((l) => l.status !== 'ended' && l.depositIn === 0).sort(byName);
+  return (
+    <section id="deposits" className="mt-6 scroll-mt-20">
+      <Card title="Security deposits" actions={<span className="text-sm font-semibold tabular-nums">{money(held)} held</span>} padded={false}>
+        {!rows.length ? (
+          <Empty>No deposits recorded yet. Add one as a “Security deposit” payment on the lease.</Empty>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs text-slate-500">
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <th className="px-4 py-2 font-medium">Unit</th>
+                  <th className="px-4 py-2 font-medium">Tenant</th>
+                  <th className="px-4 py-2 font-medium">Received</th>
+                  <th className="px-4 py-2 text-right font-medium">Amount</th>
+                  <th className="px-4 py-2 text-right font-medium">Paid back or kept</th>
+                  <th className="px-4 py-2 text-right font-medium">Held</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {rows.map((l) => (
+                  <tr key={l.id} className={cx('hover:bg-slate-50 dark:hover:bg-slate-800/50', l.status === 'ended' && 'text-slate-500')}>
+                    <td className="whitespace-nowrap px-4 py-2 font-medium">
+                      <Link to={`/leases/${l.id}`} className="hover:underline">
+                        {l.unit}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2">
+                      {l.tenant}
+                      {l.status === 'ended' && <span className="ml-1 text-xs">(moved out)</span>}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2">{dayText(l.depositDate)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{money(l.depositIn)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{l.depositOut ? money(l.depositOut) : '–'}</td>
+                    <td className="px-4 py-2 text-right font-semibold tabular-nums">{money(l.depositHeld)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-slate-200 font-semibold dark:border-slate-700">
+                  <td className="px-4 py-2" colSpan={5}>
+                    Total held
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums">{money(held)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+        {missing.length > 0 && (
+          <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500 dark:border-slate-800">
+            No deposit recorded for {missing.map((l) => `${l.unit} (${l.tenant})`).join(', ')}.
+          </p>
+        )}
+      </Card>
+    </section>
   );
 }

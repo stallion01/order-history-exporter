@@ -7,7 +7,7 @@ import { post, useApi } from '../api';
 import { businessQuery, useBusiness } from '../business';
 import { money } from '../format';
 import { STATUS_LABELS, dayText, unitColour } from '../leases';
-import { ExpiryList, RentRollCard } from '../rentroll';
+import { DepositList, ExpiryList, RentRollCard } from '../rentroll';
 import type { Lease, LeaseDetailData, LeaseList } from '../leases';
 import { Banner, Button, Card, Empty, Field, Input, Loading, PageHeader, Select, Stat, cx } from '../ui';
 
@@ -48,7 +48,13 @@ export function Leases() {
               value={<span className={list.totals.owed > 0 ? 'text-amber-700 dark:text-amber-400' : ''}>{money(list.totals.owed)}</span>}
               hint="Months due so far, less rent paid"
             />
-            <Stat label="Deposits held" value={money(list.totals.depositsHeld)} hint="To pay back or keep at the end" />
+            <button
+              type="button"
+              onClick={() => document.getElementById('deposits')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className="rounded-lg text-left transition hover:ring-2 hover:ring-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none"
+            >
+              <Stat label="Deposits held" value={money(list.totals.depositsHeld)} hint="See each tenant’s deposit ↓" />
+            </button>
           </div>
           <RentRollCard query={businessQuery(business).slice(1)} />
           <ExpiryList leases={list.leases} />
@@ -71,6 +77,7 @@ export function Leases() {
               </section>
             );
           })}
+          <DepositList leases={list.leases} />
         </>
       )}
     </>
