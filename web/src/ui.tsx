@@ -129,9 +129,13 @@ export function Field({ label, children, className }: { label: string; children:
   );
 }
 
-export function Card({ title, actions, children, className, padded = true }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; padded?: boolean }) {
+// accent: a colour along the top edge, such as a bank's.
+export function Card({ title, actions, children, className, padded = true, accent }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; padded?: boolean; accent?: string }) {
   return (
-    <section className={cx('min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900', className)}>
+    <section
+      className={cx('min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900', accent && 'border-t-4', className)}
+      style={accent ? { borderTopColor: accent } : undefined}
+    >
       {(title || actions) && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
           {title && <h2 className="text-sm font-semibold">{title}</h2>}

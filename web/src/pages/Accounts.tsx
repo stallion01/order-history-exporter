@@ -1,12 +1,13 @@
 // Bank and card accounts, and the SimpleFIN connection that feeds them.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Download, ExternalLink, Link2, RefreshCw, Trash2, Unplug, Upload } from 'lucide-react';
+import { Download, ExternalLink, History, Link2, RefreshCw, Trash2, Unplug, Upload } from 'lucide-react';
 import { download, post, useApi } from '../api';
 import { KIND_LABELS, OWNER_LABELS, SourceBadges, importLink, when } from '../bank';
 import type { Account, Entity, SimplefinStatus } from '../bank';
 import type { Meta } from '../filters';
 import { money, plural, whole } from '../format';
+import { BankBadge, brandOf } from '../banks';
 import { Banner, Button, Card, Confirm, Empty, Field, Input, Loading, PageHeader, Select, cx } from '../ui';
 
 interface AccountsData {
@@ -94,6 +95,7 @@ function SimplefinCard({ status, onChange }: { status: SimplefinStatus | null; o
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [confirm, setConfirm] = useState(false);
+  const [months, setMonths] = useState('6');
   if (!status) return null;
 
   async function run(path: string, body: unknown = {}) {
@@ -101,10 +103,13 @@ function SimplefinCard({ status, onChange }: { status: SimplefinStatus | null; o
     setError('');
     setNote('');
     try {
-      const reply = await post<{ result?: { accounts: number; added: number; newAccounts: number; errors: string[] } }>(path, body);
+      const reply = await post<{ result?: { accounts: number; added: number; newAccounts: number; errors: string[]; oldest?: string | null } }>(path, body);
       if (reply.result) {
         const r = reply.result;
-        setNote(`Checked ${plural(r.accounts, 'account')}: ${plural(r.added, 'new transaction')}${r.newAccounts ? `, ${plural(r.newAccounts, 'new account')}` : ''}.`);
+        setNote(
+          `Checked ${plural(r.accounts, 'account')}: ${plural(r.added, 'new transaction')}${r.newAccounts ? `, ${plural(r.newAccounts, 'new account')}` : ''}.` +
+            (path.endsWith('/history') && r.oldest ? ` The earliest transaction the banks sent is from ${r.oldest}.` : '')
+        );
       }
       setToken('');
       onChange();
@@ -138,6 +143,23 @@ function SimplefinCard({ status, onChange }: { status: SimplefinStatus | null; o
                 Disconnect
               </Button>
             </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-end gap-3 border-t border-slate-100 pt-4 text-sm dark:border-slate-800">
+            <Field label="Get older transactions" className="w-44">
+              <Select value={months} onChange={(e) => setMonths(e.target.value)} disabled={busy}>
+                <option value="3">Last 3 months</option>
+                <option value="6">Last 6 months</option>
+                <option value="9">Last 9 months</option>
+                <option value="12">Last 12 months</option>
+              </Select>
+            </Field>
+            <Button busy={busy} onClick={() => run('/api/bank/simplefin/history', { months: Number(months) })}>
+              <History className="size-4" aria-hidden />
+              Pull history
+            </Button>
+            <p className="basis-full text-xs text-slate-500 dark:text-slate-400">
+              For every connected account. Transactions already here are skipped. How far back you get depends on each bank; many only give SimpleFIN about 90 days. For older ones, import the bank's statement files.
+            </p>
           </div>
           {status.errors.length > 0 && (
             <Banner tone="warning">
@@ -181,7 +203,7 @@ function SimplefinCard({ status, onChange }: { status: SimplefinStatus | null; o
             <Link2 className="size-4" aria-hidden />
             Connect
           </Button>
-          <p className="text-xs text-slate-500 dark:text-slate-400">The first update reads the last 90 days, which is as far back as SimpleFIN goes. For older history, import statement files.</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">The first update reads the last 90 days. Once connected, you can pull up to 12 months, as far back as each bank lets SimpleFIN go. For anything older, import statement files.</p>
         </form>
       )}
     </Card>
@@ -221,11 +243,13 @@ function AccountCard({ account, entities, onChange }: { account: Account; entiti
     <Card
       title={
         <span className="flex items-center gap-2">
+          <BankBadge institution={account.institution} accountName={account.name} />
           {account.name}
           {account.last4 && <span className="font-normal text-slate-500 dark:text-slate-400">•••• {account.last4}</span>}
         </span>
       }
       actions={<SourceBadges sources={account.simplefinId ? [...new Set(['simplefin', ...account.sources])] : account.sources} />}
+      accent={brandOf(account.institution, account.name)?.colour}
     >
       {error && <Banner>{error}</Banner>}
       <dl className="mb-4 grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
