@@ -258,8 +258,14 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
       else if (a.balance > 0) cash += a.balance;
     }
     const value = cents(values.reduce((t, v) => t + (v.value || 0), 0));
+    // The categories in each group, so a group can be shown as transactions.
+    const groupCategories = Object.fromEntries(CASH_GROUPS.map((g) => [g, [] as string[]])) as Record<(typeof CASH_GROUPS)[number], string[]>;
+    for (const { name } of db.prepare('SELECT name FROM categories ORDER BY name').all() as Row[]) groupCategories[cashGroup(name)].push(name);
+    groupCategories['Admin & Other'].push('none');
+    groupCategories['Capital improvements'] = [];
     return {
       groups: CASH_GROUPS,
+      groupCategories,
       months: months.slice(-13),
       lastMonth: months[months.length - 2],
       average: whole.length ? cents(ttm.net / whole.length) : 0,

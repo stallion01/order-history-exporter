@@ -19,6 +19,7 @@ interface CashMonth {
 }
 interface CashFlow {
   groups: Group[];
+  groupCategories: Record<Group, string[]>;
   months: CashMonth[];
   lastMonth: CashMonth;
   average: number;
@@ -70,7 +71,7 @@ export function CashFlowOverview() {
             <div className="text-xs text-slate-500 dark:text-slate-400">Monthly average, last 12 months</div>
           </div>
         </div>
-        <CashFlowChart months={d.months} groups={d.groups} />
+        <CashFlowChart months={d.months} groups={d.groups} groupCategories={d.groupCategories} />
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
           Money in and out of the business&apos;s accounts. Loan payments include principal; capital improvements are purchases on the asset register. Transfers between your own accounts and anything personal are left out.
         </p>
@@ -272,7 +273,7 @@ function niceStep(span: number) {
 
 // Income as a bar above zero, money out stacked below it by group, and the month's net
 // as a line. Clicking a month opens its transactions.
-export function CashFlowChart({ months, groups }: { months: CashMonth[]; groups: Group[] }) {
+export function CashFlowChart({ months, groups, groupCategories }: { months: CashMonth[]; groups: Group[]; groupCategories: Record<Group, string[]> }) {
   const holder = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(320);
   const [active, setActive] = useState<number | null>(null);
@@ -301,10 +302,35 @@ export function CashFlowChart({ months, groups }: { months: CashMonth[]; groups:
   const barWidth = Math.min(44, slot * 0.62);
   const centre = (i: number) => pad.left + slot * i + slot / 2;
   const labelEvery = Math.ceil(58 / slot);
-  const open = (month: string) => {
+  const monthEnd = (month: string) => {
     const [yy, mm] = month.split('-').map(Number);
-    navigate(`/transactions?${new URLSearchParams({ preset: 'custom', from: `${month}-01`, to: `${month}-${String(new Date(yy, mm, 0).getDate()).padStart(2, '0')}` })}`);
+    return `${month}-${String(new Date(yy, mm, 0).getDate()).padStart(2, '0')}`;
   };
+  // The transactions behind one piece of the chart: one month, or every month shown,
+  // and all of them, the income, or one group of spending.
+  const linkFor = (part: 'Income' | Group | null, month?: string) => {
+    const query = new URLSearchParams({ preset: 'custom', from: `${month ?? months[0].month}-01`, to: monthEnd(month ?? months[months.length - 1].month) });
+    if (part === 'Income') query.set('direction', 'in');
+    else if (part === 'Capital improvements') {
+      query.set('asset', '1');
+      query.set('kind', 'all');
+    } else if (part) {
+      query.set('direction', 'out');
+      for (const category of groupCategories[part] ?? []) query.append('category', category);
+      // Loan principal is filed as a transfer.
+      if (part === 'Mortgages & Loans') query.set('kind', 'all');
+    }
+    if (part) query.set('group', part);
+    return `/transactions?${query}`;
+  };
+  const open = (month: string, part: 'Income' | Group | null = null) => navigate(linkFor(part, month));
+  // A click on one coloured piece opens just that piece, not the whole month.
+  const pick = (month: string, part: 'Income' | Group) => ({
+    onClick: (e: { stopPropagation: () => void }) => {
+      e.stopPropagation();
+      open(month, part);
+    },
+  });
   const shown = active === null ? null : months[active];
 
   return (
@@ -327,7 +353,7 @@ export function CashFlowChart({ months, groups }: { months: CashMonth[]; groups:
               .map((g) => {
                 const from = base;
                 base += m.groups[g];
-                return <rect key={g} x={left} y={y(-from)} width={barWidth} height={Math.max(0.5, y(-base) - y(-from))} fill={GROUP_COLOURS[g]} />;
+                return <rect key={g} x={left} y={y(-from)} width={barWidth} height={Math.max(0.5, y(-base) - y(-from))} fill={GROUP_COLOURS[g]} {...pick(m.month, g)} />;
               });
             // Money back (refunds bigger than spending in a group) shows above zero.
             const back = used.filter((g) => m.groups[g] < 0).reduce((t, g) => t - m.groups[g], 0);
@@ -347,7 +373,7 @@ export function CashFlowChart({ months, groups }: { months: CashMonth[]; groups:
                 opacity={active === null || active === i ? 1 : 0.55}
               >
                 <rect x={pad.left + slot * i} y={pad.top} width={slot} height={plot} fill="transparent" />
-                {m.income + back > 0 && <rect x={left} y={y(m.income + back)} width={barWidth} height={y(0) - y(m.income + back)} fill={INCOME_COLOUR} />}
+                {m.income + back > 0 && <rect x={left} y={y(m.income + back)} width={barWidth} height={y(0) - y(m.income + back)} fill={INCOME_COLOUR} {...pick(m.month, 'Income')} />}
                 {pieces}
                 {i % labelEvery === 0 && (
                   <text x={centre(i)} y={height - 8} textAnchor="middle" className="fill-slate-500 text-[11px] dark:fill-slate-400">
@@ -391,16 +417,17 @@ export function CashFlowChart({ months, groups }: { months: CashMonth[]; groups:
           </div>
         )}
       </div>
-      <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-600 xl:w-48 xl:flex-col xl:flex-nowrap dark:text-slate-300">
-        <li className="flex items-center gap-2">
-          <span className="h-0.5 w-4 bg-slate-700 dark:bg-slate-200" aria-hidden /> Net cash flow
-        </li>
-        <li className="flex items-center gap-2">
-          <span className="size-3 rounded-sm" style={{ background: INCOME_COLOUR }} aria-hidden /> Income
-        </li>
-        {used.map((g) => (
-          <li key={g} className="flex items-center gap-2">
-            <span className="size-3 rounded-sm" style={{ background: GROUP_COLOURS[g] }} aria-hidden /> {g}
+      <ul className="flex flex-wrap gap-x-1 gap-y-0.5 text-xs text-slate-600 xl:w-52 xl:flex-col xl:flex-nowrap dark:text-slate-300" aria-label="Show the transactions for">
+        {([['Net cash flow', null], ['Income', 'Income'], ...used.map((g) => [g, g])] as [string, 'Income' | Group | null][]).map(([label, part]) => (
+          <li key={label}>
+            <Link to={linkFor(part)} className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-slate-100 hover:text-slate-900 hover:underline dark:hover:bg-slate-800 dark:hover:text-white">
+              {part === null ? (
+                <span className="h-0.5 w-3 bg-slate-700 dark:bg-slate-200" aria-hidden />
+              ) : (
+                <span className="size-3 rounded-sm" style={{ background: part === 'Income' ? INCOME_COLOUR : GROUP_COLOURS[part] }} aria-hidden />
+              )}
+              {label}
+            </Link>
           </li>
         ))}
       </ul>

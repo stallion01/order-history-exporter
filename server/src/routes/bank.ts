@@ -66,6 +66,7 @@ export function txFiltersFrom(query: Query): TxFilters {
     importOutcome: outcome as ImportOutcome | null,
     entity: query.getAll('entity').filter(Boolean).length ? query.getAll('entity').filter(Boolean).map((e) => (e === 'none' ? e : Number(e))) : null,
     storeUnlinked: query.get('unmatched') === '1',
+    asset: query.get('asset') === '1',
   };
 }
 

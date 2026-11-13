@@ -197,6 +197,12 @@ test('cash flow: income, spending by group, loan principal, net worth and cash-o
   assert.equal(flow.average, 150);
   assert.equal(flow.cashOnCash, 0.018);
   assert.equal(flow.cocSeries.at(-1).value, 0.018);
+  assert.ok(flow.groupCategories.Utilities.includes('Utilities'), 'each group lists its categories, for links');
+  assert.ok(flow.groupCategories['Mortgages & Loans'].includes('Loan & Mortgage Payments'));
+  assert.ok(flow.groupCategories['Admin & Other'].includes('none'), 'uncategorised spending');
+  // The capital-purchases link: only charges on the asset register.
+  assert.equal((await get(`/api/bank/transactions?kind=all&preset=all&account=${account}&asset=1`)).transactions.length, 0);
+  assert.equal((await get(`/api/bank/transactions?kind=all&preset=all&account=${account}`)).transactions.length, 3);
 
   await post('/api/pl/market-value', { entityId: birch, value: 250000 });
   const worth = (await get(`/api/pl/cashflow?entity=${birch}`)).netWorth;

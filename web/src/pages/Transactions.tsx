@@ -26,7 +26,7 @@ export function useBankQuery() {
     for (const y of years || []) out.append('years', y);
     for (const key of ['account', 'category', 'entity']) for (const v of filters.values(key)) out.append(key, v);
     if (business && !filters.values('entity').length) out.append('entity', String(business));
-    for (const key of ['status', 'kind', 'direction', 'source', 'q', 'import', 'outcome', 'unmatched']) if (filters.value(key)) out.set(key, filters.value(key));
+    for (const key of ['status', 'kind', 'direction', 'source', 'q', 'import', 'outcome', 'unmatched', 'asset']) if (filters.value(key)) out.set(key, filters.value(key));
     for (const [key, v] of Object.entries(extra)) out.set(key, String(v));
     return out.toString();
   };
@@ -148,6 +148,21 @@ export function Transactions({ meta }: { meta: Meta | null }) {
           <span className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 dark:border-slate-700 dark:bg-slate-900">
             Showing {SOURCE_LABELS[filters.value('source')]} only
             <button type="button" onClick={() => filters.set({ source: '' })} className="text-slate-500 hover:text-slate-900 dark:hover:text-white" aria-label="Show all income again">
+              <X className="size-4" aria-hidden />
+            </button>
+          </span>
+        </div>
+      )}
+      {filters.value('group') && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 dark:border-slate-700 dark:bg-slate-900">
+            Showing {filters.value('group')}, from the dashboard
+            <button
+              type="button"
+              onClick={() => filters.set({ group: '', category: [], kind: '', direction: '', asset: '' })}
+              className="text-slate-500 hover:text-slate-900 dark:hover:text-white"
+              aria-label="Show all transactions again"
+            >
               <X className="size-4" aria-hidden />
             </button>
           </span>

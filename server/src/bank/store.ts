@@ -72,6 +72,8 @@ export interface TxFilters {
   entity?: (number | string)[] | null;
   // Store charges not yet matched to an order.
   storeUnlinked?: boolean;
+  // Only charges on the asset register (capital purchases).
+  asset?: boolean;
   // Only the transactions one import added, matched or found already there.
   importId?: number | null;
   importOutcome?: ImportOutcome | null;
@@ -833,6 +835,7 @@ export function createBankStore(db: DatabaseSync) {
       clauses.push('t.status = ?');
       params.push(filters.status);
     }
+    if (filters.asset) clauses.push('EXISTS (SELECT 1 FROM assets s WHERE s.transaction_id = t.id)');
     const kind = filters.kind || 'normal';
     if (kind !== 'all') {
       clauses.push('t.kind = ?');
