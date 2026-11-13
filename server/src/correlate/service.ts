@@ -17,6 +17,19 @@ const AFTER_ORDER_DAYS = 14; // stores charge when they ship
 const MAX_SHIPMENTS = 4;
 const STORES = Object.keys(ORDER_STORE_PAYEES);
 export const ENTITY_KINDS = ['business', 'rental', 'other'] as const;
+// What a business does: a short-term rental (active), a long-term rental (passive), or something else.
+export const ENTITY_ACTIVITIES = ['str', 'ltr', 'other'] as const;
+// The form its income and expenses go on.
+export const ENTITY_TAX_FORMS = ['form-1065', 'form-8825', 'schedule-c', 'schedule-e'] as const;
+export interface EntityInput {
+  id?: number;
+  name: string;
+  kind: string;
+  activity?: string | null;
+  taxForm?: string | null;
+  invested?: number | null;
+  investedOn?: string | null;
+}
 
 const now = () => new Date().toISOString();
 const dayNumber = (date: string) => Math.round(Date.parse(`${date}T00:00:00Z`) / DAY_MS);
@@ -74,14 +87,47 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
   /* ---------- Entities ---------- */
 
   const entities = () =>
-    (raw.prepare('SELECT id, name, kind FROM entities ORDER BY name COLLATE NOCASE').all() as Row[]).map((r) => ({ id: r.id as number, name: r.name as string, kind: r.kind as string }));
+    (raw.prepare('SELECT id, name, kind, activity, tax_form, invested, invested_on FROM entities ORDER BY name COLLATE NOCASE').all() as Row[]).map((r) => ({
+      id: r.id as number,
+      name: r.name as string,
+      kind: r.kind as string,
+      activity: (r.activity as string | null) ?? (r.kind === 'rental' ? 'ltr' : 'other'),
+      taxForm: (r.tax_form as string | null) ?? (r.kind === 'rental' ? 'schedule-e' : 'schedule-c'),
+      invested: (r.invested as number | null) ?? null,
+      investedOn: (r.invested_on as string | null) ?? null,
+    }));
 
-  function saveEntity(input: { id?: number; name: string; kind: string }) {
+  // Fields left out keep what they were.
+  function saveEntity(input: EntityInput) {
+    const keep = <T,>(value: T | undefined, before: T | null) => (value === undefined ? before : value);
     if (input.id) {
-      raw.prepare('UPDATE entities SET name = ?, kind = ? WHERE id = ?').run(input.name, input.kind, input.id);
+      const before = raw.prepare('SELECT activity, tax_form, invested, invested_on FROM entities WHERE id = ?').get(input.id) as Row;
+      raw
+        .prepare('UPDATE entities SET name = ?, kind = ?, activity = ?, tax_form = ?, invested = ?, invested_on = ? WHERE id = ?')
+        .run(
+          input.name,
+          input.kind,
+          keep(input.activity, before.activity) ?? null,
+          keep(input.taxForm, before.tax_form) ?? null,
+          keep(input.invested, before.invested) ?? null,
+          keep(input.investedOn, before.invested_on) ?? null,
+          input.id
+        );
       return input.id;
     }
-    return Number(raw.prepare('INSERT INTO entities (name, kind, created_at) VALUES (?, ?, ?)').run(input.name, input.kind, now()).lastInsertRowid);
+    return Number(
+      raw
+        .prepare('INSERT INTO entities (name, kind, activity, tax_form, invested, invested_on, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(
+          input.name,
+          input.kind,
+          input.activity ?? (input.kind === 'rental' ? 'ltr' : 'other'),
+          input.taxForm ?? (input.kind === 'rental' ? 'schedule-e' : 'schedule-c'),
+          input.invested ?? null,
+          input.investedOn ?? null,
+          now()
+        ).lastInsertRowid
+    );
   }
 
   function deleteEntity(id: number) {

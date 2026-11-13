@@ -5,6 +5,7 @@ export type Purpose = 'rent' | 'deposit' | 'refund' | 'applied';
 export interface Lease {
   id: number;
   ref: string | null;
+  entityId: number | null;
   propertyId: string | null;
   unit: string;
   tenant: string;
@@ -28,7 +29,7 @@ export interface Lease {
 export interface LeaseList {
   leases: Lease[];
   totals: { active: number; rentThisYear: number; owed: number; depositsHeld: number };
-  units: { id: string; name: string }[];
+  units: { id: string; name: string; entityId: number | null }[];
 }
 export interface ScheduleMonth {
   month: string;

@@ -4,6 +4,7 @@ import type { FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Pencil, Plus, Trash2 } from 'lucide-react';
 import { get, post, useApi } from '../api';
+import { useBusiness } from '../business';
 import { money, monthLabel } from '../format';
 import { PURPOSE_LABELS, STATUS_LABELS, dayText, unitColour } from '../leases';
 import type { LeaseDetailData, LeaseList, LeasePayment, Purpose, ScheduleMonth } from '../leases';
@@ -351,7 +352,9 @@ function Payments({ detail, act }: { detail: LeaseDetailData; act: Act }) {
 function EditLease({ detail, onSaved, onCancel }: { detail: LeaseDetailData; onSaved: (d: LeaseDetailData) => void; onCancel: () => void }) {
   const { lease } = detail;
   const units = useApi<LeaseList>('/api/leases').data?.units ?? [];
+  const { entities } = useBusiness();
   const [form, setForm] = useState({
+    entityId: lease.entityId === null ? '' : String(lease.entityId),
     ref: lease.ref || '',
     unit: lease.unit,
     tenant: lease.tenant,
@@ -375,6 +378,7 @@ function EditLease({ detail, onSaved, onCancel }: { detail: LeaseDetailData; onS
       onSaved(
         await post<LeaseDetailData>(`/api/leases/${lease.id}`, {
           ...form,
+          entityId: form.entityId ? Number(form.entityId) : null,
           ref: form.ref || null,
           propertyId: unit?.id ?? lease.propertyId,
           phone: form.phone || null,
@@ -408,6 +412,18 @@ function EditLease({ detail, onSaved, onCancel }: { detail: LeaseDetailData; onS
         <Field label="Lease ID">
           <Input value={form.ref} onChange={set('ref')} />
         </Field>
+        {entities.length > 0 && (
+          <Field label="Business" className="col-span-2">
+            <Select value={form.entityId} onChange={set('entityId')}>
+              <option value="">No business</option>
+              {entities.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
         <Field label="Phone">
           <Input value={form.phone} onChange={set('phone')} />
         </Field>

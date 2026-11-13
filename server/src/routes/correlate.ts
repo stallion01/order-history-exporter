@@ -3,7 +3,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CorrelationService } from '../correlate/service';
-import { ENTITY_KINDS } from '../correlate/service';
+import { ENTITY_ACTIVITIES, ENTITY_KINDS, ENTITY_TAX_FORMS } from '../correlate/service';
 import type { BankStore } from '../bank/store';
 import type { OrdersDb } from '../legacy';
 import { HttpError, queryOf, storeParam, textParam } from '../params';
@@ -34,7 +34,18 @@ export function correlationRoutes(app: FastifyInstance, correlate: CorrelationSe
 
   /* ---------- Entities ---------- */
 
-  const entitySchema = z.object({ name: z.string().trim().min(1).max(60), kind: z.enum(ENTITY_KINDS) });
+  const entitySchema = z.object({
+    name: z.string().trim().min(1).max(60),
+    kind: z.enum(ENTITY_KINDS),
+    activity: z.enum(ENTITY_ACTIVITIES).nullable().optional(),
+    taxForm: z.enum(ENTITY_TAX_FORMS).nullable().optional(),
+    invested: z.number().min(0).max(1e10).nullable().optional(),
+    investedOn: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Dates look like 2025-10-02.')
+      .nullable()
+      .optional(),
+  });
 
   app.get('/api/entities', async () => ({ entities: correlate.entities() }));
 

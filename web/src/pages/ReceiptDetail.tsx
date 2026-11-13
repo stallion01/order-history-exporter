@@ -2,9 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TouchEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Link2, RefreshCw, Trash2, Unlink, Wallet } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, CreditCard, ExternalLink, Link2, RefreshCw, Trash2, Unlink, Wallet } from 'lucide-react';
 import { post, useApi } from '../api';
 import { Amount } from '../bank';
+import { useBusiness } from '../business';
 import { useFilters } from '../filters';
 import type { Meta } from '../filters';
 import { money, plural } from '../format';
@@ -348,6 +349,9 @@ export function ReceiptDetail({ meta }: { meta: Meta | null }) {
 }
 
 function MatchCard({ receipt: r, suggestions, busy, act }: { receipt: Receipt; suggestions: Suggestion[]; busy: boolean; act: (path: string, body?: unknown, done?: string) => void }) {
+  // A business purchase on a personal card goes in the chosen business's books.
+  const { business, entities } = useBusiness();
+  const [payer, setPayer] = useState(business ? String(business) : entities.length === 1 ? String(entities[0].id) : '');
   if (r.transaction) {
     const t = r.transaction;
     return (
@@ -412,6 +416,26 @@ function MatchCard({ receipt: r, suggestions, busy, act }: { receipt: Receipt; s
             <Wallet className="size-4" aria-hidden />
             Paid in cash: record it
           </Button>
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+            {entities.length > 1 && (
+              <Select aria-label="Business this was for" value={payer} onChange={(e) => setPayer(e.target.value)} className="w-auto">
+                <option value="">Which business?</option>
+                {entities.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.name}
+                  </option>
+                ))}
+              </Select>
+            )}
+            <Button
+              disabled={busy || r.total === null || !r.date || (entities.length > 1 && !payer)}
+              onClick={() => act(`/api/receipts/${r.id}/paid-personally`, { entityId: payer ? Number(payer) : null }, 'Recorded as paid with a personal card.')}
+            >
+              <CreditCard className="size-4" aria-hidden />
+              Paid with a personal card: record it
+            </Button>
+            <p className="w-full text-xs text-slate-500 dark:text-slate-400">For a business purchase on a card the hub doesn't see. It goes in that business's "Paid personally" account, for your CPA to treat as a reimbursement or money you put in.</p>
+          </div>
         </>
       )}
     </Card>

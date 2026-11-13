@@ -5,11 +5,13 @@ import type { InOutMonth, MonthPart, Row } from '../charts';
 import { FilterBar, useFilters } from '../filters';
 import type { Meta } from '../filters';
 import { when } from '../bank';
+import { useBusiness } from '../business';
 import type { Account, SimplefinStatus } from '../bank';
 import { money, whole } from '../format';
 import { Banner, Card, Empty, Loading, PageHeader, Stat, TD, TH, TR } from '../ui';
 
 export function Dashboard({ meta }: { meta: Meta | null }) {
+  const { business } = useBusiness();
   const { query, params, range } = useFilters();
   const navigate = useNavigate();
 
@@ -58,6 +60,7 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
           </div>
           {caveats.length > 0 && <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{caveats.join(' ')}</p>}
 
+          {business !== null && <p className="mt-5 text-xs text-slate-500 dark:text-slate-400">Store orders below are for all businesses; their charges above are this business's.</p>}
           <Card title="Store orders by month" className="mt-5">
             <MonthlyBars rows={data.byMonth} onSelect={openMonth} />
           </Card>
@@ -155,12 +158,14 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
 
 // Bank and card totals for the chosen period, and what needs reviewing.
 function BankSummary({ range }: { range: { from: string; to: string; years?: string[] } }) {
+  const { business, current } = useBusiness();
   const accounts = useApi<{ accounts: Account[]; simplefin: SimplefinStatus | null; reviewCount: number }>('/api/bank/accounts');
   const period = new URLSearchParams();
   if (range.from) period.set('from', range.from);
   if (range.to) period.set('to', range.to);
   for (const y of range.years || []) period.append('years', y);
   period.set('status', 'notpersonal');
+  if (business) period.set('entity', String(business));
   const totals = useApi<{ total: number; moneyOut: number; moneyIn: number }>(`/api/bank/transactions?${period}&limit=1`);
   const spending = useApi<{ byCategory: { key: string; label: string; spend: number }[]; byEntity: { key: string; label: string; spend: number }[]; byMonth: InOutMonth[]; byStore: { key: string; label: string; spend: number }[] }>(
     `/api/bank/spending?${period}`
@@ -208,7 +213,7 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
   const sf = accounts.data.simplefin;
   return (
     <Card
-      title="Bank and card accounts"
+      title={current ? `${current.name}: bank and card accounts` : 'Bank and card accounts'}
       className="mb-5"
       actions={
         <Link to={`/transactions?${new URLSearchParams(params())}`} className={link}>

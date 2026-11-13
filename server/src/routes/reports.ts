@@ -99,6 +99,9 @@ export function reportRoutes(app: FastifyInstance, db: OrdersDb, rulesChanged: (
       name: textParam(body.name, 'Category name', 60),
       scheduleC: lineParam('schedule-c', body.scheduleC),
       scheduleE: lineParam('schedule-e', body.scheduleE),
+      // Left out, the partnership form lines stay as they were.
+      form1065: body.form1065 === undefined ? undefined : lineParam('form-1065', body.form1065),
+      form8825: body.form8825 === undefined ? undefined : lineParam('form-8825', body.form8825),
       // Operating expense, or cost of goods sold (things bought to resell or make products from).
       expenseClass: body.expenseClass === 'cogs' || body.expenseClass === 'opex' ? (body.expenseClass as 'opex' | 'cogs') : null,
     };

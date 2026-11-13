@@ -6,6 +6,7 @@ import type { PlPeriod, PlService } from '../pl/service';
 import type { AuthedRequest } from '../app';
 
 const settingsBody = z.object({
+  entityId: z.number().int().positive().nullable().optional(),
   invested: z.number().min(0).max(1e10).nullable(),
   investedOn: z
     .string()
@@ -20,13 +21,19 @@ export function plRoutes(app: FastifyInstance, pl: PlService) {
     if (value === 'ttm' || value === 'all') period = { kind: value };
     else if (/^\d{4}$/.test(value)) period = { kind: 'year', year: value };
     else throw new HttpError(400, 'period is a year, ttm or all.');
-    return pl.report(period);
+    const business = queryOf(request.query).get('entity');
+    if (business && !/^\d+$/.test(business)) throw new HttpError(400, 'Unknown business.');
+    return pl.report(period, business ? Number(business) : null);
   });
 
   app.post('/api/pl/settings', async (request) => {
     const result = settingsBody.safeParse(request.body);
     if (!result.success) throw new HttpError(400, result.error.issues[0]?.message || 'Invalid request.');
     (request as unknown as AuthedRequest).audit('pl.settings', result.data);
-    return pl.saveSettings(result.data);
+    try {
+      return pl.saveSettings(result.data);
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
   });
 }

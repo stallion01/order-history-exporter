@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import type { HospitableStatus } from '../stays';
 import { plural } from '../format';
 import { get, post, useApi } from '../api';
+import { TAX_FORM_LABELS } from '../business';
 import { Banner, Button, Card, Confirm, Field, Input, PageHeader, Select } from '../ui';
 import type { Meta } from '../filters';
 import type { SignedInUser } from './SignIn';
@@ -193,12 +194,20 @@ function ExtensionCard() {
 }
 
 // The businesses and properties spending can be assigned to.
+const TYPES: { value: string; label: string; kind: string; taxForm: string }[] = [
+  { value: 'str', label: 'Short-term rental (active)', kind: 'business', taxForm: 'form-1065' },
+  { value: 'ltr', label: 'Long-term rental (passive)', kind: 'rental', taxForm: 'form-8825' },
+  { value: 'other', label: 'Other business', kind: 'business', taxForm: 'schedule-c' },
+];
+const typeOf = (en: Meta['entities'][number]) => (en.activity === 'str' || en.activity === 'ltr' ? en.activity : 'other');
+
 function EntitiesCard({ entities, onChange }: { entities: Meta['entities']; onChange: () => void }) {
   const [name, setName] = useState('');
-  const [kind, setKind] = useState('rental');
+  const [type, setType] = useState('str');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [removing, setRemoving] = useState<Meta['entities'][number] | null>(null);
+  const properties = useApi<{ options: { properties: { id: string; name: string; entityId: number | null }[] } }>('/api/stays?view=all&year=1900');
   async function run(path: string, body: unknown = {}) {
     setBusy(true);
     setError('');
@@ -213,27 +222,74 @@ function EntitiesCard({ entities, onChange }: { entities: Meta['entities']; onCh
       setBusy(false);
     }
   }
+  const save = (en: Meta['entities'][number], changes: Partial<Meta['entities'][number]>) =>
+    run(`/api/entities/${en.id}`, {
+      name: en.name,
+      kind: en.kind,
+      activity: en.activity,
+      taxForm: en.taxForm,
+      invested: en.invested,
+      investedOn: en.investedOn,
+      ...changes,
+    });
+  const units = properties.data?.options.properties ?? [];
   return (
     <Card title="Businesses and properties" className="lg:col-span-2">
       <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
-        Add each business and rental property, so spending can be reported for each. A transaction gets one from, in order: your own choice, a rule, where its store order was delivered (set under Places below), then its account. A shared cost can be split between them by percentage.
+        Add each business (each LLC, say), so its money is reported on its own. A transaction belongs to one from, in order: your own choice, a rule, where its store order was delivered (set under Places
+        below), then its account, so give each bank and card account its business on the Accounts page. Choose which business to look at from the menu.
       </p>
       {error && <Banner>{error}</Banner>}
       {entities.length > 0 && (
         <ul className="mb-4 divide-y divide-slate-100 text-sm dark:divide-slate-800">
           {entities.map((en) => (
-            <li key={en.id} className="grid grid-cols-[1fr_10rem_auto] items-center gap-2 py-2">
-              <Input
-                aria-label={`Name of ${en.name}`}
-                defaultValue={en.name}
-                maxLength={60}
-                onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== en.name && run(`/api/entities/${en.id}`, { name: e.target.value.trim(), kind: en.kind })}
-              />
-              <Select aria-label={`Kind of ${en.name}`} value={en.kind} onChange={(e) => run(`/api/entities/${en.id}`, { name: en.name, kind: e.target.value })}>
-                <option value="business">Business</option>
-                <option value="rental">Rental property</option>
-                <option value="other">Other</option>
-              </Select>
+            <li key={en.id} className="grid grid-cols-2 items-end gap-2 py-3 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.4fr)_8rem_9.5rem_auto]">
+              <Field label="Name" className="col-span-2 md:col-span-1">
+                <Input
+                  defaultValue={en.name}
+                  maxLength={60}
+                  onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== en.name && save(en, { name: e.target.value.trim() })}
+                />
+              </Field>
+              <Field label="Type">
+                <Select
+                  value={typeOf(en)}
+                  onChange={(e) => {
+                    const t = TYPES.find((x) => x.value === e.target.value)!;
+                    save(en, { activity: t.value, kind: t.kind as Meta['entities'][number]['kind'] });
+                  }}
+                >
+                  {TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Tax form">
+                <Select value={en.taxForm} onChange={(e) => save(en, { taxForm: e.target.value })}>
+                  {Object.entries(TAX_FORM_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Invested ($)">
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  defaultValue={en.invested ?? ''}
+                  onBlur={(e) => {
+                    const value = e.target.value ? Number(e.target.value) : null;
+                    if (value !== en.invested) save(en, { invested: value });
+                  }}
+                />
+              </Field>
+              <Field label="Invested on">
+                <Input type="date" defaultValue={en.investedOn ?? ''} onBlur={(e) => (e.target.value || null) !== en.investedOn && save(en, { investedOn: e.target.value || null })} />
+              </Field>
               <Button variant="ghost" aria-label={`Remove ${en.name}`} onClick={() => setRemoving(en)}>
                 <Trash2 className="size-4" aria-hidden />
               </Button>
@@ -242,20 +298,23 @@ function EntitiesCard({ entities, onChange }: { entities: Meta['entities']; onCh
         </ul>
       )}
       <form
-        className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_12rem_auto] sm:items-end"
+        className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_14rem_auto] sm:items-end"
         onSubmit={async (e) => {
           e.preventDefault();
-          if (await run('/api/entities', { name: name.trim(), kind })) setName('');
+          const t = TYPES.find((x) => x.value === type)!;
+          if (await run('/api/entities', { name: name.trim(), kind: t.kind, activity: t.value, taxForm: t.taxForm })) setName('');
         }}
       >
-        <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Elm St rental, Consulting LLC" maxLength={60} />
+        <Field label="New business">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Lakeside Stays LLC" maxLength={60} />
         </Field>
-        <Field label="Kind">
-          <Select value={kind} onChange={(e) => setKind(e.target.value)}>
-            <option value="business">Business</option>
-            <option value="rental">Rental property</option>
-            <option value="other">Other</option>
+        <Field label="Type">
+          <Select value={type} onChange={(e) => setType(e.target.value)}>
+            {TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
           </Select>
         </Field>
         <Button type="submit" variant="primary" busy={busy} disabled={!name.trim()}>
@@ -263,6 +322,40 @@ function EntitiesCard({ entities, onChange }: { entities: Meta['entities']; onCh
           Add
         </Button>
       </form>
+      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+        The tax form only decides which lines the year-end package groups expenses by. Which form a business files, and how its income is treated, is for your preparer to confirm.
+      </p>
+
+      {entities.length > 0 && units.length > 0 && (
+        <div className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
+          <h3 className="text-sm font-semibold">Hospitable properties</h3>
+          <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
+            Each property's stays belong to its business, and are only matched to that business's deposits. A property with none can match any.
+          </p>
+          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {units.map((u) => (
+              <li key={u.id} className="flex items-center gap-2 text-sm">
+                <span className="w-28 shrink-0 truncate font-medium">{u.name}</span>
+                <Select
+                  aria-label={`Business for ${u.name}`}
+                  value={u.entityId ?? ''}
+                  onChange={async (e) => {
+                    if (await run(`/api/stays/properties/${u.id}`, { entityId: e.target.value ? Number(e.target.value) : null })) properties.reload();
+                  }}
+                >
+                  <option value="">No business</option>
+                  {entities.map((en) => (
+                    <option key={en.id} value={en.id}>
+                      {en.name}
+                    </option>
+                  ))}
+                </Select>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <Confirm
         open={Boolean(removing)}
         title={`Remove ${removing?.name}?`}
@@ -280,7 +373,6 @@ function EntitiesCard({ entities, onChange }: { entities: Meta['entities']; onCh
   );
 }
 
-// Delivery ZIPs and their place names: found from addresses, or named here.
 function PlacesCard({ onChange, entities }: { onChange: () => void; entities: Meta['entities'] }) {
   const list = useApi<{ places: { zip: string; city: string | null; name: string | null; label: string; orders: number }[] }>('/api/places');
   const owners = useApi<{ placeEntities: Record<string, number> }>('/api/places/entities');

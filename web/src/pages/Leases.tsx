@@ -4,6 +4,7 @@ import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { post, useApi } from '../api';
+import { businessQuery, useBusiness } from '../business';
 import { money } from '../format';
 import { STATUS_LABELS, dayText, unitColour } from '../leases';
 import type { Lease, LeaseDetailData, LeaseList } from '../leases';
@@ -16,7 +17,8 @@ const STATUS_TONES: Record<Lease['status'], string> = {
 };
 
 export function Leases() {
-  const data = useApi<LeaseList>('/api/leases');
+  const { business, current } = useBusiness();
+  const data = useApi<LeaseList>(`/api/leases?${businessQuery(business).slice(1)}`);
   const [adding, setAdding] = useState(false);
   const list = data.data;
   const order: Lease['status'][] = ['active', 'upcoming', 'ended'];
@@ -24,7 +26,7 @@ export function Leases() {
   return (
     <>
       <PageHeader
-        title="Leases"
+        title={current ? `Leases: ${current.name}` : 'Leases'}
         description="Mid-term tenancies: rent expected each month, what was paid, and security deposits held. Payments are in your transactions as rental income."
         actions={
           <Button variant="primary" onClick={() => setAdding(!adding)}>
@@ -117,6 +119,8 @@ function LeaseCard({ lease }: { lease: Lease }) {
 // A new lease: who, where and when; the rent schedule and payments follow on its page.
 function NewLease({ units, onCancel }: { units: LeaseList['units']; onCancel: () => void }) {
   const navigate = useNavigate();
+  const { business, entities } = useBusiness();
+  const [entityId, setEntityId] = useState<string>(business ? String(business) : '');
   const [form, setForm] = useState({ unit: units[0]?.name || '', tenant: '', start: '', end: '', rent: '', deposit: '', channel: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -131,6 +135,7 @@ function NewLease({ units, onCancel }: { units: LeaseList['units']; onCancel: ()
       const result = await post<LeaseDetailData>('/api/leases', {
         unit: form.unit,
         propertyId: unit?.id ?? null,
+        entityId: entityId ? Number(entityId) : unit?.entityId ?? null,
         tenant: form.tenant,
         start: form.start,
         end: form.end || null,
@@ -177,6 +182,18 @@ function NewLease({ units, onCancel }: { units: LeaseList['units']; onCancel: ()
         <Field label="Security deposit ($)">
           <Input type="number" min="0" step="0.01" value={form.deposit} onChange={set('deposit')} />
         </Field>
+        {entities.length > 0 && (
+          <Field label="Business" className="col-span-2">
+            <Select value={entityId} onChange={(e) => setEntityId(e.target.value)}>
+              <option value="">The unit's business</option>
+              {entities.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
         <Field label="Paid by" className="col-span-2">
           <Input value={form.channel} onChange={set('channel')} placeholder="Zelle, PayPal, check…" />
         </Field>

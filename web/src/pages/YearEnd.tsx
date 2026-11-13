@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Download, FileArchive, FileSpreadsheet, FileText, Plus, Trash2 } from 'lucide-react';
 import { download, post, useApi } from '../api';
+import { useBusiness } from '../business';
 import type { Meta } from '../filters';
 import { money, plural } from '../format';
 import { Banner, Button, Card, Empty, Field, Input, Loading, PageHeader, Select, TD, TH, TR, cx } from '../ui';
@@ -13,7 +14,7 @@ type Forms = Record<string, { name: string; lines: [string, string][] }>;
 interface Group {
   entityId: number | null;
   entity: string;
-  form: 'C' | 'E';
+  form: string; // the tax form id, such as schedule-c or form-8825
   lines: { line: string | null; amount: number }[];
   categories: { category: string; amount: number }[];
   opex: number;
@@ -48,7 +49,8 @@ export function YearEnd({ meta, forms }: { meta: Meta | null; forms: Forms }) {
   const thisYear = new Date().getFullYear();
   const years = [...new Set([String(thisYear), String(thisYear - 1), ...(meta?.years || [])])].sort().reverse();
   const [year, setYear] = useState(String(thisYear));
-  const [entity, setEntity] = useState('');
+  const { business } = useBusiness();
+  const [entity, setEntity] = useState(business ? String(business) : '');
   const scope = `year=${year}${entity ? `&entity=${entity}` : ''}`;
   const data = useApi<YearSummary>(`/api/cpa/summary?${scope}`);
   const [error, setError] = useState('');
@@ -179,10 +181,10 @@ function Checklist({ review: r, year, hasEntities }: { review: YearSummary['revi
 }
 
 function ScheduleCard({ group: g, forms }: { group: Group; forms: Forms }) {
-  const form = forms[g.form === 'E' ? 'schedule-e' : 'schedule-c'];
-  const label = (line: string | null) => (line ? `${line}: ${form?.lines.find(([l]) => l === line)?.[1] ?? ''}` : 'Not on a Schedule line');
+  const form = forms[g.form];
+  const label = (line: string | null) => (line ? `${line}: ${form?.lines.find(([l]) => l === line)?.[1] ?? ''}` : `Not on a ${form?.name ?? 'form'} line`);
   return (
-    <Card title={`${g.entity} · ${form?.name ?? `Schedule ${g.form}`}`} padded={false}>
+    <Card title={`${g.entity} · ${form?.name ?? g.form}`} padded={false}>
       <table className="w-full text-sm">
         <tbody>
           {g.lines.map((l) => (

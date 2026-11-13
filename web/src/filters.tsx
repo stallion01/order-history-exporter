@@ -11,11 +11,11 @@ export interface Meta {
   payments: string[];
   zips: string[];
   // Businesses and properties that spending is assigned to.
-  entities: { id: number; name: string; kind: 'business' | 'rental' | 'other' }[];
+  entities: { id: number; name: string; kind: 'business' | 'rental' | 'other'; activity: string; taxForm: string; invested: number | null; investedOn: string | null }[];
   // Each ZIP's place name (its city, or a name you gave it).
   places: { zip: string; city: string | null; name: string | null; label: string; orders: number }[];
   years: string[];
-  categories: { name: string; scheduleC: string | null; scheduleE: string | null; expenseClass: 'opex' | 'cogs' }[];
+  categories: { name: string; scheduleC: string | null; scheduleE: string | null; form1065: string | null; form8825: string | null; expenseClass: 'opex' | 'cogs' }[];
 }
 
 const KEYS = ['preset', 'from', 'to', 'years', 'store', 'category', 'zip', 'payment', 'q'] as const;

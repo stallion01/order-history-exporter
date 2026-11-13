@@ -5,6 +5,7 @@ import type { FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Pencil } from 'lucide-react';
 import { post, useApi } from '../api';
+import { ACTIVITY_LABELS, TAX_FORM_LABELS, businessQuery, useBusiness } from '../business';
 import { MonthlyInOut } from '../charts';
 import type { IncomeSource } from '../charts';
 import { money, monthLabel, wholeMoney } from '../format';
@@ -33,7 +34,26 @@ interface Year {
   revenueChange: number | null;
   noiChange: number | null;
 }
+interface Business {
+  id: number;
+  name: string;
+  activity: string;
+  taxForm: string;
+  invested: number | null;
+  from: string;
+  to: string;
+  revenue: number;
+  expenses: number;
+  capital: number;
+  noi: number;
+  days: number;
+  annualNoi: number;
+  annualReturn: number | null;
+}
 interface Report {
+  entity: number | null;
+  businesses: Business[];
+  unassigned: number;
   settings: { invested: number | null; investedOn: string | null };
   start: string;
   period: { from: string; to: string; label: string; kind: 'year' | 'ttm' | 'all'; year: string | null };
@@ -71,14 +91,19 @@ const tone = (n: number) => (n < 0 ? 'text-red-700 dark:text-red-400' : '');
 export function ProfitLoss() {
   const [params, setParams] = useSearchParams();
   const period = params.get('period') || String(new Date().getFullYear());
-  const data = useApi<Report>(`/api/pl?period=${encodeURIComponent(period)}`);
+  const { business, current, entities } = useBusiness();
+  const data = useApi<Report>(`/api/pl?period=${encodeURIComponent(period)}${businessQuery(business)}`);
   const report = data.data;
 
   return (
     <>
       <PageHeader
-        title="Profit & loss"
-        description="Revenue less operating expenses, from your business transactions, and the return on what you invested."
+        title={current ? `Profit & loss: ${current.name}` : entities.length > 1 ? 'Profit & loss: all businesses' : 'Profit & loss'}
+        description={
+          current
+            ? `${ACTIVITY_LABELS[current.activity] ?? 'Business'} · ${TAX_FORM_LABELS[current.taxForm] ?? current.taxForm}. Choose another business in the menu.`
+            : 'Revenue less operating expenses, from your business transactions, and the return on what you invested.'
+        }
       />
       {data.error && <Banner>{data.error.message}</Banner>}
       {!report && data.loading && <Loading />}
@@ -98,7 +123,13 @@ export function ProfitLoss() {
                 </button>
               ))}
             </div>
-            <Investment settings={report.settings} onSaved={data.reload} />
+            {business === null && entities.some((e) => e.invested) ? (
+              <span className="text-sm text-slate-600 dark:text-slate-400">
+                Invested across businesses <span className="font-semibold text-slate-900 dark:text-slate-100">{wholeMoney(report.settings.invested || 0)}</span>
+              </span>
+            ) : (
+              <Investment key={business ?? 'all'} entityId={business} settings={report.settings} onSaved={data.reload} />
+            )}
           </div>
 
           {!report.settings.invested && (
@@ -118,6 +149,53 @@ export function ProfitLoss() {
               hint={report.settings.invested ? `${wholeMoney(report.annualNoi)} a year at this pace, on ${wholeMoney(report.settings.invested)}` : 'Enter the amount invested'}
             />
           </div>
+
+          {report.businesses.length > 0 && (
+            <Card title="By business" className="mt-5" padded={false}>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr>
+                      <th className={TH}>Business</th>
+                      <th className={`${TH} text-right`}>Revenue</th>
+                      <th className={`${TH} text-right`}>Expenses</th>
+                      <th className={`${TH} text-right`}>Net operating income</th>
+                      <th className={`${TH} text-right`}>Margin</th>
+                      <th className={`${TH} text-right`}>Invested</th>
+                      <th className={`${TH} text-right`}>Annual return</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.businesses.map((b) => (
+                      <tr key={b.id} className={TR}>
+                        <td className={TD}>
+                          <div className="font-medium">{b.name}</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400">{ACTIVITY_LABELS[b.activity] ?? 'Business'}</div>
+                        </td>
+                        <td className={`${TD} text-right tabular-nums`}>{money(b.revenue)}</td>
+                        <td className={`${TD} text-right tabular-nums`}>{money(b.expenses)}</td>
+                        <td className={cx(TD, 'text-right font-medium tabular-nums', tone(b.noi))}>{money(b.noi)}</td>
+                        <td className={`${TD} text-right tabular-nums`}>{pct(b.revenue ? b.noi / b.revenue : null, 0)}</td>
+                        <td className={`${TD} text-right tabular-nums`}>{b.invested ? wholeMoney(b.invested) : '–'}</td>
+                        <td className={cx(TD, 'text-right tabular-nums', tone(b.annualNoi))}>{pct(b.annualReturn, 2)}</td>
+                      </tr>
+                    ))}
+                    {Math.abs(report.unassigned) >= 0.005 && (
+                      <tr className={TR}>
+                        <td className={TD} colSpan={3}>
+                          <div className="font-medium text-amber-700 dark:text-amber-400">Not assigned to a business</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400">Give these accounts a business on the Accounts page</div>
+                        </td>
+                        <td className={cx(TD, 'text-right tabular-nums', tone(report.unassigned))}>{money(report.unassigned)}</td>
+                        <td className={TD} colSpan={3} />
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="px-4 pb-3 pt-2 text-xs text-slate-500 dark:text-slate-400">Each business from its own start date and on its own investment. The totals above add them together.</p>
+            </Card>
+          )}
 
           <Card title="Revenue and expenses by month" className="mt-5">
             <MonthlyInOut rows={report.months.map((m) => ({ month: m.month, spend: m.expenses, income: m.revenue, sources: m.sources }))} />
@@ -270,7 +348,7 @@ function Shares({ rows, total, of, limit = 8 }: { rows: { label: string; amount:
 }
 
 // The amount invested and when, which returns are measured against.
-function Investment({ settings, onSaved }: { settings: Report['settings']; onSaved: () => void }) {
+function Investment({ entityId, settings, onSaved }: { entityId: number | null; settings: Report['settings']; onSaved: () => void }) {
   const [editing, setEditing] = useState(!settings.invested);
   const [form, setForm] = useState({ invested: settings.invested ? String(settings.invested) : '', investedOn: settings.investedOn || '' });
   const [error, setError] = useState('');
@@ -280,7 +358,7 @@ function Investment({ settings, onSaved }: { settings: Report['settings']; onSav
     event.preventDefault();
     setError('');
     try {
-      await post('/api/pl/settings', { invested: form.invested ? Number(form.invested) : null, investedOn: form.investedOn || null });
+      await post('/api/pl/settings', { entityId, invested: form.invested ? Number(form.invested) : null, investedOn: form.investedOn || null });
       setEditing(false);
       onSaved();
     } catch (e) {

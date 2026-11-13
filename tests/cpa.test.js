@@ -127,8 +127,8 @@ test('the ZIP writer round-trips files, compressed or stored', () => {
 test('the summary has each entity on its Schedule, with income and personal left out', async () => {
   const { summary } = await get('/api/cpa/summary?year=2026');
   const byName = Object.fromEntries(summary.map((g) => [g.entity, g]));
-  assert.equal(byName['Elm St rental'].form, 'E');
-  assert.equal(byName['Consulting LLC'].form, 'C');
+  assert.equal(byName['Elm St rental'].form, 'schedule-e');
+  assert.equal(byName['Consulting LLC'].form, 'schedule-c');
   assert.equal(byName['Elm St rental'].income, 1500);
   // Fuel is line 9 on Schedule C; office supplies line 18.
   const consultingLines = Object.fromEntries(byName['Consulting LLC'].lines.map((l) => [l.line, l.amount]));

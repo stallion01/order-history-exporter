@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -569,6 +569,38 @@ const SCHEMA_V17 = `
   CREATE INDEX lease_payments_lease ON lease_payments (lease_id);
 `;
 
+// Several businesses kept apart: each says what it is (short-term rental, long-term
+// rental or another business), which tax form it files, and what was invested in it.
+// Hospitable properties and leases each belong to one. Categories gain lines on Form
+// 1065 (a partnership's trade or business, page 1) and Form 8825 (its rental real
+// estate), suggested from their Schedule C and E lines.
+const SCHEMA_V18 = `
+  ALTER TABLE entities ADD COLUMN activity TEXT;
+  ALTER TABLE entities ADD COLUMN tax_form TEXT;
+  ALTER TABLE entities ADD COLUMN invested REAL;
+  ALTER TABLE entities ADD COLUMN invested_on TEXT;
+  ALTER TABLE stay_properties ADD COLUMN entity_id INTEGER REFERENCES entities (id) ON DELETE SET NULL;
+  ALTER TABLE leases ADD COLUMN entity_id INTEGER REFERENCES entities (id) ON DELETE SET NULL;
+  ALTER TABLE categories ADD COLUMN form_1065 TEXT;
+  ALTER TABLE categories ADD COLUMN form_8825 TEXT;
+
+  UPDATE categories SET form_8825 = CASE schedule_e
+    WHEN '5' THEN '3' WHEN '6' THEN '4' WHEN '7' THEN '5' WHEN '8' THEN '6' WHEN '9' THEN '7'
+    WHEN '10' THEN '9' WHEN '12' THEN '8' WHEN '13' THEN '8' WHEN '14' THEN '11' WHEN '16' THEN '10'
+    WHEN '17' THEN '12' WHEN '18' THEN '14' WHEN '11' THEN '17' WHEN '15' THEN '17' WHEN '19' THEN '17'
+    ELSE NULL END;
+  UPDATE categories SET form_1065 = CASE
+    WHEN schedule_c = '21' OR schedule_e = '14' THEN '11'
+    WHEN schedule_c = '23' OR schedule_e = '16' THEN '14'
+    WHEN schedule_c = '20b' THEN '13'
+    WHEN schedule_c = '13' OR schedule_e = '18' THEN '16'
+    WHEN schedule_e IN ('12', '13') THEN '15'
+    WHEN schedule_c IS NOT NULL OR schedule_e IS NOT NULL THEN '21'
+    ELSE NULL END;
+  UPDATE entities SET tax_form = CASE kind WHEN 'rental' THEN 'schedule-e' ELSE 'schedule-c' END WHERE tax_form IS NULL;
+  UPDATE entities SET activity = CASE kind WHEN 'rental' THEN 'ltr' ELSE 'other' END WHERE activity IS NULL;
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -740,6 +772,7 @@ function migrate(db, file) {
     if (version < 15) db.exec(SCHEMA_V15);
     if (version < 16) db.exec(SCHEMA_V16);
     if (version < 17) db.exec(SCHEMA_V17);
+    if (version < 18) db.exec(SCHEMA_V18);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
@@ -935,9 +968,9 @@ function openDatabase(file) {
 
   function categoryList() {
     return db
-      .prepare('SELECT name, schedule_c, schedule_e, expense_class FROM categories ORDER BY position')
+      .prepare('SELECT name, schedule_c, schedule_e, form_1065, form_8825, expense_class FROM categories ORDER BY position')
       .all()
-      .map((row) => ({ name: row.name, scheduleC: row.schedule_c, scheduleE: row.schedule_e, expenseClass: row.expense_class }));
+      .map((row) => ({ name: row.name, scheduleC: row.schedule_c, scheduleE: row.schedule_e, form1065: row.form_1065, form8825: row.form_8825, expenseClass: row.expense_class }));
   }
 
   // Sets a category for every item with this name, and teaches similar names.
@@ -954,13 +987,24 @@ function openDatabase(file) {
     classifier = null;
   }
 
-  function saveCategory({ name, scheduleC, scheduleE, expenseClass }) {
+  // Lines left out (undefined) keep what they were; null clears one.
+  function saveCategory({ name, scheduleC, scheduleE, form1065, form8825, expenseClass }) {
     const position = db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS next FROM categories').get().next;
+    const before = db.prepare('SELECT form_1065, form_8825 FROM categories WHERE name = ?').get(name);
     db.prepare(
-      `INSERT INTO categories (name, schedule_c, schedule_e, position, expense_class) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (name) DO UPDATE SET schedule_c = excluded.schedule_c, schedule_e = excluded.schedule_e,
+      `INSERT INTO categories (name, schedule_c, schedule_e, position, expense_class, form_1065, form_8825) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (name) DO UPDATE SET schedule_c = excluded.schedule_c, schedule_e = excluded.schedule_e, form_1065 = excluded.form_1065, form_8825 = excluded.form_8825,
          expense_class = COALESCE(?, categories.expense_class)`
-    ).run(name, scheduleC ?? null, scheduleE ?? null, position, expenseClass ?? 'opex', expenseClass ?? null);
+    ).run(
+      name,
+      scheduleC ?? null,
+      scheduleE ?? null,
+      position,
+      expenseClass ?? 'opex',
+      form1065 === undefined ? before?.form_1065 ?? null : form1065,
+      form8825 === undefined ? before?.form_8825 ?? null : form8825,
+      expenseClass ?? null
+    );
   }
 
   const taxRules = () => db.prepare('SELECT id, field, value, status FROM tax_rules ORDER BY field, value').all().map((row) => ({ ...row }));
@@ -1336,7 +1380,7 @@ function openDatabase(file) {
   }
 
   function taxReport(formId, filters) {
-    const key = formId === 'schedule-e' ? 'scheduleE' : 'scheduleC';
+    const key = tax.FORM_KEYS[formId] || 'scheduleC';
     const lookup = new Map(categoryList().map((c) => [c.name, c[key]]));
     return tax.buildReport(formId, enrichedItems(filters), (category) => lookup.get(category));
   }

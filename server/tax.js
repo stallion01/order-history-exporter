@@ -1,6 +1,8 @@
 // Turns purchases into groups an accountant or tax software can work from.
-// Line names follow the 2025 Schedule C and Schedule E (Form 1040). This sorts
-// purchases; deciding what is deductible stays with the taxpayer.
+// Line names follow the 2025 Schedule C and Schedule E (Form 1040), the 2025 Form 1065
+// (a partnership's trade or business, page 1) and Form 8825 (rev. December 2025; a
+// partnership's rental real estate). This sorts purchases; deciding what is deductible,
+// and which form a business files, stays with the taxpayer and their preparer.
 
 const FORMS = {
   'schedule-c': {
@@ -42,7 +44,44 @@ const FORMS = {
       ['19', 'Other'],
     ],
   },
+  'form-1065': {
+    name: 'Form 1065 (page 1)',
+    lines: [
+      ['9', 'Salaries and wages'],
+      ['10', 'Guaranteed payments to partners'],
+      ['11', 'Repairs and maintenance'],
+      ['12', 'Bad debts'],
+      ['13', 'Rent'],
+      ['14', 'Taxes and licenses'],
+      ['15', 'Interest'],
+      ['16', 'Depreciation'],
+      ['18', 'Retirement plans'],
+      ['19', 'Employee benefit programs'],
+      ['21', 'Other deductions'],
+    ],
+  },
+  'form-8825': {
+    name: 'Form 8825 (rental real estate)',
+    lines: [
+      ['3', 'Advertising'],
+      ['4', 'Auto and travel'],
+      ['5', 'Cleaning and maintenance'],
+      ['6', 'Commissions'],
+      ['7', 'Insurance'],
+      ['8', 'Interest'],
+      ['9', 'Legal and other professional fees'],
+      ['10', 'Taxes'],
+      ['11', 'Repairs'],
+      ['12', 'Utilities'],
+      ['13', 'Wages and salaries'],
+      ['14', 'Depreciation'],
+      ['17', 'Other deductions'],
+    ],
+  },
 };
+
+// Where each form's line is kept on a category.
+const FORM_KEYS = { 'schedule-c': 'scheduleC', 'schedule-e': 'scheduleE', 'form-1065': 'form1065', 'form-8825': 'form8825' };
 
 // Points a preparer would want raised, shown beside the line they apply to.
 const LINE_NOTES = {
@@ -52,6 +91,9 @@ const LINE_NOTES = {
   },
   'schedule-e': {
     6: "If you use the standard mileage rate, you can't also deduct fuel and most car costs.",
+  },
+  'form-1065': {
+    21: 'Attach a statement listing what these are.',
   },
 };
 
@@ -189,4 +231,4 @@ function buildReport(formId, items, lineFor) {
   };
 }
 
-module.exports = { FORMS, allocate, resolveStatus, buildReport, cents };
+module.exports = { FORMS, FORM_KEYS, allocate, resolveStatus, buildReport, cents };

@@ -36,9 +36,9 @@ export interface OrdersDb {
   listItems(filters: Partial<Filters>, options?: SortPage): { total: number; amount: number; items: Any[] };
   enrichedItems(filters: Partial<Filters>): Any[];
   status(): Any;
-  categoryList(): { name: string; scheduleC: string | null; scheduleE: string | null; expenseClass: 'opex' | 'cogs' }[];
+  categoryList(): { name: string; scheduleC: string | null; scheduleE: string | null; form1065: string | null; form8825: string | null; expenseClass: 'opex' | 'cogs' }[];
   setItemCategory(name: string, category: string | null): void;
-  saveCategory(category: { name: string; scheduleC: string | null; scheduleE: string | null; expenseClass?: 'opex' | 'cogs' | null }): void;
+  saveCategory(category: { name: string; scheduleC: string | null; scheduleE: string | null; form1065?: string | null; form8825?: string | null; expenseClass?: 'opex' | 'cogs' | null }): void;
   taxRules(): { id: number; field: string; value: string; status: string }[];
   saveTaxRule(rule: { field: string; value: string; status: string }): void;
   deleteTaxRule(id: number): void;
@@ -57,7 +57,8 @@ export interface Core {
 
 export const { openDatabase } = require('../db') as { openDatabase(file: string): OrdersDb };
 export const core = require('../core') as Core;
-export const { FORMS, cents } = require('../tax') as {
+export const { FORMS, FORM_KEYS, cents } = require('../tax') as {
+  FORM_KEYS: Record<string, 'scheduleC' | 'scheduleE' | 'form1065' | 'form8825'>;
   FORMS: Record<string, { name: string; lines: [string, string][] }>;
   cents(n: number): number;
 };

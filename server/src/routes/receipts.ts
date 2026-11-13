@@ -166,6 +166,21 @@ export function receiptRoutes(app: FastifyInstance, receipts: ReceiptService, ca
     return { receipt: receipts.get(id), suggestions: receipts.suggestions(id) };
   });
 
+  // Paid with a personal card: recorded in the business's "Paid personally" account.
+  app.post('/api/receipts/:id/paid-personally', async (request) => {
+    const id = idOf(request);
+    const body = (request.body || {}) as { entityId?: unknown };
+    const entityId = body.entityId === null || body.entityId === undefined ? null : Number(body.entityId);
+    if (entityId !== null && (!Number.isInteger(entityId) || entityId < 1)) throw new HttpError(400, 'Unknown business.');
+    try {
+      receipts.recordPaidPersonally(id, entityId, user(request));
+    } catch (err) {
+      fail(err);
+    }
+    audit(request, 'receipt.paid-personally', { id, entityId });
+    return { receipt: receipts.get(id) };
+  });
+
   app.post('/api/receipts/:id/cash', async (request) => {
     const id = idOf(request);
     try {

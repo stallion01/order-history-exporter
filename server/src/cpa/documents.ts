@@ -24,10 +24,10 @@ export interface YearData {
 const MONEY = '$#,##0.00;[Red]-$#,##0.00';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const cents = (n: number) => Math.round(n * 100) / 100;
-const formName = (form: 'C' | 'E') => (form === 'E' ? 'Schedule E (rental)' : 'Schedule C (business)');
-const lineLabel = (form: 'C' | 'E', line: string | null) => {
-  if (!line) return 'Not on a Schedule line';
-  const found = FORMS[form === 'E' ? 'schedule-e' : 'schedule-c'].lines.find(([code]) => code === line);
+const formName = (form: string) => FORMS[form]?.name ?? form;
+const lineLabel = (form: string, line: string | null) => {
+  if (!line) return `Not on a ${formName(form)} line`;
+  const found = FORMS[form]?.lines.find(([code]) => code === line);
   return found ? `Line ${line}: ${found[1]}` : `Line ${line}`;
 };
 const STATUS = (s: string | null) => (s === 'business' ? 'Business' : s === 'personal' ? 'Personal' : 'Not decided');

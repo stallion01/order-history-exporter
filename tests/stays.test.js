@@ -427,3 +427,29 @@ test('the expected amount and each linked share can be changed by hand', async (
   assert.equal(t.due, 300);
   await assert.rejects(post('/api/stays/res-t', { expected: -5 }), /expected/);
 });
+
+test("a property belongs to one business, and only that business's deposits are offered", async () => {
+  const mine = (await post('/api/entities', { name: 'Lakeside Stays LLC', kind: 'business', activity: 'str', taxForm: 'form-1065' })).id;
+  const other = (await post('/api/entities', { name: 'Maple Rentals LLC', kind: 'rental', activity: 'ltr', taxForm: 'form-8825' })).id;
+  const { accountId } = await post('/api/bank/import', {
+    content: 'Date,Description,Amount\n10/02/2026,ZELLE FROM TERRY PART,300.00\n',
+    fileName: 'maple.csv',
+    newAccount: { name: 'Maple checking', kind: 'checking', owner: 'business' },
+  });
+  await post(`/api/bank/accounts/${accountId}`, { entityId: other });
+  const [deposit] = await txByDate('2026-10-02');
+
+  const { options } = await post('/api/stays/properties/prop-bay', { entityId: mine });
+  assert.equal(options.properties.find((p) => p.id === 'prop-bay').entityId, mine);
+  const offered = async () => (await get('/api/stays/res-t')).suggestions.map((s) => s.id);
+  assert.ok(!(await offered()).includes(deposit.id), "the other business's deposit isn't offered");
+
+  const listed = await get(`/api/stays?view=all&entity=${mine}`);
+  assert.ok(listed.stays.length > 0);
+  assert.ok(listed.stays.every((s) => s.property === 'Bay Studio'));
+
+  // The same property moved to that business: now it's offered.
+  await post('/api/stays/properties/prop-bay', { entityId: other });
+  assert.ok((await offered()).includes(deposit.id));
+  await post('/api/stays/properties/prop-bay', { entityId: null });
+});

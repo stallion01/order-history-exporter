@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircle2, ChevronLeft, ChevronRight, Clock, TriangleAlert } from 'lucide-react';
 import { useApi } from '../api';
+import { businessQuery, useBusiness } from '../business';
 import { MONTHS, money, plural } from '../format';
 import { useFilters } from '../filters';
 import { PLATFORM_NAMES, dateRange, platformColor } from '../stays';
@@ -65,7 +66,8 @@ function MonthCalendar({ month, colorBy, wide }: { month: string; colorBy: Color
   const first = `${month}-01`;
   const last = `${month}-${pad(days)}`;
   const today = iso(now);
-  const data = useApi<StayList>(`/api/stays?from=${first}&to=${last}`);
+  const { business } = useBusiness();
+  const data = useApi<StayList>(`/api/stays?from=${first}&to=${last}${businessQuery(business)}`);
   const scroller = useRef<HTMLDivElement>(null);
   const loaded = Boolean(data.data);
 

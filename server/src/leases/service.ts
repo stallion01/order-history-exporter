@@ -6,6 +6,9 @@
 // the bank" account; one that reached a connected account links to its transaction
 // instead. Rent is Rental Income. Deposits and their refunds are Security Deposits and
 // typed Ignored: money held for the tenant, not income or spending.
+//
+// A lease belongs to one business (its property's, unless chosen), and each business
+// has its own "outside the bank" account, so one business's rent never lands in another's.
 import type { DatabaseSync } from 'node:sqlite';
 import type { BankStore } from '../bank/store';
 import { toCents } from '../bank/types';
@@ -23,6 +26,7 @@ const MONTH = /^\d{4}-\d{2}$/;
 
 export interface LeaseInput {
   ref?: string | null;
+  entityId?: number | null;
   propertyId?: string | null;
   unit: string;
   tenant: string;
@@ -63,12 +67,22 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
     ).run(SECURITY_DEPOSITS);
   }
 
-  function accountId() {
-    let id = Number(bank.getSetting(ACCOUNT_SETTING)) || null;
-    if (!id || !bank.account(id)) {
-      id = bank.createAccount({ name: ACCOUNT_NAME, kind: 'other', owner: 'business' });
-      bank.setSetting(ACCOUNT_SETTING, String(id));
+  // The business's own account for rent received outside the bank. The first one made
+  // (before businesses were kept apart) is taken over by the business it was given to.
+  function accountId(entity: number | null) {
+    const key = entity ? `${ACCOUNT_SETTING}.${entity}` : ACCOUNT_SETTING;
+    let id = Number(bank.getSetting(key)) || null;
+    if (id && bank.account(id)) return id;
+    const first = Number(bank.getSetting(ACCOUNT_SETTING)) || null;
+    if (entity && first && bank.account(first)?.entityId === entity) {
+      bank.setSetting(key, String(first));
+      return first;
     }
+    if (!entity && first && bank.account(first)) return first;
+    const name = entity ? (db.prepare('SELECT name FROM entities WHERE id = ?').get(entity) as Row | undefined)?.name : null;
+    id = bank.createAccount({ name: name ? `${ACCOUNT_NAME} (${name})`.slice(0, 100) : ACCOUNT_NAME, kind: 'other', owner: 'business' });
+    if (entity) bank.updateAccount(id, { entityId: entity });
+    bank.setSetting(key, String(id));
     return id;
   }
 
@@ -113,7 +127,7 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
       return;
     }
     ensureCategory();
-    const account = accountId();
+    const account = accountId((lease.entity_id as number | null) ?? null);
     const stamp = now();
     const insert = db.prepare(
       'INSERT INTO bank_transactions (account_id, posted, amount, description, payee, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -159,6 +173,7 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
   const toLease = (row: Row, months: Row[], payments: Row[]) => ({
     id: row.id as number,
     ref: row.ref as string | null,
+    entityId: (row.entity_id as number | null) ?? null,
     propertyId: row.property_id as string | null,
     unit: row.unit as string,
     tenant: row.tenant as string,
@@ -178,11 +193,19 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
   const monthsOf = (id: number) => db.prepare('SELECT month, amount, note FROM lease_months WHERE lease_id = ? ORDER BY month').all(id) as Row[];
   const paymentsOf = (id: number) => db.prepare('SELECT * FROM lease_payments WHERE lease_id = ? ORDER BY paid_on, id').all(id) as Row[];
 
-  function list() {
-    const leases = (db.prepare('SELECT * FROM leases ORDER BY start_date DESC, id DESC').all() as Row[]).map((row) => toLease(row, monthsOf(row.id), paymentsOf(row.id)));
+  // All leases, or one business's.
+  function list(entity: number | null = null) {
+    const rows = db.prepare(`SELECT * FROM leases ${entity ? 'WHERE entity_id = ?' : ''} ORDER BY start_date DESC, id DESC`).all(...(entity ? [entity] : [])) as Row[];
+    const leases = rows.map((row) => toLease(row, monthsOf(row.id), paymentsOf(row.id)));
     const sum = (pick: (l: (typeof leases)[number]) => number) => cents(leases.reduce((t, l) => t + pick(l), 0));
     const year = today().slice(0, 4);
-    const rentThisYear = (db.prepare(`SELECT COALESCE(SUM(amount), 0) AS n FROM lease_payments WHERE purpose IN ('rent', 'applied') AND paid_on LIKE ?`).get(`${year}-%`) as Row).n as number;
+    const rentThisYear = (
+      db
+        .prepare(
+          `SELECT COALESCE(SUM(p.amount), 0) AS n FROM lease_payments p JOIN leases l ON l.id = p.lease_id WHERE p.purpose IN ('rent', 'applied') AND p.paid_on LIKE ? ${entity ? 'AND l.entity_id = ?' : ''}`
+        )
+        .get(`${year}-%`, ...(entity ? [entity] : [])) as Row
+    ).n as number;
     return {
       leases,
       totals: {
@@ -191,7 +214,7 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
         owed: sum((l) => l.owed),
         depositsHeld: sum((l) => l.depositHeld),
       },
-      units: (db.prepare('SELECT id, name FROM stay_properties ORDER BY name').all() as Row[]).map((r) => ({ id: r.id as string, name: r.name as string })),
+      units: (db.prepare('SELECT id, name, entity_id FROM stay_properties ORDER BY name').all() as Row[]).map((r) => ({ id: r.id as string, name: r.name as string, entityId: (r.entity_id as number | null) ?? null })),
     };
   }
 
@@ -259,14 +282,21 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
     if (input.end && input.end < input.start) throw new Error('The lease ends before it starts.');
   }
 
+  const businessFor = (input: LeaseInput) =>
+    input.entityId !== undefined
+      ? input.entityId
+      : input.propertyId
+        ? (((db.prepare('SELECT entity_id FROM stay_properties WHERE id = ?').get(input.propertyId) as Row | undefined)?.entity_id as number | null) ?? null)
+        : null;
+
   function create(input: LeaseInput) {
     check(input);
     const stamp = now();
     return Number(
       db
         .prepare(
-          `INSERT INTO leases (ref, property_id, unit, tenant, phone, email, start_date, end_date, rent, deposit, channel, ended, note, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO leases (ref, property_id, unit, tenant, phone, email, start_date, end_date, rent, deposit, channel, ended, note, created_at, updated_at, entity_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           input.ref ?? null,
@@ -283,17 +313,19 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
           input.ended ? 1 : 0,
           input.note ?? null,
           stamp,
-          stamp
+          stamp,
+          businessFor(input)
         ).lastInsertRowid
     );
   }
 
   function update(id: number, input: LeaseInput) {
     check(input);
-    const before = db.prepare('SELECT unit, tenant FROM leases WHERE id = ?').get(id) as Row | undefined;
+    const before = db.prepare('SELECT unit, tenant, entity_id FROM leases WHERE id = ?').get(id) as Row | undefined;
     if (!before) return false;
+    const entity = input.entityId !== undefined ? input.entityId : (before.entity_id as number | null);
     db.prepare(
-      `UPDATE leases SET ref = ?, property_id = ?, unit = ?, tenant = ?, phone = ?, email = ?, start_date = ?, end_date = ?, rent = ?, deposit = ?, channel = ?, ended = ?, note = ?, updated_at = ? WHERE id = ?`
+      `UPDATE leases SET ref = ?, property_id = ?, unit = ?, tenant = ?, phone = ?, email = ?, start_date = ?, end_date = ?, rent = ?, deposit = ?, channel = ?, ended = ?, note = ?, updated_at = ?, entity_id = ? WHERE id = ?`
     ).run(
       input.ref ?? null,
       input.propertyId ?? null,
@@ -309,10 +341,11 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
       input.ended ? 1 : 0,
       input.note ?? null,
       now(),
+      entity ?? null,
       id
     );
-    // The ledger names the unit and tenant.
-    if (before.unit !== input.unit.trim() || before.tenant !== input.tenant.trim())
+    // The ledger names the unit and tenant, and the business decides the account.
+    if (before.unit !== input.unit.trim() || before.tenant !== input.tenant.trim() || (before.entity_id ?? null) !== (entity ?? null))
       for (const p of db.prepare('SELECT id FROM lease_payments WHERE lease_id = ? AND transaction_id IS NULL').all(id) as Row[]) writeLedger(p.id);
     return true;
   }

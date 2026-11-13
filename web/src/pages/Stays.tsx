@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircle2, Clock, RefreshCw, Search, TriangleAlert } from 'lucide-react';
 import { post, useApi } from '../api';
+import { useBusiness } from '../business';
 import { money, monthLabel, plural, whole } from '../format';
 import { useFilters } from '../filters';
 import { PLATFORM_NAMES, dateRange, platformColor, shortDate } from '../stays';
@@ -117,6 +118,8 @@ export function Stays() {
   for (const p of filters.values('platform')) query.append('platform', p);
   if (filters.value('q')) query.set('q', filters.value('q'));
   if (deposit) query.set('deposit', deposit);
+  const { business } = useBusiness();
+  if (business) query.set('entity', String(business));
   const list = useApi<StayList>(`/api/stays?${query}`);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{

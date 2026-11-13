@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { ArrowLeftRight, BedDouble, FileCheck2, KeyRound, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, TrendingUp, Upload, Wallet } from 'lucide-react';
+import { BusinessPicker } from './business';
 import { cx } from './ui';
 
 // The sidebar order. Phones show the ones marked phone as tabs, the rest under More.
@@ -33,6 +34,7 @@ export function Layout({ username, onSignOut, children }: { username: string; on
           <Wallet className="size-6 text-emerald-400" aria-hidden />
           <span className="text-lg font-semibold tracking-tight">Business Hub</span>
         </div>
+        <BusinessPicker className="mx-3 mb-3" />
         <nav aria-label="Main" className="flex-1 space-y-1 px-3">
           {NAV.map(({ to, label, icon: Icon, end }) => (
             <NavLink
@@ -63,8 +65,9 @@ export function Layout({ username, onSignOut, children }: { username: string; on
         <header className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200 bg-slate-900 px-4 py-3 text-white md:hidden dark:border-slate-800">
           <span className="flex items-center gap-2 font-semibold">
             <Wallet className="size-5 text-emerald-400" aria-hidden />
-            Business Hub
+            <span className="hidden min-[400px]:inline">Business Hub</span>
           </span>
+          <BusinessPicker className="mx-3 min-w-0 flex-1" />
           <button type="button" onClick={onSignOut} className="inline-flex items-center gap-1.5 text-sm text-slate-300" aria-label="Sign out">
             <LogOut className="size-4" aria-hidden />
           </button>

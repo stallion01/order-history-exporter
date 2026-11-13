@@ -1,6 +1,7 @@
 // Phase 5: the year's books for a CPA. Each line of spending gets a class
 // (operating, cost of goods sold, capital, personal) and a Schedule C or E line;
 // capital purchases go on an asset register; and what still needs a decision is listed.
+import { FORM_KEYS } from '../legacy';
 import type { DatabaseSync } from 'node:sqlite';
 import { ACCOUNT_NUMBER_IN_PAYMENT, PAID_TO_CARD } from '../bank/merchant';
 import type { BankStore } from '../bank/store';
@@ -31,11 +32,14 @@ export const CLASS_LABELS: Record<ExpenseClass, string> = {
   personal: 'Personal',
 };
 
+// The tax form a business files: its own choice, or Schedule E for a rental and C otherwise.
+export const formOf = (entity: { kind: string; taxForm?: string | null } | undefined) => entity?.taxForm || (entity?.kind === 'rental' ? 'schedule-e' : 'schedule-c');
+
 export interface YearLine extends SpendLine {
   class: ExpenseClass;
   entity: string | null;
-  form: 'C' | 'E';
-  line: string | null; // the Schedule C or E line, if the category has one
+  form: string; // the tax form id, such as schedule-c or form-8825
+  line: string | null; // the form's line, if the category has one
   key: string; // what a capital decision is about: a whole transaction, or one order item
 }
 
@@ -134,11 +138,11 @@ export function cpaService(options: { raw: DatabaseSync; db: OrdersDb; bank: Ban
       .map((l) => {
         const key = lineKey(l);
         const entity = l.entityId ? entities.get(l.entityId) : undefined;
-        const form: 'C' | 'E' = entity?.kind === 'rental' ? 'E' : 'C';
+        const form = formOf(entity);
         const category = categories.get(l.category);
         const isCapital = capital.has(key) || capital.has(`tx:${l.txId}`);
         const cls: ExpenseClass = l.status === 'personal' ? 'personal' : isCapital ? 'capex' : category?.expenseClass === 'cogs' ? 'cogs' : 'opex';
-        return { ...l, class: cls, entity: entity?.name ?? null, form, line: (form === 'E' ? category?.scheduleE : category?.scheduleC) ?? null, key };
+        return { ...l, class: cls, entity: entity?.name ?? null, form, line: (category ? category[FORM_KEYS[form] ?? 'scheduleC'] : null) ?? null, key };
       });
   }
 
@@ -245,7 +249,7 @@ export function cpaService(options: { raw: DatabaseSync; db: OrdersDb; bank: Ban
     type Group = {
       entityId: number | null;
       entity: string;
-      form: 'C' | 'E';
+      form: string;
       lines: Map<string, number>;
       categories: Map<string, number>;
       totals: Record<ExpenseClass, number>;
@@ -260,7 +264,7 @@ export function cpaService(options: { raw: DatabaseSync; db: OrdersDb; bank: Ban
         groups.set(key, {
           entityId: id,
           entity: entity?.name ?? 'Not assigned',
-          form: entity?.kind === 'rental' ? 'E' : 'C',
+          form: formOf(entity),
           lines: new Map(),
           categories: new Map(),
           totals: { opex: 0, cogs: 0, capex: 0, personal: 0 },

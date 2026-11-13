@@ -21,6 +21,7 @@ export const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const DAY_MS = 86400000;
 const KEY_SETTING = 'anthropic.apiKey';
 const CASH_SETTING = 'cash.accountId';
+const PERSONAL_SETTING = 'personal.accountId';
 
 const EXTENSIONS: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf' };
 export const RECEIPT_TYPES = Object.keys(EXTENSIONS);
@@ -537,20 +538,42 @@ export function receiptService(options: {
 
   // A purchase with no card or bank record (cash, say) becomes a transaction of its own.
   function recordCash(id: number, username: string | null) {
-    const row = getRow(id);
-    if (!row) throw new Error('That receipt was not found.');
-    if (row.transaction_id) throw new Error('This receipt is already attached to a transaction.');
-    if (row.total === null || !row.receipt_date) throw new Error('Fill in the date and total first.');
     let cashId = Number(bank.getSetting(CASH_SETTING)) || null;
     if (!cashId || !bank.account(cashId)) {
       cashId = bank.createAccount({ name: 'Cash', kind: 'other', owner: 'mixed' });
       bank.setSetting(CASH_SETTING, String(cashId));
     }
-    bank.importTransactions(cashId, 'receipt', [{ externalId: `receipt-${id}-${crypto.randomUUID().slice(0, 8)}`, posted: row.receipt_date, amount: -Math.abs(row.total), description: row.vendor || 'Cash purchase' }], {
+    return recordIn(id, cashId, 'Cash purchase', username);
+  }
+
+  // A business purchase paid with a personal card the hub doesn't see: the expense goes
+  // in the business's own "Paid personally" account, so it's in that business's books
+  // (to be paid back, or counted as money the owner put in).
+  function recordPaidPersonally(id: number, entityId: number | null, username: string | null) {
+    const key = entityId ? `${PERSONAL_SETTING}.${entityId}` : PERSONAL_SETTING;
+    let accountId = Number(bank.getSetting(key)) || null;
+    if (!accountId || !bank.account(accountId)) {
+      const name = entityId ? ((db.prepare('SELECT name FROM entities WHERE id = ?').get(entityId) as Row | undefined)?.name as string | undefined) : undefined;
+      if (entityId && !name) throw new Error('That business was not found.');
+      accountId = bank.createAccount({ name: name ? `Paid personally (${name})`.slice(0, 100) : 'Paid personally', kind: 'other', owner: 'business' });
+      if (entityId) bank.updateAccount(accountId, { entityId });
+      bank.setSetting(key, String(accountId));
+    }
+    const txId = recordIn(id, accountId, 'Paid personally', username);
+    bank.updateTransactions([txId], { status: 'business', note: 'Paid with a personal card' });
+    return txId;
+  }
+
+  function recordIn(id: number, accountId: number, fallback: string, username: string | null) {
+    const row = getRow(id);
+    if (!row) throw new Error('That receipt was not found.');
+    if (row.transaction_id) throw new Error('This receipt is already attached to a transaction.');
+    if (row.total === null || !row.receipt_date) throw new Error('Fill in the date and total first.');
+    bank.importTransactions(accountId, 'receipt', [{ externalId: `receipt-${id}-${crypto.randomUUID().slice(0, 8)}`, posted: row.receipt_date, amount: -Math.abs(row.total), description: row.vendor || fallback }], {
       fileName: `Receipt ${id}`,
       username,
     });
-    const txId = (db.prepare(`SELECT transaction_id FROM bank_tx_sources WHERE account_id = ? AND source = 'receipt' AND external_id LIKE ? ORDER BY rowid DESC`).get(cashId, `receipt-${id}-%`) as Row).transaction_id;
+    const txId = (db.prepare(`SELECT transaction_id FROM bank_tx_sources WHERE account_id = ? AND source = 'receipt' AND external_id LIKE ? ORDER BY rowid DESC`).get(accountId, `receipt-${id}-%`) as Row).transaction_id;
     link(id, txId, 'user');
     return txId as number;
   }
@@ -572,7 +595,7 @@ export function receiptService(options: {
     };
   }
 
-  return { add, get, list, neighbours, choices, counts, update, remove, filePath, thumbPath, readAgain, kick, suggestions, autoMatch, matchUnlinked, link, unlink, recordCash, keyStatus, setApiKey, apiKey };
+  return { add, get, list, neighbours, choices, counts, update, remove, filePath, thumbPath, readAgain, kick, suggestions, autoMatch, matchUnlinked, link, unlink, recordCash, recordPaidPersonally, keyStatus, setApiKey, apiKey };
 }
 
 export type ReceiptService = ReturnType<typeof receiptService>;

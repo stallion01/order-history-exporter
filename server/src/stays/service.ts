@@ -48,6 +48,8 @@ export interface StayFilters {
   from?: string | null;
   to?: string | null;
   deposit?: number | null;
+  // One business's properties only.
+  entity?: number | null;
 }
 
 const now = () => new Date().toISOString();
@@ -341,7 +343,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
   function payoutCandidates(payout: Row, exactOnly = true) {
     const rows = db
       .prepare(
-        `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account, a.last4 FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+        `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account, a.last4, COALESCE(t.entity_id, a.entity_id) AS entity FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
          WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ?
            ${exactOnly ? 'AND CAST(ROUND(t.amount * 100) AS INTEGER) = ?' : ''}
            AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.transaction_id = t.id)
@@ -351,15 +353,17 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
       )
       .all(shift(payout.paid_on, -2), shift(payout.paid_on, exactOnly ? 7 : 14), ...(exactOnly ? [toCents(payout.amount)] : []), payout.id, `payout:${payout.id}`) as Row[];
     const last4 = last4Of(payout.bank_account);
-    const sameAccount = last4 ? rows.filter((r) => r.last4 === last4) : [];
-    return (sameAccount.length ? sameAccount : rows).filter((r) => incomeSource(`${r.description} ${r.payee || ''}`) === 'airbnb');
+    const business = payoutBusiness().get(payout.id);
+    const own = rows.filter((r) => sameBusiness(business, r.entity));
+    const sameAccount = last4 ? own.filter((r) => r.last4 === last4) : [];
+    return (sameAccount.length ? sameAccount : own).filter((r) => incomeSource(`${r.description} ${r.payee || ''}`) === 'airbnb');
   }
 
   function stayCandidates(stay: Row, exactOnly = true) {
     const [from, to] = depositWindow(stay);
     const rows = db
       .prepare(
-        `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account, ${BALANCE} AS balance FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+        `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.name AS account, ${BALANCE} AS balance, COALESCE(t.entity_id, a.entity_id) AS entity FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
          WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ?
            ${exactOnly ? 'AND CAST(ROUND(t.amount * 100) AS INTEGER) = ?' : ''}
            AND NOT EXISTS (SELECT 1 FROM stay_payouts x WHERE x.transaction_id = t.id)
@@ -369,7 +373,8 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
          ORDER BY t.posted`
       )
       .all(from, to, ...(exactOnly ? [toCents(depositAmount(stay))] : []), stay.id, `stay:${stay.id}`) as Row[];
-    return rows.filter((r) => ownDeposit(stay.platform, incomeSource(`${r.description} ${r.payee || ''}`)));
+    const business = stay.property_id ? ((db.prepare('SELECT entity_id FROM stay_properties WHERE id = ?').get(stay.property_id) as Row | undefined)?.entity_id ?? null) : null;
+    return rows.filter((r) => sameBusiness(business, r.entity) && ownDeposit(stay.platform, incomeSource(`${r.description} ${r.payee || ''}`)));
   }
 
   // Stays whose money Hospitable has no payout record for.
@@ -377,7 +382,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const earliest = (db.prepare(`SELECT MIN(paid_on) AS d FROM stay_payouts`).get() as Row).d as string | null;
     return db
       .prepare(
-        `SELECT s.* FROM stays s
+        `SELECT s.*, p.entity_id AS entity FROM stays s LEFT JOIN stay_properties p ON p.id = s.property_id
          WHERE s.status = 'accepted' AND COALESCE(s.expected_override, s.payout) > 0
            AND NOT EXISTS (SELECT 1 FROM stay_payout_lines l WHERE l.stay_id = s.id)
            AND NOT EXISTS (SELECT 1 FROM stay_deposits d WHERE d.stay_id = s.id)
@@ -425,16 +430,31 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     cents: number;
     last4: string | null;
     named: string;
+    entity: number | null;
   }
   const freeDeposits = (from: string) =>
     (
       db
         .prepare(
-          `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.last4 FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+          `SELECT t.id, t.posted, t.amount, t.description, t.payee, a.last4, COALESCE(t.entity_id, a.entity_id) AS entity FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
            WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted >= ? AND ${FREE} ORDER BY t.posted, t.id`
         )
         .all(from) as Row[]
-    ).map((r): Deposit => ({ id: r.id, posted: r.posted, cents: toCents(r.amount), last4: r.last4 ?? null, named: incomeSource(`${r.description} ${r.payee || ''}`) }));
+    ).map((r): Deposit => ({ id: r.id, posted: r.posted, cents: toCents(r.amount), last4: r.last4 ?? null, named: incomeSource(`${r.description} ${r.payee || ''}`), entity: r.entity ?? null }));
+  // A deposit and a stay or payout go together only within one business (either may not have one yet).
+  const sameBusiness = (a: number | null | undefined, b: number | null | undefined) => a == null || b == null || a === b;
+  // Each payout's business: that of the properties its stays are at.
+  const payoutBusiness = () =>
+    new Map(
+      (
+        db
+          .prepare(
+            `SELECT l.payout_id, MIN(p.entity_id) AS entity FROM stay_payout_lines l JOIN stays s ON s.id = l.stay_id JOIN stay_properties p ON p.id = s.property_id
+             WHERE p.entity_id IS NOT NULL GROUP BY l.payout_id`
+          )
+          .all() as Row[]
+      ).map((r) => [r.payout_id as string, r.entity as number])
+    );
   const rejectedSet = () => new Set((db.prepare('SELECT subject, transaction_id FROM stay_link_rejections').all() as Row[]).map((r) => `${r.subject}|${r.transaction_id}`));
   const between = (date: string, from: string, to: string) => date >= from && date <= to;
 
@@ -454,9 +474,10 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const deposits = freeDeposits(shift(payouts[0].paid_on, -2)).filter((d) => d.named === 'airbnb' || d.named === 'other');
     const used = new Set<number>();
     const link = db.prepare(`UPDATE stay_payouts SET transaction_id = ?, match_source = 'auto' WHERE id = ? AND transaction_id IS NULL`);
+    const business = payoutBusiness();
     const fits = (p: Row, d: Deposit) => {
       const last4 = last4Of(p.bank_account);
-      return !used.has(d.id) && (!last4 || !d.last4 || d.last4 === last4) && !rejected.has(`payout:${p.id}|${d.id}`);
+      return !used.has(d.id) && (!last4 || !d.last4 || d.last4 === last4) && sameBusiness(business.get(p.id), d.entity) && !rejected.has(`payout:${p.id}|${d.id}`);
     };
     const left: Row[] = [];
     for (const p of payouts) {
@@ -503,7 +524,7 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     const link = { run: (stayId: string, txId: number, at: string) => insert.run(stayId, txId, depositAmount(stays.find((s) => s.id === stayId) as Row), at) };
     const fits = (s: Row, d: Deposit) => {
       const [from, to] = depositWindow(s);
-      return !used.has(d.id) && between(d.posted, from, to) && ownDeposit(s.platform, d.named) && !rejected.has(`stay:${s.id}|${d.id}`);
+      return !used.has(d.id) && between(d.posted, from, to) && ownDeposit(s.platform, d.named) && sameBusiness(s.entity, d.entity) && !rejected.has(`stay:${s.id}|${d.id}`);
     };
     const left: Row[] = [];
     for (const s of stays) {
@@ -594,6 +615,10 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     if (filters.property?.length) {
       clauses.push(`s.property_id IN (${filters.property.map(() => '?').join(', ')})`);
       params.push(...filters.property);
+    }
+    if (filters.entity) {
+      clauses.push('s.property_id IN (SELECT id FROM stay_properties WHERE entity_id = ?)');
+      params.push(filters.entity);
     }
     if (filters.platform?.length) {
       const list = filters.platform.flatMap((p) => (p === 'vrbo' ? ['vrbo', 'homeaway'] : p === 'direct' ? ['manual', 'direct'] : [p]));
@@ -742,9 +767,16 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     return { stays, totals, byProperty: properties };
   }
 
+  // Which business a property belongs to. Its stays then only match that business's deposits.
+  function setPropertyBusiness(propertyId: string, entityId: number | null) {
+    const changed = db.prepare('UPDATE stay_properties SET entity_id = ? WHERE id = ?').run(entityId, propertyId).changes > 0;
+    if (changed) match();
+    return changed;
+  }
+
   function options() {
     return {
-      properties: db.prepare('SELECT id, name FROM stay_properties ORDER BY name').all() as { id: string; name: string }[],
+      properties: (db.prepare('SELECT id, name, entity_id FROM stay_properties ORDER BY name').all() as Row[]).map((r) => ({ id: r.id as string, name: r.name as string, entityId: (r.entity_id as number | null) ?? null })),
       platforms: [...new Set((db.prepare('SELECT DISTINCT platform FROM stays').all() as Row[]).map((r) => (r.platform === 'homeaway' ? 'vrbo' : r.platform === 'manual' ? 'direct' : r.platform) as string))].sort(),
       years: (db.prepare(`SELECT DISTINCT substr(arrival, 1, 4) AS y FROM stays ORDER BY y DESC`).all() as Row[]).map((r) => r.y as string),
     };
@@ -1084,7 +1116,8 @@ export function stayService({ db, bank, secrets, fetchImpl = fetch }: { db: Data
     return db.prepare('UPDATE stays SET expected_override = ? WHERE id = ?').run(amount === null ? null : round(amount), stayId).changes > 0;
   }
 
-  return { status, connect, disconnect, sync, due, match, list, options, get, conflictList, resolve, airbnbWeeks, linkStay, unlinkStay, linkPayout, unlinkPayout, setNote, setExpected };
+  return { status, connect, disconnect, sync, due, match, list, options,
+    setPropertyBusiness, get, conflictList, resolve, airbnbWeeks, linkStay, unlinkStay, linkPayout, unlinkPayout, setNote, setExpected };
 }
 
 export type StayService = ReturnType<typeof stayService>;

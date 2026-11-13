@@ -1,7 +1,7 @@
 // Leases: tenancies, their monthly rent and their payments. Signed-in users only.
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { HttpError } from '../params';
+import { HttpError, queryOf } from '../params';
 import { PAYMENT_PURPOSES } from '../leases/service';
 import type { LeaseService } from '../leases/service';
 import type { AuthedRequest } from '../app';
@@ -13,6 +13,7 @@ const money = z.number().min(0).max(1e7);
 
 const leaseBody = z.object({
   ref: text(40),
+  entityId: z.number().int().positive().nullable().optional(),
   propertyId: z.string().regex(/^[A-Za-z0-9-]{1,64}$/).nullable().optional(),
   unit: z.string().trim().min(1).max(60),
   tenant: z.string().trim().min(1).max(200),
@@ -69,7 +70,10 @@ export function leaseRoutes(app: FastifyInstance, leases: LeaseService) {
     return lease;
   };
 
-  app.get('/api/leases', async () => leases.list());
+  app.get('/api/leases', async (request) => {
+    const business = queryOf(request.query).get('entity');
+    return leases.list(business && /^\d+$/.test(business) ? Number(business) : null);
+  });
 
   app.post('/api/leases', async (request) => {
     const body = parse(leaseBody, request.body);

@@ -55,6 +55,7 @@ export function stayRoutes(app: FastifyInstance, stays: StayService) {
       deposit,
       from: dateParam(query.get('from'), 'from'),
       to: dateParam(query.get('to'), 'to'),
+      entity: query.get('entity') && /^\d+$/.test(query.get('entity') as string) ? Number(query.get('entity')) : null,
     };
     return { ...stays.list(filters), options: stays.options(), status: stays.status() };
   });
@@ -136,6 +137,15 @@ export function stayRoutes(app: FastifyInstance, stays: StayService) {
     stays.unlinkPayout(id);
     audit(request, 'stay.payout.unlink', { payout: id });
     return { ok: true };
+  });
+
+  // Which business a Hospitable property belongs to.
+  app.post('/api/stays/properties/:id', async (request) => {
+    const id = idOf(request);
+    const { entityId } = parse(z.object({ entityId: z.number().int().positive().nullable() }), request.body);
+    if (!stays.setPropertyBusiness(id, entityId)) throw new HttpError(404, 'That property was not found.');
+    audit(request, 'stay.property.business', { property: id, entityId });
+    return { options: stays.options() };
   });
 
   /* ---------- Hospitable connection ---------- */

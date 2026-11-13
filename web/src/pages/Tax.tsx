@@ -8,6 +8,8 @@ import { money, plural, wholeMoney } from '../format';
 import { Banner, Button, Card, Empty, Field, Input, Loading, PageHeader, Select, Stat, TD, TH, TR } from '../ui';
 
 const STATUS_LABELS: Record<string, string> = { business: 'Business', personal: 'Personal' };
+// Where each form's line is kept on a category.
+const LINE_KEYS: Record<string, 'scheduleC' | 'scheduleE' | 'form1065' | 'form8825'> = { 'schedule-c': 'scheduleC', 'schedule-e': 'scheduleE', 'form-1065': 'form1065', 'form-8825': 'form8825' };
 const FIELD_LABELS: Record<string, string> = {
   zip: 'Delivered to',
   payment: 'Payment method is',
@@ -87,7 +89,7 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
 
   const setLine = (category: Meta['categories'][number], line: string) =>
     act(async () => {
-      const key = form === 'schedule-e' ? 'scheduleE' : 'scheduleC';
+      const key = LINE_KEYS[form] ?? 'scheduleC';
       await post('/api/categories', { ...category, [key]: line || null });
       onMetaChange();
     });
@@ -117,7 +119,7 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
   const estimated = data ? data.lines.reduce((sum: number, line: any) => sum + line.estimated, 0) : 0;
   const saveCsv = (detail: string) =>
     download(`/api/tax/export.csv?${query}&detail=${detail}`, `${form}_${year && year !== 'all' ? year : 'all-years'}_${detail}.csv`).catch((e) => setError(e.message));
-  const lineKey = form === 'schedule-e' ? 'scheduleE' : 'scheduleC';
+  const lineKey = LINE_KEYS[form] ?? 'scheduleC';
 
   return (
     <>
@@ -156,8 +158,11 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
         </Field>
         <Field label="Form">
           <Select value={form} onChange={(e) => setForm(e.target.value)}>
-            <option value="schedule-c">Schedule C (business)</option>
-            <option value="schedule-e">Schedule E (rental)</option>
+            {Object.entries(forms).map(([id, f]) => (
+              <option key={id} value={id}>
+                {f.name}
+              </option>
+            ))}
           </Select>
         </Field>
         <Field label="Delivered to">

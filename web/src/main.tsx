@@ -5,6 +5,7 @@ import './index.css';
 import { get, onSignedOut, post } from './api';
 import type { Meta } from './filters';
 import { Layout } from './Layout';
+import { BusinessProvider } from './business';
 import { Accounts } from './pages/Accounts';
 import { Dashboard } from './pages/Dashboard';
 import { Import } from './pages/Import';
@@ -86,6 +87,7 @@ function App() {
   }
 
   return (
+    <BusinessProvider entities={meta?.entities ?? []}>
     <Layout username={auth.user.username} onSignOut={signOut}>
       {error && <Banner>{error}</Banner>}
       <Routes>
@@ -111,6 +113,7 @@ function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
+    </BusinessProvider>
   );
 }
 

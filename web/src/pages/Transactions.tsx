@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Download, Search, Upload, X } from 'lucide-react';
 import { download, useApi } from '../api';
+import { useBusiness } from '../business';
 import { BulkBar, TxRow, txGrid } from '../bank';
 import { when } from '../bank';
 import type { Account, Transaction } from '../bank';
@@ -16,6 +17,7 @@ const PAGE = 50;
 // The API query for the bank filters in the address bar.
 export function useBankQuery() {
   const filters = useFilters();
+  const { business } = useBusiness();
   const query = (extra: Record<string, string | number> = {}) => {
     const out = new URLSearchParams();
     const { from, to, years } = filters.range();
@@ -23,6 +25,7 @@ export function useBankQuery() {
     if (to) out.set('to', to);
     for (const y of years || []) out.append('years', y);
     for (const key of ['account', 'category', 'entity']) for (const v of filters.values(key)) out.append(key, v);
+    if (business && !filters.values('entity').length) out.append('entity', String(business));
     for (const key of ['status', 'kind', 'direction', 'source', 'q', 'import', 'outcome', 'unmatched']) if (filters.value(key)) out.set(key, filters.value(key));
     for (const [key, v] of Object.entries(extra)) out.set(key, String(v));
     return out.toString();
