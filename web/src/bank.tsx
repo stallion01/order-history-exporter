@@ -57,6 +57,8 @@ export interface Transaction {
   sources: string[];
   files: { id: number; name: string | null; source: string }[];
   receiptId: number | null;
+  receiptVendor: string | null;
+  possibleReceipts: number[];
   entityId: number | null;
   entitySource: string | null;
   shares: Share[];
@@ -196,9 +198,21 @@ export function TxRow({
             {tx.receiptId && (
               <Link to={`/receipts/${tx.receiptId}`} className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline dark:text-emerald-400">
                 <Paperclip className="size-3" aria-hidden />
-                Receipt
+                {tx.receiptVendor ? `Receipt: ${tx.receiptVendor}` : 'Receipt'}
               </Link>
             )}
+            {!tx.receiptId &&
+              tx.possibleReceipts.map((id, i) => (
+                <Link
+                  key={id}
+                  to={`/receipts/${id}`}
+                  title="A receipt for this amount that isn't attached yet. Open it to attach it."
+                  className="inline-flex items-center gap-0.5 text-amber-700 hover:underline dark:text-amber-400"
+                >
+                  <Paperclip className="size-3" aria-hidden />
+                  {tx.possibleReceipts.length > 1 ? `Possible receipt ${i + 1}` : 'Possible receipt'}
+                </Link>
+              ))}
             {tx.stays.length > 0 && (
               <Link
                 to={tx.stays.length === 1 ? `/stays/${tx.stays[0].id}` : `/stays?deposit=${tx.id}`}

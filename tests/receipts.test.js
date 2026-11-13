@@ -28,6 +28,7 @@ const READINGS = {
   later: { vendor: 'Corner Store', date: '2026-03-20', total: 9.99, tax: null, card_last4: null, category: null },
   sure: { vendor: 'Paint Barn', date: '2026-04-02', total: 61.2, tax: 4, card_last4: null, category: 'Building & Repair Materials', category_confidence: 'high' },
   unsure: { vendor: 'Odds and Ends', date: '2026-04-03', total: 18, tax: null, card_last4: null, category: 'Office Supplies', category_confidence: 'medium' },
+  maybe: { vendor: 'Mystery Shop', date: '2026-05-01', total: 23.45, tax: null, card_last4: null, category: null },
   smudged: { vendor: 'Paint Barn', date: '2026-04-04', total: 33, tax: null, card_last4: null, category: 'Building & Repair Materials', category_confidence: 'high', confidence: 'low' },
 };
 async function fakeReader(file) {
@@ -302,4 +303,21 @@ test('a receipt the reader is sure of is confirmed on its own; anything doubtful
   const mine = await read(sure);
   assert.equal(mine.checkedBy, 'user');
   assert.equal(mine.category, 'Office Supplies');
+});
+
+test('a charge shows a receipt of its amount that is not attached yet, until it is', async () => {
+  await post('/api/bank/import', { content: 'Date,Description,Amount\n05/02/2026,ACME 5,-23.45\n', accountId: 1 });
+  const { id } = await upload('maybe');
+  await settled();
+  // A different name and no card number: not attached on its own.
+  assert.equal((await get(`/api/receipts/${id}`)).receipt.transactionId, null);
+  let tx = (await get('/api/bank/transactions?q=acme&preset=all')).transactions[0];
+  assert.deepEqual(tx.possibleReceipts, [id]);
+  assert.equal(tx.receiptId, null);
+
+  await post(`/api/receipts/${id}/link`, { transactionId: tx.id });
+  tx = (await get('/api/bank/transactions?q=acme&preset=all')).transactions[0];
+  assert.equal(tx.receiptId, id);
+  assert.equal(tx.receiptVendor, 'Mystery Shop');
+  assert.deepEqual(tx.possibleReceipts, []);
 });

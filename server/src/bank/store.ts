@@ -907,6 +907,9 @@ export function createBankStore(db: DatabaseSync) {
           .sort((a, b) => a.id - b.id)
       : [],
     receiptId: row.receipt_id ?? null,
+    receiptVendor: row.receipt_vendor ?? null,
+    // Receipts not linked to anything yet with this charge's exact amount, dated just before it.
+    possibleReceipts: row.possible_receipts ? String(row.possible_receipts).split(',').map(Number) : [],
     entityId: row.entity_id ?? null,
     entitySource: row.entity_source ?? null,
     shares: row.shares
@@ -949,6 +952,13 @@ export function createBankStore(db: DatabaseSync) {
       .prepare(
         `SELECT t.*, a.name AS account_name, pa.name AS transfer_account,
                 (SELECT r.id FROM receipts r WHERE r.transaction_id = t.id ORDER BY r.id LIMIT 1) AS receipt_id,
+                (SELECT r.vendor FROM receipts r WHERE r.transaction_id = t.id ORDER BY r.id LIMIT 1) AS receipt_vendor,
+                CASE WHEN t.amount < 0 AND t.kind != 'transfer' AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.transaction_id = t.id) THEN
+                  (SELECT GROUP_CONCAT(r.id) FROM receipts r
+                     WHERE r.transaction_id IS NULL AND r.status = 'read' AND r.total > 0 AND COALESCE(r.match_source, '') != 'user'
+                       AND CAST(ROUND(r.total * 100) AS INTEGER) = -CAST(ROUND(t.amount * 100) AS INTEGER)
+                       AND (r.receipt_date IS NULL OR t.posted BETWEEN date(r.receipt_date, '-3 days') AND date(r.receipt_date, '+10 days')))
+                END AS possible_receipts,
                 (SELECT GROUP_CONCAT(es.entity_id || ':' || es.percent) FROM tx_entity_shares es WHERE es.transaction_id = t.id) AS shares,
                 (SELECT GROUP_CONCAT(l.store || char(2) || l.order_id || char(2) || l.amount, char(1)) FROM order_links l WHERE l.transaction_id = t.id) AS linked_orders,
                 (SELECT GROUP_CONCAT(DISTINCT s.source) FROM bank_tx_sources s WHERE s.transaction_id = t.id) AS sources,
