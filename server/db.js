@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -574,6 +574,19 @@ const SCHEMA_V17 = `
 // Hospitable properties and leases each belong to one. Categories gain lines on Form
 // 1065 (a partnership's trade or business, page 1) and Form 8825 (its rental real
 // estate), suggested from their Schedule C and E lines.
+// Leases: the names a tenant's rent arrives under at the bank, so deposits can be
+// matched to the lease, and the matches the user took back, so they aren't made again.
+const SCHEMA_V19 = `
+  ALTER TABLE leases ADD COLUMN payers TEXT;
+  -- Rent due each month, for a lease without a month-by-month schedule.
+  ALTER TABLE leases ADD COLUMN monthly_rent REAL;
+  CREATE TABLE lease_link_rejections (
+    lease_id INTEGER NOT NULL REFERENCES leases (id) ON DELETE CASCADE,
+    transaction_id INTEGER NOT NULL REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    PRIMARY KEY (lease_id, transaction_id)
+  );
+`;
+
 const SCHEMA_V18 = `
   ALTER TABLE entities ADD COLUMN activity TEXT;
   ALTER TABLE entities ADD COLUMN tax_form TEXT;
@@ -773,6 +786,7 @@ function migrate(db, file) {
     if (version < 16) db.exec(SCHEMA_V16);
     if (version < 17) db.exec(SCHEMA_V17);
     if (version < 18) db.exec(SCHEMA_V18);
+    if (version < 19) db.exec(SCHEMA_V19);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

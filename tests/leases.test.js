@@ -132,3 +132,92 @@ test('removing a payment or a lease takes its transactions out of the ledger', a
   assert.equal((await ledger()).filter((t) => t.sources.includes('lease')).length, 0);
   assert.equal((await get('/api/leases')).leases.length, 0);
 });
+
+// Dates around today, so the rent roll and the expiry reminder have something to show.
+const day = (offset) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const monthOf = (offset) => {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+const csvDate = (iso) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(0, 4)}`;
+let robin;
+// Lease changes send the whole lease back.
+const change = async (id, patch) => {
+  const { lease } = await get(`/api/leases/${id}`);
+  const keep = ["ref", "entityId", "propertyId", "unit", "tenant", "phone", "email", "start", "end", "rent", "monthlyRent", "deposit", "channel", "payers", "ended", "note"];
+  return post(`/api/leases/${id}`, { ...Object.fromEntries(keep.map((k) => [k, lease[k]])), ...patch });
+};
+
+test('rent from a tenant is found in the bank by the names they pay from', async () => {
+  const accounts = (await get('/api/bank/accounts')).accounts;
+  const checking = accounts.find((a) => a.name === 'Business checking');
+  const into = (iso, text, amount) =>
+    post('/api/bank/import', { content: `Date,Description,Amount\n${csvDate(iso)},${text},${amount}\n`, fileName: `dep-${iso}-${amount}.csv`, accountId: checking.id });
+  await into(`${monthOf(-2)}-03`, 'ZELLE FROM ROBIN Q SAMPLE', '1000.00');
+  await into(`${monthOf(-2)}-05`, 'ZELLE FROM SOMEONE ELSE', '1000.00');
+  const { lease } = await post('/api/leases', {
+    unit: 'Bldg 1 Apt B',
+    tenant: 'Robin Sample',
+    start: `${monthOf(-3)}-01`,
+    end: day(30),
+    monthlyRent: 1000,
+    payers: 'Robin Q Sample',
+  });
+  robin = lease.id;
+  let detail = await get(`/api/leases/${robin}`);
+  assert.deepEqual(detail.payments.map((p) => [p.date, p.amount, p.linked]), [[`${monthOf(-2)}-03`, 1000, true]], 'linked when the lease was added');
+  assert.equal(detail.lease.monthlyRent, 1000);
+  assert.equal(detail.schedule[0].month, monthOf(-3), 'monthly rent from the first month');
+
+  // A later import links too, under either name; a short name alone is ignored.
+  await into(`${monthOf(-1)}-02`, 'ZELLE FROM R SAMPLE', '600.00');
+  detail = await get(`/api/leases/${robin}`);
+  assert.equal(detail.payments.length, 1, 'not a name on the lease yet');
+  await change(robin, { payers: 'Robin Q Sample, ROBINSAMPLE LLC, R Sa' });
+  detail = await get(`/api/leases/${robin}`);
+  assert.equal(detail.payments.length, 1, '"R Sa" is too short to trust');
+  await into(`${monthOf(-1)}-04`, 'DEPOSIT ROBINSAMPLE LLC', '600.00');
+  detail = await get(`/api/leases/${robin}`);
+  assert.equal(detail.payments.length, 2, 'found on import');
+  const tx = (await ledger()).find((t) => t.description === 'DEPOSIT ROBINSAMPLE LLC');
+  assert.equal(tx.category, 'Rental Income');
+
+  // Taking a found payment off the lease keeps it from coming back.
+  const wrong = detail.payments.find((p) => p.amount === 600);
+  await post(`/api/leases/${robin}/payments/${wrong.id}/delete`);
+  await change(robin, { tenant: 'Robin Sample' });
+  assert.equal((await get(`/api/leases/${robin}`)).payments.length, 1);
+});
+
+test('the rent roll shows each unit month by month', async () => {
+  await post('/api/leases', { unit: 'Bldg 1 Apt A', tenant: 'Cash Payer', start: `${monthOf(-1)}-01`, monthlyRent: 800, channel: 'Cash' });
+  const roll = await get('/api/leases/rent-roll');
+  assert.equal(roll.months.length, 12);
+  assert.equal(roll.months[11], monthOf(0));
+  assert.deepEqual(roll.units.map((u) => [u.unit, u.cash]), [['Bldg 1 Apt A', true], ['Bldg 1 Apt B', false]]);
+  const b = roll.units[1].cells;
+  const at = (offset) => b.find((c) => c.month === monthOf(offset));
+  assert.equal(at(-4).state, 'vacant');
+  assert.equal(at(-3).state, 'paid', 'rent pays the oldest month first');
+  assert.equal(at(-2).state, 'missed');
+  assert.equal(roll.units[1].cells.filter((c) => c.state === 'paid').length, 1);
+  assert.equal(at(0).state, 'due');
+  assert.equal(at(0).leases[0].tenant, 'Robin Sample');
+  const total = roll.totals.find((t) => t.month === monthOf(-2));
+  assert.equal(total.collected, 1000);
+  assert.equal(total.expected, 1000);
+});
+
+test('leases ending within 45 days are listed for the reminder', async () => {
+  const { leases, expiring } = await get('/api/leases');
+  assert.deepEqual(expiring.map((l) => [l.id, l.daysLeft]), [[robin, 30]]);
+  assert.equal(leases.find((l) => l.tenant === 'Cash Payer').daysLeft, null);
+  await change(robin, { end: day(200) });
+  assert.equal((await get('/api/leases')).expiring.length, 0);
+});

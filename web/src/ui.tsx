@@ -120,11 +120,12 @@ export function MultiSelect({
   );
 }
 
-export function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+export function Field({ label, children, className, hint }: { label: string; children: ReactNode; className?: string; hint?: string }) {
   return (
     <label className={cx('flex min-w-0 flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-400', className)}>
       {label}
       {children}
+      {hint && <span className="font-normal text-slate-500 dark:text-slate-400">{hint}</span>}
     </label>
   );
 }

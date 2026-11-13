@@ -7,6 +7,7 @@ import { post, useApi } from '../api';
 import { businessQuery, useBusiness } from '../business';
 import { money } from '../format';
 import { STATUS_LABELS, dayText, unitColour } from '../leases';
+import { ExpiryList, RentRollCard } from '../rentroll';
 import type { Lease, LeaseDetailData, LeaseList } from '../leases';
 import { Banner, Button, Card, Empty, Field, Input, Loading, PageHeader, Select, Stat, cx } from '../ui';
 
@@ -27,7 +28,7 @@ export function Leases() {
     <>
       <PageHeader
         title={current ? `Leases: ${current.name}` : 'Leases'}
-        description="Mid-term tenancies: rent expected each month, what was paid, and security deposits held. Payments are in your transactions as rental income."
+        description="Tenancies: rent due each month, what was paid, when leases end, and security deposits held. Rent in your bank is found and linked by the names tenants pay from."
         actions={
           <Button variant="primary" onClick={() => setAdding(!adding)}>
             <Plus className="size-4" aria-hidden /> New lease
@@ -35,7 +36,7 @@ export function Leases() {
         }
       />
       {data.error && <Banner>{data.error.message}</Banner>}
-      {adding && list && <NewLease units={list.units} onCancel={() => setAdding(false)} />}
+      {adding && list && <NewLease units={list.units} leases={list.leases} onCancel={() => setAdding(false)} />}
       {!list && data.loading && <Loading />}
       {list && (
         <>
@@ -49,6 +50,8 @@ export function Leases() {
             />
             <Stat label="Deposits held" value={money(list.totals.depositsHeld)} hint="To pay back or keep at the end" />
           </div>
+          <RentRollCard query={businessQuery(business).slice(1)} />
+          <ExpiryList leases={list.leases} />
           {!list.leases.length && (
             <Card className="mt-5">
               <Empty>No leases yet. Add one to track its rent and deposit.</Empty>
@@ -76,6 +79,7 @@ export function Leases() {
 
 function LeaseCard({ lease }: { lease: Lease }) {
   const target = lease.scheduled || lease.rent || 0;
+  const ending = lease.status === 'active' && lease.daysLeft !== null && lease.daysLeft <= 45;
   const share = target > 0 ? Math.min(1, lease.collected / target) : 0;
   return (
     <Link
@@ -111,17 +115,23 @@ function LeaseCard({ lease }: { lease: Lease }) {
         {lease.owed > 0 && <span className="font-medium text-amber-700 dark:text-amber-400">{money(lease.owed)} owed</span>}
         <span className="text-slate-600 dark:text-slate-400">Deposit held {money(lease.depositHeld)}</span>
         {lease.unverified > 0 && <span className="text-amber-700 dark:text-amber-400">{lease.unverified} not confirmed</span>}
+        {ending && <span className="font-medium text-red-700 dark:text-red-400">Ends in {lease.daysLeft} days</span>}
       </div>
     </Link>
   );
 }
 
 // A new lease: who, where and when; the rent schedule and payments follow on its page.
-function NewLease({ units, onCancel }: { units: LeaseList['units']; onCancel: () => void }) {
+function NewLease({ units, leases, onCancel }: { units: LeaseList['units']; leases: Lease[]; onCancel: () => void }) {
   const navigate = useNavigate();
   const { business, entities } = useBusiness();
   const [entityId, setEntityId] = useState<string>(business ? String(business) : '');
-  const [form, setForm] = useState({ unit: units[0]?.name || '', tenant: '', start: '', end: '', rent: '', deposit: '', channel: '' });
+  const [form, setForm] = useState({ unit: '', tenant: '', start: '', end: '', rent: '', monthlyRent: '', deposit: '', channel: '', payers: '' });
+  // Units to pick from: the chosen business's rentals and units already leased.
+  const chosen = entityId ? Number(entityId) : null;
+  const names = [...new Set([...units.filter((u) => !chosen || u.entityId === chosen).map((u) => u.name), ...leases.filter((l) => !chosen || l.entityId === chosen).map((l) => l.unit)])].sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true })
+  );
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [key]: e.target.value });
@@ -140,8 +150,10 @@ function NewLease({ units, onCancel }: { units: LeaseList['units']; onCancel: ()
         start: form.start,
         end: form.end || null,
         rent: form.rent ? Number(form.rent) : null,
+        monthlyRent: form.monthlyRent ? Number(form.monthlyRent) : null,
         deposit: form.deposit ? Number(form.deposit) : null,
         channel: form.channel || null,
+        payers: form.payers || null,
       });
       navigate(`/leases/${result.lease.id}`);
     } catch (e) {
@@ -155,17 +167,12 @@ function NewLease({ units, onCancel }: { units: LeaseList['units']; onCancel: ()
       {error && <Banner>{error}</Banner>}
       <form onSubmit={save} className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Field label="Unit">
-          {units.length ? (
-            <Select value={form.unit} onChange={set('unit')}>
-              {units.map((u) => (
-                <option key={u.id} value={u.name}>
-                  {u.name}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <Input value={form.unit} onChange={set('unit')} required />
-          )}
+          <Input value={form.unit} onChange={set('unit')} list="new-lease-units" required placeholder="e.g. Building 1, Apt A" />
+          <datalist id="new-lease-units">
+            {names.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
         </Field>
         <Field label="Tenant" className="col-span-1 md:col-span-3">
           <Input value={form.tenant} onChange={set('tenant')} required placeholder="Name(s)" />
@@ -176,8 +183,11 @@ function NewLease({ units, onCancel }: { units: LeaseList['units']; onCancel: ()
         <Field label="Ends">
           <Input type="date" value={form.end} onChange={set('end')} />
         </Field>
-        <Field label="Total rent ($)">
-          <Input type="number" min="0" step="0.01" value={form.rent} onChange={set('rent')} />
+        <Field label="Monthly rent ($)">
+          <Input type="number" min="0" step="0.01" value={form.monthlyRent} onChange={set('monthlyRent')} />
+        </Field>
+        <Field label="Or total rent ($)">
+          <Input type="number" min="0" step="0.01" value={form.rent} onChange={set('rent')} placeholder="Short stays" />
         </Field>
         <Field label="Security deposit ($)">
           <Input type="number" min="0" step="0.01" value={form.deposit} onChange={set('deposit')} />
@@ -195,9 +205,12 @@ function NewLease({ units, onCancel }: { units: LeaseList['units']; onCancel: ()
           </Field>
         )}
         <Field label="Paid by" className="col-span-2">
-          <Input value={form.channel} onChange={set('channel')} placeholder="Zelle, PayPal, check…" />
+          <Input value={form.channel} onChange={set('channel')} placeholder="Zelle, check, cash…" />
         </Field>
-        <div className="col-span-2 flex items-end justify-end gap-2">
+        <Field label="Names on their bank payments" className="col-span-2 md:col-span-4" hint="Comma-separated, as they appear on deposits; their rent is then found and linked">
+          <Input value={form.payers} onChange={set('payers')} placeholder="e.g. Jordan Smith, J Smith" />
+        </Field>
+        <div className="col-span-2 flex items-end justify-end gap-2 md:col-span-4">
           <Button onClick={onCancel}>Cancel</Button>
           <Button type="submit" variant="primary" busy={busy}>
             Add lease

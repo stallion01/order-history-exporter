@@ -25,11 +25,25 @@ export interface Lease {
   owed: number;
   depositHeld: number;
   unverified: number;
+  // Names that appear on this tenant's bank deposits, used to find their rent.
+  payers: string | null;
+  // Rent due each month, for a lease with no month-by-month schedule.
+  monthlyRent: number | null;
+  // Days until the lease ends; null when open-ended.
+  daysLeft: number | null;
 }
 export interface LeaseList {
   leases: Lease[];
   totals: { active: number; rentThisYear: number; owed: number; depositsHeld: number };
   units: { id: string; name: string; entityId: number | null }[];
+  // Active leases ending within 45 days, soonest first.
+  expiring: Lease[];
+}
+export type RollState = 'paid' | 'partial' | 'due' | 'missed' | 'vacant';
+export interface RentRoll {
+  months: string[];
+  units: { unit: string; cash: boolean; cells: { month: string; expected: number; paid: number; state: RollState; leases: { id: number; tenant: string }[] }[] }[];
+  totals: { month: string; expected: number; collected: number }[];
 }
 export interface ScheduleMonth {
   month: string;

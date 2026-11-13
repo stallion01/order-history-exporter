@@ -39,6 +39,10 @@ export interface LeaseInput {
   channel?: string | null;
   ended?: boolean;
   note?: string | null;
+  // Names the rent arrives under at the bank, one per line or comma.
+  payers?: string | null;
+  // Rent due each month, when there's no month-by-month schedule.
+  monthlyRent?: number | null;
 }
 export interface PaymentInput {
   date: string;
@@ -54,6 +58,20 @@ export interface PaymentInput {
 
 const cents = (n: number) => Math.round(n * 100) / 100;
 const today = () => new Date().toISOString().slice(0, 10);
+const DAY_MS = 864e5;
+const monthsBefore = (month: string, n: number) => {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1 - n, 1)).toISOString().slice(0, 7);
+};
+const shift = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+const letters = (text: string) => text.toLowerCase().replace(/[^a-z]/g, '');
+// Banks cut long names short ("VERONICA BARROSO ARTE"), so a name is matched on its
+// first 16 letters.
+export const payerKeys = (payers: string | null | undefined) =>
+  String(payers || '')
+    .split(/[,;\n]+/)
+    .map((p) => letters(p).slice(0, 16))
+    .filter((p) => p.length >= 5);
 
 export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }) {
   const now = () => new Date().toISOString();
@@ -170,6 +188,19 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
     };
   }
 
+  // The rent expected each month: the schedule when one was set, otherwise the
+  // monthly rent (not the lease's total) from the first month to the last (or to this month, for a lease with
+  // no end date).
+  function expectedMonths(row: Row, months: Row[]) {
+    if (months.length || !row.monthly_rent) return months;
+    const out: Row[] = [];
+    const last = (row.end_date as string | null)?.slice(0, 7) ?? today().slice(0, 7);
+    for (let m = (row.start_date as string).slice(0, 7); m <= last; m = monthsBefore(m, -1)) out.push({ month: m, amount: row.monthly_rent, note: null });
+    return out;
+  }
+
+  const daysLeft = (row: Row) => (row.end_date ? Math.round((Date.parse(`${row.end_date}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / DAY_MS) : null);
+
   const toLease = (row: Row, months: Row[], payments: Row[]) => ({
     id: row.id as number,
     ref: row.ref as string | null,
@@ -186,8 +217,11 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
     channel: row.channel as string | null,
     ended: Boolean(row.ended),
     note: row.note as string | null,
+    payers: (row.payers as string | null) ?? null,
+    monthlyRent: (row.monthly_rent as number | null) ?? null,
     status: statusOf(row),
-    ...totals(row, months, payments),
+    daysLeft: daysLeft(row),
+    ...totals(row, expectedMonths(row, months), payments),
   });
 
   const monthsOf = (id: number) => db.prepare('SELECT month, amount, note FROM lease_months WHERE lease_id = ? ORDER BY month').all(id) as Row[];
@@ -208,6 +242,8 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
     ).n as number;
     return {
       leases,
+      // Leases still running that end within 45 days, soonest first.
+      expiring: leases.filter((l) => l.status === 'active' && l.daysLeft !== null && l.daysLeft <= 45).sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0)),
       totals: {
         active: leases.filter((l) => l.status === 'active').length,
         rentThisYear: cents(rentThisYear),
@@ -221,7 +257,7 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
   function get(id: number) {
     const row = db.prepare('SELECT * FROM leases WHERE id = ?').get(id) as Row | undefined;
     if (!row) return null;
-    const months = monthsOf(id);
+    const months = expectedMonths(row, monthsOf(id));
     const payments = paymentsOf(id);
     // Each month's rent against what was collected, oldest first: payments fill the
     // months in order, so a month is paid once enough rent has come in.
@@ -295,8 +331,8 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
     return Number(
       db
         .prepare(
-          `INSERT INTO leases (ref, property_id, unit, tenant, phone, email, start_date, end_date, rent, deposit, channel, ended, note, created_at, updated_at, entity_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO leases (ref, property_id, unit, tenant, phone, email, start_date, end_date, rent, deposit, channel, ended, note, created_at, updated_at, entity_id, payers, monthly_rent)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           input.ref ?? null,
@@ -314,18 +350,20 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
           input.note ?? null,
           stamp,
           stamp,
-          businessFor(input)
+          businessFor(input),
+          input.payers?.trim() || null,
+          input.monthlyRent ?? null
         ).lastInsertRowid
     );
   }
 
   function update(id: number, input: LeaseInput) {
     check(input);
-    const before = db.prepare('SELECT unit, tenant, entity_id FROM leases WHERE id = ?').get(id) as Row | undefined;
+    const before = db.prepare('SELECT unit, tenant, entity_id, payers, monthly_rent FROM leases WHERE id = ?').get(id) as Row | undefined;
     if (!before) return false;
     const entity = input.entityId !== undefined ? input.entityId : (before.entity_id as number | null);
     db.prepare(
-      `UPDATE leases SET ref = ?, property_id = ?, unit = ?, tenant = ?, phone = ?, email = ?, start_date = ?, end_date = ?, rent = ?, deposit = ?, channel = ?, ended = ?, note = ?, updated_at = ?, entity_id = ? WHERE id = ?`
+      `UPDATE leases SET ref = ?, property_id = ?, unit = ?, tenant = ?, phone = ?, email = ?, start_date = ?, end_date = ?, rent = ?, deposit = ?, channel = ?, ended = ?, note = ?, updated_at = ?, entity_id = ?, payers = ?, monthly_rent = ? WHERE id = ?`
     ).run(
       input.ref ?? null,
       input.propertyId ?? null,
@@ -342,6 +380,8 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
       input.note ?? null,
       now(),
       entity ?? null,
+      input.payers !== undefined ? input.payers?.trim() || null : ((before.payers as string | null) ?? null),
+      input.monthlyRent !== undefined ? input.monthlyRent : ((before.monthly_rent as number | null) ?? null),
       id
     );
     // The ledger names the unit and tenant, and the business decides the account.
@@ -413,12 +453,105 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
     const before = db.prepare('SELECT * FROM lease_payments WHERE id = ? AND lease_id = ?').get(paymentId, leaseId) as Row | undefined;
     if (!before) return false;
     removeLedger(paymentId);
-    if (before.transaction_id) bank.updateTransactions([before.transaction_id], { category: null, status: null, kind: null });
+    if (before.transaction_id) {
+      bank.updateTransactions([before.transaction_id], { category: null, status: null, kind: null });
+      // Taken back by hand, so it isn't matched to this lease again.
+      db.prepare('INSERT OR IGNORE INTO lease_link_rejections (lease_id, transaction_id) VALUES (?, ?)').run(leaseId, before.transaction_id);
+    }
     db.prepare('DELETE FROM lease_payments WHERE id = ?').run(paymentId);
     return true;
   }
 
-  return { list, get, candidates, create, update, remove, setSchedule, addPayment, updatePayment, removePayment };
+  // Rent that reached the bank under a name on the lease becomes its payment: money in
+  // to the lease's business, from a month before it starts to a month after it ends,
+  // not yet a lease payment, and not filed as anything but rent. Returns how many.
+  function match(only: number | null = null) {
+    const leases = db.prepare(`SELECT * FROM leases WHERE payers IS NOT NULL ${only ? 'AND id = ?' : ''}`).all(...(only ? [only] : [])) as Row[];
+    let added = 0;
+    for (const lease of leases) {
+      const keys = payerKeys(lease.payers);
+      if (!keys.length) continue;
+      const rows = db
+        .prepare(
+          `SELECT t.id, t.posted, t.amount, t.description, t.payee FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+           WHERE t.amount > 0 AND t.kind = 'normal' AND t.posted BETWEEN ? AND ?
+             AND (t.category IS NULL OR t.category = ?)
+             AND (? IS NULL OR COALESCE(t.entity_id, a.entity_id) = ?)
+             AND NOT EXISTS (SELECT 1 FROM bank_tx_sources s WHERE s.transaction_id = t.id AND s.source = 'lease')
+             AND NOT EXISTS (SELECT 1 FROM lease_payments p WHERE p.transaction_id = t.id)
+             AND NOT EXISTS (SELECT 1 FROM lease_link_rejections r WHERE r.transaction_id = t.id AND r.lease_id = ?)
+           ORDER BY t.posted`
+        )
+        .all(shift(lease.start_date, -31), shift(lease.end_date || today(), 31), RENTAL_INCOME, lease.entity_id ?? null, lease.entity_id ?? null, lease.id) as Row[];
+      for (const tx of rows) {
+        const text = letters(`${tx.description} ${tx.payee || ''}`);
+        if (!keys.some((k) => text.includes(k))) continue;
+        addPayment(lease.id, { date: tx.posted, amount: tx.amount, purpose: 'rent', transactionId: tx.id });
+        added++;
+      }
+    }
+    return added;
+  }
+
+  // Rent month by month for each unit over the last months: what was due, what came
+  // in towards it, and whether it's paid. Also rent received each month in all.
+  function rentRoll(entity: number | null = null, count = 12) {
+    const current = today().slice(0, 7);
+    const months: string[] = [];
+    for (let i = count - 1; i >= 0; i--) months.push(monthsBefore(current, i));
+    const first = months[0];
+    const rows = db.prepare(`SELECT * FROM leases ${entity ? 'WHERE entity_id = ?' : ''} ORDER BY start_date`).all(...(entity ? [entity] : [])) as Row[];
+    type Cell = { month: string; expected: number; paid: number; state: string; leases: { id: number; tenant: string }[] };
+    const units = new Map<string, { unit: string; cash: boolean; cells: Map<string, Cell> }>();
+    for (const row of rows) {
+      if (row.end_date && row.end_date.slice(0, 7) < first) continue;
+      const detail = get(row.id as number);
+      if (!detail) continue;
+      const unit = units.get(row.unit) ?? { unit: row.unit as string, cash: false, cells: new Map<string, Cell>() };
+      if (detail.lease.status === 'active' && /cash/i.test(row.channel || '')) unit.cash = true;
+      units.set(row.unit, unit);
+      for (const s of detail.schedule) {
+        if (s.month < first || s.month > current) continue;
+        const cell: Cell = unit.cells.get(s.month) ?? { month: s.month, expected: 0, paid: 0, state: '', leases: [] };
+        cell.expected += s.amount;
+        cell.paid += s.paid;
+        if (!cell.leases.some((l) => l.id === row.id)) cell.leases.push({ id: row.id as number, tenant: row.tenant as string });
+        unit.cells.set(s.month, cell);
+      }
+    }
+    const collected = new Map<string, number>();
+    for (const p of db
+      .prepare(
+        `SELECT substr(p.paid_on, 1, 7) AS month, SUM(p.amount) AS n FROM lease_payments p JOIN leases l ON l.id = p.lease_id
+         WHERE p.purpose IN ('rent', 'applied') AND p.paid_on >= ? ${entity ? 'AND l.entity_id = ?' : ''} GROUP BY 1`
+      )
+      .all(`${first}-01`, ...(entity ? [entity] : [])) as Row[])
+      collected.set(p.month, p.n);
+    const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    const list = [...units.values()]
+      .sort((a, b) => byName(a.unit, b.unit))
+      .map((u) => ({
+        unit: u.unit,
+        cash: u.cash,
+        cells: months.map((month) => {
+          const cell = u.cells.get(month);
+          if (!cell || !cell.expected) return { month, expected: 0, paid: 0, state: 'vacant', leases: cell?.leases ?? [] };
+          const state = cell.paid >= cell.expected - 0.005 ? 'paid' : cell.paid > 0 ? 'partial' : month === current ? 'due' : 'missed';
+          return { ...cell, expected: cents(cell.expected), paid: cents(cell.paid), state };
+        }),
+      }));
+    return {
+      months,
+      units: list,
+      totals: months.map((month) => ({
+        month,
+        expected: cents(list.reduce((t, u) => t + (u.cells.find((c) => c.month === month)?.expected ?? 0), 0)),
+        collected: cents(collected.get(month) ?? 0),
+      })),
+    };
+  }
+
+  return { list, get, candidates, create, update, remove, setSchedule, addPayment, updatePayment, removePayment, match, rentRoll };
 }
 
 export type LeaseService = ReturnType<typeof leaseService>;

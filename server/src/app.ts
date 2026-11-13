@@ -205,7 +205,16 @@ export function buildApp(options: AppOptions): FastifyInstance {
   receiptRoutes(app, receipts, categoryNames);
   reportRoutes(app, db, () => bank.applyRules());
   stayRoutes(app, stays);
-  leaseRoutes(app, leaseService({ db: db.raw, bank }));
+  // Leases, and new rent at the bank matched to them by the tenant's name.
+  const leases = leaseService({ db: db.raw, bank });
+  bank.onImport(() => {
+    try {
+      leases.match();
+    } catch (err) {
+      app.log.warn({ err }, 'Matching rent to leases failed');
+    }
+  });
+  leaseRoutes(app, leases);
   plRoutes(app, plService({ db: db.raw, bank, correlate }));
   authRoutes(app, store, tokens);
 

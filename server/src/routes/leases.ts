@@ -26,6 +26,8 @@ const leaseBody = z.object({
   channel: text(60),
   ended: z.boolean().optional(),
   note: text(2000),
+  payers: text(500),
+  monthlyRent: money.nullable().optional(),
 });
 const paymentBody = z.object({
   date,
@@ -75,9 +77,16 @@ export function leaseRoutes(app: FastifyInstance, leases: LeaseService) {
     return leases.list(business && /^\d+$/.test(business) ? Number(business) : null);
   });
 
+  // Each unit's rent month by month, for the rent collection view.
+  app.get('/api/leases/rent-roll', async (request) => {
+    const business = queryOf(request.query).get('entity');
+    return leases.rentRoll(business && /^\d+$/.test(business) ? Number(business) : null);
+  });
+
   app.post('/api/leases', async (request) => {
     const body = parse(leaseBody, request.body);
     const id = attempt(() => leases.create(body));
+    leases.match(id);
     audit(request, 'lease.create', { id });
     return found(id);
   });
@@ -88,6 +97,7 @@ export function leaseRoutes(app: FastifyInstance, leases: LeaseService) {
     const id = idOf(request);
     const body = parse(leaseBody, request.body);
     if (!attempt(() => leases.update(id, body))) throw new HttpError(404, 'That lease was not found.');
+    leases.match(id);
     audit(request, 'lease.update', { id });
     return found(id);
   });

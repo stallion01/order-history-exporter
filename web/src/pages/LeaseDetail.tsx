@@ -363,6 +363,8 @@ function EditLease({ detail, onSaved, onCancel }: { detail: LeaseDetailData; onS
     start: lease.start,
     end: lease.end || '',
     rent: lease.rent === null ? '' : String(lease.rent),
+    monthlyRent: lease.monthlyRent === null ? '' : String(lease.monthlyRent),
+    payers: lease.payers || '',
     deposit: lease.deposit === null ? '' : String(lease.deposit),
     channel: lease.channel || '',
     ended: lease.ended,
@@ -385,8 +387,10 @@ function EditLease({ detail, onSaved, onCancel }: { detail: LeaseDetailData; onS
           email: form.email || null,
           end: form.end || null,
           rent: form.rent ? Number(form.rent) : null,
+          monthlyRent: form.monthlyRent ? Number(form.monthlyRent) : null,
           deposit: form.deposit ? Number(form.deposit) : null,
           channel: form.channel || null,
+          payers: form.payers || null,
           note: form.note || null,
         })
       );
@@ -436,7 +440,10 @@ function EditLease({ detail, onSaved, onCancel }: { detail: LeaseDetailData; onS
         <Field label="Ends">
           <Input type="date" value={form.end} onChange={set('end')} />
         </Field>
-        <Field label="Total rent ($)">
+        <Field label="Monthly rent ($)">
+          <Input type="number" min="0" step="0.01" value={form.monthlyRent} onChange={set('monthlyRent')} />
+        </Field>
+        <Field label="Or total rent ($)">
           <Input type="number" min="0" step="0.01" value={form.rent} onChange={set('rent')} />
         </Field>
         <Field label="Security deposit ($)">
@@ -449,6 +456,9 @@ function EditLease({ detail, onSaved, onCancel }: { detail: LeaseDetailData; onS
           <input type="checkbox" checked={form.ended} onChange={(e) => setForm({ ...form, ended: e.target.checked })} className="size-4" />
           Ended early
         </label>
+        <Field label="Names on their bank payments" className="col-span-2 md:col-span-4" hint="Comma-separated, as they appear on deposits; their rent is then found and linked">
+          <Input value={form.payers} onChange={set('payers')} />
+        </Field>
         <Field label="Note" className="col-span-2 md:col-span-4">
           <Input value={form.note} onChange={set('note')} />
         </Field>

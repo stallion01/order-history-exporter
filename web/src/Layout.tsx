@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { ArrowLeftRight, BedDouble, FileCheck2, KeyRound, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, TrendingUp, Upload, Wallet } from 'lucide-react';
 import { BusinessPicker, useBusiness } from './business';
+import { ExpiryWarning } from './rentroll';
 import { cx } from './ui';
 
 // The sidebar order. Phones show the ones marked phone as tabs, the rest under More.
@@ -82,7 +83,10 @@ export function Layout({ username, onSignOut, children }: { username: string; on
             <LogOut className="size-4" aria-hidden />
           </button>
         </header>
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-24 md:px-8 md:pb-10">{children}</main>
+        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-24 md:px-8 md:pb-10">
+          {children}
+          <ExpiryWarning />
+        </main>
       </div>
 
       <nav aria-label="Main" className="safe-bottom fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-slate-200 bg-white md:hidden dark:border-slate-800 dark:bg-slate-900">
