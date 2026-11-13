@@ -264,14 +264,26 @@ export function leaseService({ db, bank }: { db: DatabaseSync; bank: BankStore }
     const months = expectedMonths(row, monthsOf(id));
     const payments = paymentsOf(id);
     // Each month's rent against what was collected, oldest first: payments fill the
-    // months in order, so a month is paid once enough rent has come in.
-    let pot = payments.filter((p) => p.purpose === 'rent' || p.purpose === 'applied').reduce((t, p) => t + toCents(p.amount), 0);
+    // months in order, so a month is paid once enough rent has come in. A month can be
+    // paid by several payments (rent sent in parts), and a payment can run into the
+    // next month; each month lists the payments that went towards it.
+    const queue = payments
+      .filter((p) => p.purpose === 'rent' || p.purpose === 'applied')
+      .sort((a, b) => String(a.paid_on).localeCompare(String(b.paid_on)) || (a.id as number) - (b.id as number))
+      .map((p) => ({ id: p.id as number, left: toCents(p.amount) }));
     const month = today().slice(0, 7);
     const schedule = months.map((m) => {
       const want = toCents(m.amount);
-      const paid = Math.min(pot, want);
-      pot -= paid;
-      return { month: m.month, amount: m.amount, note: m.note, paid: paid / 100, state: paid >= want ? 'paid' : m.month > month ? 'upcoming' : paid > 0 ? 'partial' : 'due' };
+      let paid = 0;
+      const from: number[] = [];
+      while (paid < want && queue.length) {
+        const take = Math.min(queue[0].left, want - paid);
+        paid += take;
+        queue[0].left -= take;
+        if (take > 0 && !from.includes(queue[0].id)) from.push(queue[0].id);
+        if (queue[0].left <= 0) queue.shift();
+      }
+      return { month: m.month, amount: m.amount, note: m.note, paid: paid / 100, state: paid >= want ? 'paid' : m.month > month ? 'upcoming' : paid > 0 ? 'partial' : 'due', payments: from };
     });
     return {
       lease: toLease(row, months, payments),

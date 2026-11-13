@@ -84,7 +84,7 @@ export function LeaseDetail() {
       {lease.note && <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">{lease.note}</p>}
 
       <div className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-        <Schedule leaseId={lease.id} schedule={schedule} act={act} />
+        <Schedule leaseId={lease.id} schedule={schedule} payments={current.payments} act={act} />
         <Payments detail={current} act={act} />
       </div>
 
@@ -109,7 +109,7 @@ export function LeaseDetail() {
 type Act = (fn: () => Promise<LeaseDetailData | unknown>) => Promise<boolean>;
 
 // Rent expected each month, and whether it's been paid (payments fill months in order).
-function Schedule({ leaseId, schedule, act }: { leaseId: number; schedule: ScheduleMonth[]; act: Act }) {
+function Schedule({ leaseId, schedule, payments, act }: { leaseId: number; schedule: ScheduleMonth[]; payments: LeasePayment[]; act: Act }) {
   const [rows, setRows] = useState<{ month: string; amount: string; note: string }[] | null>(null);
   const start = () => setRows(schedule.map((m) => ({ month: m.month, amount: String(m.amount), note: m.note || '' })));
   const save = async () => {
@@ -178,6 +178,7 @@ function Schedule({ leaseId, schedule, act }: { leaseId: number; schedule: Sched
                 <td className={TD}>
                   <span className={cx('rounded-full px-2 py-0.5 text-xs font-medium', MONTH_TONES[m.state])}>{MONTH_LABELS[m.state]}</span>
                   {m.state === 'partial' && <span className="ml-1 text-xs text-slate-500">{money(m.paid)}</span>}
+                  <MonthPayments ids={m.payments} payments={payments} />
                 </td>
               </tr>
             ))}
@@ -187,6 +188,26 @@ function Schedule({ leaseId, schedule, act }: { leaseId: number; schedule: Sched
         <Empty>No months yet. Edit to add the rent expected each month.</Empty>
       )}
     </Card>
+  );
+}
+
+// The payments that paid a month, such as rent sent in two or three parts, with a
+// link to all of their bank transactions together.
+function MonthPayments({ ids, payments }: { ids: number[]; payments: LeasePayment[] }) {
+  const paid = ids.map((id) => payments.find((p) => p.id === id)).filter((p): p is LeasePayment => Boolean(p));
+  if (!paid.length) return null;
+  const transactions = [...new Set(paid.flatMap((p) => p.transactions))];
+  const text = paid.map((p) => `${money(p.amount)} on ${dayText(p.date)}`).join(', ');
+  return (
+    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+      {transactions.length ? (
+        <Link to={`/transactions?preset=all&kind=all&${transactions.map((id) => `id=${id}`).join('&')}`} className="hover:underline" title="Open these in transactions">
+          {text}
+        </Link>
+      ) : (
+        text
+      )}
+    </div>
   );
 }
 
@@ -321,7 +342,7 @@ function Payments({ detail, act }: { detail: LeaseDetailData; act: Act }) {
                   </td>
                   <td className={cx(TD, 'text-right tabular-nums whitespace-nowrap', p.purpose === 'rent' || p.purpose === 'applied' ? 'text-emerald-700 dark:text-emerald-400' : '')}>{money(signed(p))}</td>
                   <td className={`${TD} text-xs`}>
-                    <Link to={p.linked ? `/transactions?preset=custom&from=${p.date}&to=${p.date}&kind=all` : `/transactions?preset=all&kind=all&q=${encodeURIComponent(lease.tenant)}`} className="text-emerald-700 hover:underline dark:text-emerald-400">
+                    <Link to={p.transactions.length ? `/transactions?preset=all&kind=all&${p.transactions.map((id) => `id=${id}`).join('&')}` : `/transactions?preset=all&kind=all&q=${encodeURIComponent(lease.tenant)}`} className="text-emerald-700 hover:underline dark:text-emerald-400">
                       {p.linked ? 'Bank transaction' : p.transactions.length > 1 ? `${p.transactions.length} transactions` : 'Added'}
                     </Link>
                   </td>

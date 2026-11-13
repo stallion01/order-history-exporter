@@ -48,6 +48,8 @@ export function txFiltersFrom(query: Query): TxFilters {
   const direction = query.get('direction');
   const importId = query.get('import') ? Number(query.get('import')) : null;
   if (importId !== null && !Number.isInteger(importId)) throw new HttpError(400, 'Unknown import.');
+  const ids = query.getAll('id').filter(Boolean).map(Number);
+  if (ids.length > 100 || ids.some((n) => !Number.isInteger(n))) throw new HttpError(400, 'Unknown transaction.');
   const outcome = query.get('outcome') || null;
   if (outcome && !IMPORT_OUTCOMES.includes(outcome as ImportOutcome)) throw new HttpError(400, 'Unknown outcome.');
   return {
@@ -67,6 +69,7 @@ export function txFiltersFrom(query: Query): TxFilters {
     entity: query.getAll('entity').filter(Boolean).length ? query.getAll('entity').filter(Boolean).map((e) => (e === 'none' ? e : Number(e))) : null,
     storeUnlinked: query.get('unmatched') === '1',
     asset: query.get('asset') === '1',
+    ids: ids.length ? ids : null,
   };
 }
 

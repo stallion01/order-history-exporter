@@ -74,6 +74,8 @@ export interface TxFilters {
   storeUnlinked?: boolean;
   // Only charges on the asset register (capital purchases).
   asset?: boolean;
+  // Only these transactions, such as the ones a lease payment is linked to.
+  ids?: number[] | null;
   // Only the transactions one import added, matched or found already there.
   importId?: number | null;
   importOutcome?: ImportOutcome | null;
@@ -836,6 +838,10 @@ export function createBankStore(db: DatabaseSync) {
       params.push(filters.status);
     }
     if (filters.asset) clauses.push('EXISTS (SELECT 1 FROM assets s WHERE s.transaction_id = t.id)');
+    if (filters.ids?.length) {
+      clauses.push(`t.id IN (${filters.ids.map(() => '?').join(', ')})`);
+      params.push(...filters.ids);
+    }
     const kind = filters.kind || 'normal';
     if (kind !== 'all') {
       clauses.push('t.kind = ?');

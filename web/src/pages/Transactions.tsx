@@ -24,7 +24,7 @@ export function useBankQuery() {
     if (from) out.set('from', from);
     if (to) out.set('to', to);
     for (const y of years || []) out.append('years', y);
-    for (const key of ['account', 'category', 'entity']) for (const v of filters.values(key)) out.append(key, v);
+    for (const key of ['account', 'category', 'entity', 'id']) for (const v of filters.values(key)) out.append(key, v);
     if (business && !filters.values('entity').length) out.append('entity', String(business));
     for (const key of ['status', 'kind', 'direction', 'source', 'q', 'import', 'outcome', 'unmatched', 'asset']) if (filters.value(key)) out.set(key, filters.value(key));
     for (const [key, v] of Object.entries(extra)) out.set(key, String(v));
@@ -163,6 +163,16 @@ export function Transactions({ meta }: { meta: Meta | null }) {
               className="text-slate-500 hover:text-slate-900 dark:hover:text-white"
               aria-label="Show all transactions again"
             >
+              <X className="size-4" aria-hidden />
+            </button>
+          </span>
+        </div>
+      )}
+      {filters.values('id').length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 dark:border-slate-700 dark:bg-slate-900">
+            {filters.values('id').length === 1 ? 'Showing the linked transaction' : `Showing the ${filters.values('id').length} linked transactions`}
+            <button type="button" onClick={() => filters.set({ id: [] })} className="text-slate-500 hover:text-slate-900 dark:hover:text-white" aria-label="Show all transactions again">
               <X className="size-4" aria-hidden />
             </button>
           </span>

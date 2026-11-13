@@ -55,6 +55,8 @@ export interface ScheduleMonth {
   note: string | null;
   paid: number;
   state: 'paid' | 'partial' | 'due' | 'upcoming';
+  // The payments that went towards this month's rent (ids), oldest first.
+  payments: number[];
 }
 export interface LeasePayment {
   id: number;

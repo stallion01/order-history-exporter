@@ -174,6 +174,10 @@ test('rent from a tenant is found in the bank by the names they pay from', async
   let detail = await get(`/api/leases/${robin}`);
   assert.deepEqual(detail.payments.map((p) => [p.date, p.amount, p.linked]), [[`${monthOf(-2)}-03`, 1000, true]], 'linked when the lease was added');
   assert.equal(detail.lease.monthlyRent, 1000);
+  // The payment's link opens just its own bank transaction, not everything that day.
+  const linkedId = detail.payments[0].transactions[0];
+  const opened = (await get(`/api/bank/transactions?kind=all&preset=all&id=${linkedId}`)).transactions;
+  assert.deepEqual(opened.map((t) => t.description), ['ZELLE FROM ROBIN Q SAMPLE']);
   assert.equal(detail.schedule[0].month, monthOf(-3), 'monthly rent from the first month');
 
   // A later import links too, under either name; a short name alone is ignored.
@@ -221,4 +225,20 @@ test('leases ending within 45 days are listed for the reminder', async () => {
   assert.equal(leases.find((l) => l.tenant === 'Cash Payer').daysLeft, null);
   await change(robin, { end: day(200) });
   assert.equal((await get('/api/leases')).expiring.length, 0);
+});
+
+test('a month paid in parts lists every part, and an overpayment runs into the next month', async () => {
+  const { lease } = await post('/api/leases', { unit: 'Bldg 1 Apt C', tenant: 'Parts Payer', start: `${monthOf(-1)}-01`, monthlyRent: 1300, channel: 'Zelle' });
+  const pay = (date, amount) => post(`/api/leases/${lease.id}/payments`, { date, amount, purpose: 'rent' });
+  await pay(`${monthOf(-2)}-28`, 100);
+  await pay(`${monthOf(-1)}-01`, 400);
+  const last = await pay(`${monthOf(-1)}-02`, 1000);
+  const [first, second] = last.schedule;
+  const ids = (dates) => last.payments.filter((p) => dates.includes(p.date)).map((p) => p.id).sort();
+  assert.equal(first.state, 'paid');
+  assert.deepEqual([...first.payments].sort(), ids([`${monthOf(-2)}-28`, `${monthOf(-1)}-01`, `${monthOf(-1)}-02`]), 'all three parts paid the first month');
+  assert.equal(second.paid, 200);
+  assert.deepEqual(second.payments, ids([`${monthOf(-1)}-02`]), 'what was left of the last part went to the next month');
+  // Each part has its own ledger line, so a month's link can open all of them.
+  assert.equal(last.payments.every((p) => p.transactions.length === 1), true);
 });
