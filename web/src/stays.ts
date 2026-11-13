@@ -122,12 +122,12 @@ export interface AirbnbWeeks {
 
 export const PLATFORM_NAMES: Record<string, string> = { airbnb: 'Airbnb', vrbo: 'Vrbo', booking: 'Booking.com', direct: 'Direct' };
 
-// The same colours as the income chart on the dashboard.
+// The same colours as the income chart on the dashboard; direct bookings keep their own.
 export function platformColor(platform: string) {
   if (platform === 'airbnb') return 'var(--color-airbnb)';
   if (platform === 'vrbo' || platform === 'homeaway') return 'var(--color-vrbo)';
   if (platform === 'booking') return 'var(--color-booking)';
-  return 'var(--color-other-income)';
+  return 'var(--color-direct)';
 }
 
 const day = (iso: string) => {

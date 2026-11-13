@@ -9,8 +9,9 @@
   --color-airbnb: #d55e00;
   --color-vrbo: #009e73;
   --color-booking: #e6a100;
-  --color-lease: #0f9d8a;
-  --color-other-income: #b5589a;
+  --color-lease: #6941c6;
+  --color-other-income: #7a8699;
+  --color-direct: #b5589a;
   /* Stays calendar, coloured by payment. */
   --color-paid: #1f8a4c;
   --color-partial: #c9700a;
@@ -27,8 +28,9 @@
     --color-airbnb: #f07a2a;
     --color-vrbo: #2bbd8f;
     --color-booking: #f2bd3a;
-    --color-lease: #3cc4b0;
-    --color-other-income: #d483bd;
+    --color-lease: #a48af0;
+    --color-other-income: #a3adbd;
+    --color-direct: #d483bd;
     --color-paid: #2fa862;
     --color-partial: #e08a24;
     --color-problem: #e85656;
