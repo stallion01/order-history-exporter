@@ -1,7 +1,7 @@
 // Pieces shared by the Transactions, Review and Accounts pages.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeftRight, BedDouble, Paperclip, Search, ShoppingCart, Unlink } from 'lucide-react';
+import { ArrowLeftRight, BedDouble, FileText, Paperclip, Search, ShoppingCart, Unlink } from 'lucide-react';
 import { get, post } from './api';
 import { money } from './format';
 import { Button, Input, cx } from './ui';
@@ -55,6 +55,7 @@ export interface Transaction {
   statusSource: string | null;
   note: string | null;
   sources: string[];
+  files: { id: number; name: string | null; source: string }[];
   receiptId: number | null;
   entityId: number | null;
   entitySource: string | null;
@@ -93,10 +94,23 @@ export const importLink = (id: number, outcome?: 'added' | 'merged' | 'skipped')
 
 export const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'never');
 
-export function SourceBadges({ sources }: { sources: string[] }) {
+// Where it came from. Statement files link to their import, to check or correct it.
+export function SourceBadges({ sources, files = [] }: { sources: string[]; files?: { id: number; name: string | null; source: string }[] }) {
+  const fromFiles = new Set(files.map((f) => f.source));
   return (
     <>
-      {sources.map((s) => (
+      {files.map((f) => (
+        <Link
+          key={f.id}
+          to={`/import/${f.id}`}
+          title="Open this import"
+          className="inline-flex max-w-48 items-center gap-0.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 hover:underline dark:bg-slate-800 dark:text-emerald-400"
+        >
+          <FileText className="size-3 shrink-0" aria-hidden />
+          <span className="truncate">{f.name || SOURCE_LABELS[f.source] || f.source}</span>
+        </Link>
+      ))}
+      {sources.filter((s) => !fromFiles.has(s)).map((s) => (
         <span key={s} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
           {SOURCE_LABELS[s] || s}
         </span>
@@ -207,7 +221,7 @@ export function TxRow({
               </button>
             )}
             {tx.shares.length > 0 && <span>· Shared: {shareText(tx.shares, entities)}</span>}
-            <SourceBadges sources={tx.sources} />
+            <SourceBadges sources={tx.sources} files={tx.files} />
           </div>
         </div>
         <Amount value={tx.amount} className="text-right font-medium md:order-last md:pt-1" />

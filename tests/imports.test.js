@@ -111,3 +111,16 @@ test('an older import, from before files were kept, still moves what it added', 
   const again = await post('/api/bank/import', { content: TWO_FEB, fileName: 'two-feb.csv', accountId: two });
   assert.equal(again.added, 0);
 });
+
+test('each transaction names the files it came from, to open their import', async () => {
+  const { transactions } = await get(`/api/bank/transactions?account=${two}&kind=all`);
+  assert.ok(transactions.length);
+  for (const tx of transactions) {
+    assert.ok(tx.files.length >= 1);
+    for (const f of tx.files) {
+      assert.equal(f.source, 'csv');
+      assert.ok(Number.isInteger(f.id));
+      assert.match(f.name, /\.csv$/);
+    }
+  }
+});
