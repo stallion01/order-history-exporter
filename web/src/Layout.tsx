@@ -1,12 +1,13 @@
 // The app frame: a sidebar on wide screens, a tab bar along the bottom on phones.
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { ArrowLeftRight, BedDouble, FileCheck2, KeyRound, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, Upload, Wallet } from 'lucide-react';
+import { ArrowLeftRight, BedDouble, FileCheck2, KeyRound, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, TrendingUp, Upload, Wallet } from 'lucide-react';
 import { cx } from './ui';
 
 export const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, phone: true },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight, phone: true },
+  { to: '/profit-loss', label: 'Profit & loss', icon: TrendingUp },
   { to: '/review', label: 'Review', icon: Inbox, phone: true },
   { to: '/receipts', label: 'Receipts', icon: Receipt, phone: true },
   { to: '/stays', label: 'Stays', icon: BedDouble },

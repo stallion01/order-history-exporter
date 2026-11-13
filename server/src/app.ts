@@ -30,6 +30,8 @@ import { stayRoutes } from './routes/stays';
 import { stayService } from './stays/service';
 import { leaseRoutes } from './routes/leases';
 import { leaseService } from './leases/service';
+import { plRoutes } from './routes/pl';
+import { plService } from './pl/service';
 import type { StayService } from './stays/service';
 import { SYNC_ROUTES, syncRoutes } from './routes/sync';
 import { isPrivateAddress, sameSecret } from './security';
@@ -204,6 +206,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   reportRoutes(app, db, () => bank.applyRules());
   stayRoutes(app, stays);
   leaseRoutes(app, leaseService({ db: db.raw, bank }));
+  plRoutes(app, plService({ db: db.raw, bank, correlate }));
   authRoutes(app, store, tokens);
 
   const webRoot = options.webRoot;
