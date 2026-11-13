@@ -61,7 +61,7 @@ export interface TxFilters {
   years?: string[] | null;
   account?: number[] | null;
   category?: string[] | null; // 'none' = no category
-  status?: string | null; // business, personal, none
+  status?: string | null; // business, personal, none, notpersonal (all but personal)
   kind?: string | null; // normal (default), transfer, ignored, all
   direction?: 'in' | 'out' | null;
   // Income from one platform (Airbnb, Vrbo, Booking.com) or anything else.
@@ -326,6 +326,13 @@ export function createBankStore(db: DatabaseSync) {
       )
       .all() as Row[];
     const fromOrders = orderInfo(rows.map((r) => r.id as number));
+    // Payees of stores where only a Business account's card is business (from the
+    // business and personal rules), once there is a Business account to tell by.
+    const cardOnlyPayees = new Set<string>(
+      db.prepare("SELECT 1 FROM bank_accounts WHERE owner = 'business' LIMIT 1").get()
+        ? (db.prepare("SELECT value FROM tax_rules WHERE field = 'store_card'").all() as Row[]).flatMap((r) => ORDER_STORE_PAYEES[r.value as string] || [])
+        : []
+    );
     const placeEntity = new Map((db.prepare('SELECT zip, entity_id FROM place_entities').all() as Row[]).map((r) => [r.zip as string, r.entity_id as number]));
     const setEntity = db.prepare('UPDATE bank_transactions SET entity_id = ?, entity_source = ? WHERE id = ?');
     const clearShares = db.prepare('DELETE FROM tx_entity_shares WHERE transaction_id = ?');
@@ -366,8 +373,10 @@ export function createBankStore(db: DatabaseSync) {
       if (statusSource !== 'user') {
         const ruled = pick('status');
         const fromOwner = row.owner === 'business' || row.owner === 'personal' ? row.owner : null;
-        status = ruled ?? fromOwner;
-        statusSource = ruled ? 'rule' : fromOwner ? 'account' : null;
+        // At a store with a "unless on a business card" rule, a charge on any other account is personal.
+        const cardRule = !ruled && row.owner !== 'business' && cardOnlyPayees.has(row.payee as string) ? 'personal' : null;
+        status = ruled ?? cardRule ?? fromOwner;
+        statusSource = ruled || cardRule ? 'rule' : fromOwner ? 'account' : null;
       }
       if (kindSource !== 'user') {
         const ruled = pick('kind');
@@ -819,6 +828,7 @@ export function createBankStore(db: DatabaseSync) {
       clauses.push(`(${parts.join(' OR ')})`);
     }
     if (filters.status === 'none') clauses.push('t.status IS NULL');
+    else if (filters.status === 'notpersonal') clauses.push("(t.status IS NULL OR t.status <> 'personal')");
     else if (filters.status) {
       clauses.push('t.status = ?');
       params.push(filters.status);

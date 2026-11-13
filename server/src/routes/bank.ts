@@ -44,7 +44,7 @@ export function txFiltersFrom(query: Query): TxFilters {
   const kind = query.get('kind') || 'normal';
   if (![...TX_KINDS, 'all'].includes(kind as never)) throw new HttpError(400, 'Unknown type.');
   const status = query.get('status') || null;
-  if (status && ![...TX_STATUSES, 'none'].includes(status as never)) throw new HttpError(400, 'Unknown status.');
+  if (status && ![...TX_STATUSES, 'none', 'notpersonal'].includes(status as never)) throw new HttpError(400, 'Unknown status.');
   const direction = query.get('direction');
   const importId = query.get('import') ? Number(query.get('import')) : null;
   if (importId !== null && !Number.isInteger(importId)) throw new HttpError(400, 'Unknown import.');

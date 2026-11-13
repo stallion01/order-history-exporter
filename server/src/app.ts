@@ -199,7 +199,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   correlationRoutes(app, correlate, bank, db);
   cpaRoutes(app, cpaService({ raw: db.raw, db, bank, correlate, receipts }), correlate);
   receiptRoutes(app, receipts, categoryNames);
-  reportRoutes(app, db);
+  reportRoutes(app, db, () => bank.applyRules());
   stayRoutes(app, stays);
   authRoutes(app, store, tokens);
 

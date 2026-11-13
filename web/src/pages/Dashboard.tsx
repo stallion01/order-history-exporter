@@ -30,7 +30,8 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
     const last = new Date(year, month, 0).getDate();
     navigate(linkTo('/orders', { preset: 'custom', from: `${row.label}-01`, to: `${row.label}-${String(last).padStart(2, '0')}` }));
   };
-  const report = useApi<any>(`/api/report?${query()}`);
+  // Personal spending is left out of the dashboard.
+  const report = useApi<any>(`/api/report?${query()}&status=notpersonal`);
   const status = useApi<any>('/api/status');
   const data = report.data;
   const totals = data?.totals;
@@ -42,7 +43,7 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
 
   return (
     <>
-      <PageHeader title="Dashboard" description="Spending across your bank and card accounts, and your synced stores." />
+      <PageHeader title="Dashboard" description="Business spending across your bank and card accounts, and your synced stores. Anything marked Personal is left out." />
       <FilterBar meta={meta} />
       <BankSummary range={range()} />
       {report.error && <Banner>{report.error.message}</Banner>}
@@ -159,6 +160,7 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
   if (range.from) period.set('from', range.from);
   if (range.to) period.set('to', range.to);
   for (const y of range.years || []) period.append('years', y);
+  period.set('status', 'notpersonal');
   const totals = useApi<{ total: number; moneyOut: number; moneyIn: number }>(`/api/bank/transactions?${period}&limit=1`);
   const spending = useApi<{ byCategory: { key: string; label: string; spend: number }[]; byEntity: { key: string; label: string; spend: number }[]; byMonth: InOutMonth[]; byStore: { key: string; label: string; spend: number }[] }>(
     `/api/bank/spending?${period}`

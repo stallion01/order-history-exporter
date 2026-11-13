@@ -8,7 +8,13 @@ import { money, plural, wholeMoney } from '../format';
 import { Banner, Button, Card, Empty, Field, Input, Loading, PageHeader, Select, Stat, TD, TH, TR } from '../ui';
 
 const STATUS_LABELS: Record<string, string> = { business: 'Business', personal: 'Personal' };
-const FIELD_LABELS: Record<string, string> = { zip: 'Delivered to', payment: 'Payment method is', store: 'Store is', category: 'Category is' };
+const FIELD_LABELS: Record<string, string> = {
+  zip: 'Delivered to',
+  payment: 'Payment method is',
+  store: 'Store is',
+  category: 'Category is',
+  store_card: 'Store, unless on a Business card',
+};
 
 export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: Record<string, { name: string; lines: [string, string][] }>; onMetaChange: () => void }) {
   const lastYear = String(new Date().getFullYear() - 1);
@@ -31,6 +37,7 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
     zip: placeOptions(meta),
     payment: (meta?.payments || []).map((p): [string, string] => [p, p]),
     store: (meta?.stores || []).map((s): [string, string] => [s.store, s.name]),
+    store_card: (meta?.stores || []).map((s): [string, string] => [s.store, s.name]),
     category: (meta?.categories || []).map((c): [string, string] => [c.name, c.name]),
   }[rule.field] || [];
   const ruleValue = ruleOptions.some(([v]) => v === rule.value) ? rule.value : ruleOptions[0]?.[0] || '';
@@ -209,7 +216,7 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
       <div className="mt-5 grid items-start gap-5 lg:grid-cols-2">
         <Card title="Business and personal rules">
           <p className="mb-3 text-xs text-slate-500">
-            For example, everything delivered to a rental's ZIP, or everything on a business card. Your own marks always win, and a personal rule beats a business one.
+            For example, everything delivered to a rental's ZIP, or everything on a business card. Your own marks always win, and a personal rule beats a business one. &quot;Store, unless on a Business card&quot; makes that store&apos;s orders and bank charges Personal unless they were paid with a card on an account marked Business.
           </p>
           <form onSubmit={addRule} className="grid grid-cols-2 items-end gap-3">
             <Field label="When">
@@ -231,7 +238,7 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
               </Select>
             </Field>
             <Field label="Treat as">
-              <Select value={rule.status} onChange={(e) => setRule({ ...rule, status: e.target.value })}>
+              <Select value={rule.field === 'store_card' ? 'personal' : rule.status} onChange={(e) => setRule({ ...rule, status: e.target.value })} disabled={rule.field === 'store_card'}>
                 <option value="business">Business</option>
                 <option value="personal">Personal</option>
               </Select>
@@ -244,7 +251,15 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
             {(rules.data?.rules || []).map((r) => (
               <li key={r.id} className="flex items-center justify-between gap-3 py-2">
                 <span>
-                  {FIELD_LABELS[r.field]} <span className="font-medium">{r.field === 'store' ? storeName(r.value) : r.value}</span>: {STATUS_LABELS[r.status]}
+                  {r.field === 'store_card' ? (
+                    <>
+                      <span className="font-medium">{storeName(r.value)}</span>, unless on a Business card: Personal
+                    </>
+                  ) : (
+                    <>
+                      {FIELD_LABELS[r.field]} <span className="font-medium">{r.field === 'store' ? storeName(r.value) : r.value}</span>: {STATUS_LABELS[r.status]}
+                    </>
+                  )}
                 </span>
                 <Button variant="ghost" aria-label={`Remove rule for ${r.value}`} onClick={() => act(() => post('/api/tax/rules/delete', { id: r.id }))}>
                   <Trash2 className="size-4" aria-hidden />

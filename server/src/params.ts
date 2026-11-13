@@ -14,7 +14,8 @@ const STORE_ID = /^[a-z0-9_-]{1,40}$/i;
 const MAX_PAGE = 200;
 
 export const STATUSES = ['business', 'personal'];
-export const RULE_FIELDS = ['zip', 'payment', 'store', 'category'];
+// store_card: at that store, business only when paid with a Business account's card.
+export const RULE_FIELDS = ['zip', 'payment', 'store', 'category', 'store_card'];
 
 export type Query = URLSearchParams;
 // A repeated key (?store=a&store=b) arrives as an array; keep each value.
@@ -51,7 +52,7 @@ function listParam(query: Query, key: string, check?: (value: string) => string)
 
 export function filtersFrom(query: Query): Filters {
   const status = query.get('status') || null;
-  if (status && ![...STATUSES, 'unreviewed'].includes(status)) throw new HttpError(400, 'Unknown status.');
+  if (status && ![...STATUSES, 'unreviewed', 'notpersonal'].includes(status)) throw new HttpError(400, 'Unknown status.');
   return {
     from: dateParam(query.get('from'), 'from'),
     to: dateParam(query.get('to'), 'to'),

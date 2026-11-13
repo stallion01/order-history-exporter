@@ -1042,6 +1042,31 @@ function openDatabase(file) {
     return marks;
   }
 
+  // Which kind of card paid for each order, for "store unless on a business card" rules:
+  // 'business' when a card number in its payment, or a charge linked to it, belongs to an
+  // account marked Business; 'other' when it was paid some other way; null when unknown.
+  // With no Business account set up, nothing is known.
+  function cardsFor(orders, rules) {
+    const stores = new Set(rules.filter((r) => r.field === 'store_card').map((r) => r.value));
+    const cards = new Map();
+    if (!stores.size) return cards;
+    if (!db.prepare("SELECT 1 FROM bank_accounts WHERE owner = 'business' LIMIT 1").get()) return cards;
+    const business = new Set(db.prepare("SELECT last4 FROM bank_accounts WHERE owner = 'business' AND last4 IS NOT NULL").all().map((r) => String(r.last4)));
+    const charged = db.prepare(
+      'SELECT DISTINCT a.owner FROM order_links l JOIN bank_transactions t ON t.id = l.transaction_id JOIN bank_accounts a ON a.id = t.account_id WHERE l.store = ? AND l.order_id = ?'
+    );
+    for (const order of orders) {
+      if (!stores.has(order.store)) continue;
+      const digits = [...String(order.payment || '').matchAll(/ending (\d{4})\b/gi)].map((m) => m[1]);
+      const owners = charged.all(order.store, order.order_id).map((r) => r.owner);
+      let card = null;
+      if (digits.some((d) => business.has(d)) || owners.includes('business')) card = 'business';
+      else if (digits.length || owners.length || /\b(cash|gift card|ebt)\b/i.test(order.payment || '')) card = 'other';
+      cards.set(`${order.store}\u0000${order.order_id}`, card);
+    }
+    return cards;
+  }
+
   // Every item matching the filters, with its category, share of the order's
   // total, and business or personal status. Worked out on each read, so an improved
   // rule or a new correction applies to everything straight away.
@@ -1052,6 +1077,7 @@ function openDatabase(file) {
     const byOrder = allItemsByOrder();
     const marks = allMarks();
     const rules = taxRules();
+    const cards = cardsFor(orders, rules);
     const lookup = new Map(categoryList().map((c) => [c.name, c]));
     const search = filters.q ? String(filters.q).toLowerCase() : null;
     const out = [];
@@ -1077,6 +1103,7 @@ function openDatabase(file) {
           deliveryZip: order.delivery_zip,
           deliveryAddress: order.delivery_address,
           payment: order.payment,
+          card: cards.get(`${order.store}\u0000${order.order_id}`) ?? null,
           url: row.url,
           orderUrl: order.url,
           scheduleC: lookup.get(category) ? lookup.get(category).scheduleC : null,
@@ -1087,7 +1114,8 @@ function openDatabase(file) {
         item.status = resolved.status;
         item.statusSource = resolved.source;
         if (filters.category && !filters.category.includes(item.category)) return;
-        if (filters.status && item.status !== filters.status) return;
+        // "notpersonal" is everything except personal.
+        if (filters.status === 'notpersonal' ? item.status === 'personal' : filters.status && item.status !== filters.status) return;
         out.push(item);
       });
     }
@@ -1134,15 +1162,20 @@ function openDatabase(file) {
     const cities = new Map();
     const cityZips = new Map();
     const placeLabel = new Map(places().map((p) => [p.zip, p.label]));
+    const allItems = filters.status ? new Map([...allItemsByOrder()].map(([key, rows]) => [key, rows.length])) : new Map();
     for (const order of orders) {
       const key = `${order.store}\u0000${order.order_id}`;
       const own = itemsByOrder.get(key) || [];
-      // With a category chosen, only that category's share of each order counts.
+      // With a category or business/personal choice, only the matching items' share of
+      // each order counts. An order with no items read yet stays whole unless a
+      // category is chosen.
+      const someItems = filters.category || (filters.status && own.length < (allItems.get(key) || 0));
       if (filters.category && !own.length) continue;
-      const value = filters.category ? own.reduce((sum, item) => sum + (item.amount || 0), 0) : order.total || 0;
+      if (someItems && !own.length) continue;
+      const value = someItems ? own.reduce((sum, item) => sum + (item.amount || 0), 0) : order.total || 0;
       totals.orders++;
       totals.spend += value;
-      if (!filters.category) {
+      if (!someItems) {
         totals.tax += order.tax || 0;
         totals.shipping += order.shipping || 0;
       }

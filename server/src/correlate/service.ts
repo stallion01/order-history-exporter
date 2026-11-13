@@ -397,8 +397,11 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
   }
 
   // Spending for a period: totals, and by category, entity and business or personal.
+  // Leaving out personal goes by each line, so a business charge's personal items go too.
   function spending(filters: TxFilters) {
-    const lines = spendLines(filters);
+    const hidePersonal = filters.status === 'notpersonal';
+    const all = spendLines(hidePersonal ? { ...filters, status: null } : filters);
+    const lines = hidePersonal ? all.filter((l) => l.status !== 'personal') : all;
     const names = new Map(entities().map((e) => [e.id, e.name]));
     const group = (keyOf: (l: SpendLine) => string, labelOf: (key: string) => string) => {
       const map = new Map<string, number>();

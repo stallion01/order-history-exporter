@@ -57,7 +57,8 @@ function itemRows(items: any[], form: string): unknown[][] {
   ];
 }
 
-export function reportRoutes(app: FastifyInstance, db: OrdersDb) {
+// rulesChanged: bank charges follow the business and personal rules too.
+export function reportRoutes(app: FastifyInstance, db: OrdersDb, rulesChanged: () => void = () => {}) {
   const audit = (request: unknown, action: string, detail?: unknown) => (request as AuthedRequest).audit(action, detail);
 
   app.get('/api/status', async () => db.status());
@@ -148,8 +149,11 @@ export function reportRoutes(app: FastifyInstance, db: OrdersDb) {
     const body = (request.body || {}) as Record<string, any>;
     if (!RULE_FIELDS.includes(body.field)) throw new HttpError(400, 'Unknown rule field.');
     if (!STATUSES.includes(body.status)) throw new HttpError(400, 'Unknown status.');
-    const rule = { field: body.field, value: textParam(body.value, 'Rule value'), status: body.status };
+    // At a store, anything not on a business card is personal.
+    const storeCard = body.field === 'store_card';
+    const rule = { field: body.field, value: storeCard ? storeParam(body.value) : textParam(body.value, 'Rule value'), status: storeCard ? 'personal' : body.status };
     db.saveTaxRule(rule);
+    if (storeCard) rulesChanged();
     audit(request, 'rule.save', rule);
     return { rules: db.taxRules() };
   });
@@ -158,6 +162,7 @@ export function reportRoutes(app: FastifyInstance, db: OrdersDb) {
     const body = (request.body || {}) as Record<string, unknown>;
     if (!Number.isInteger(body.id)) throw new HttpError(400, 'A rule id is required.');
     db.deleteTaxRule(body.id as number);
+    rulesChanged();
     audit(request, 'rule.delete', { id: body.id });
     return { rules: db.taxRules() };
   });

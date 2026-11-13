@@ -94,8 +94,14 @@ function allocate(order, items) {
 
 // An item's own mark wins. Otherwise a personal rule beats a business one, so that
 // "this ZIP is business" with "groceries are personal" errs on the cautious side.
+// A "store unless on a business card" rule comes next: at that store, a purchase on a
+// card of an account marked Business is business and anything else is personal. When
+// the card used isn't known (item.card is null), the other rules decide.
 function resolveStatus(item, mark, rules) {
   if (mark) return { status: mark, source: 'you' };
+  if (item.card && rules.some((rule) => rule.field === 'store_card' && rule.value === item.store)) {
+    return { status: item.card === 'business' ? 'business' : 'personal', source: 'rule' };
+  }
   const matching = rules.filter((rule) => {
     switch (rule.field) {
       case 'zip':
