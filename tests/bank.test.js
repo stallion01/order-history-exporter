@@ -689,3 +689,33 @@ test('SimpleFIN: connect, sync accounts, and merge with an overlapping file', as
   await post('/api/bank/simplefin/disconnect', {});
   assert.equal((await get('/api/bank/accounts')).simplefin.connected, false);
 });
+
+test('SimpleFIN: a newly added account gets 90 days, and older history can be pulled for every account', async () => {
+  const posted = (date) => Math.floor(Date.parse(`${date}T12:00:00Z`) / 1000);
+  const startOf = (request) => Number(new URL(request.url).searchParams.get('start-date')) * 1000;
+  const daysAgo = (ms) => Math.round((Date.now() - ms) / 86400000);
+  bridge.accounts = [{ id: 'sf-a', name: 'Older Checking', conn_id: 'c1', currency: 'USD', balance: '5.00', transactions: [{ id: 'a1', posted: posted('2026-01-05'), amount: '-5.00', description: 'COFFEE' }] }];
+  await post('/api/bank/simplefin/connect', { token: ACCESS_URL });
+
+  // A day later the bank adds an account: the usual short sync, then its last 90 days.
+  const setSetting = db.raw.prepare('UPDATE app_settings SET value = ? WHERE key = ?');
+  setSetting.run(new Date(Date.now() - 86400000).toISOString(), 'simplefin.lastSuccess');
+  setSetting.run(new Date(Date.now() - 86400000).toISOString(), 'simplefin.lastAttempt');
+  bridge.accounts.push({ id: 'sf-b', name: 'New Card', conn_id: 'c1', currency: 'USD', balance: '-7.00', transactions: [{ id: 'b1', posted: posted('2026-01-10'), amount: '-7.00', description: 'BOOKS' }] });
+  bridge.requests = [];
+  const { result } = await post('/api/bank/simplefin/sync', {});
+  assert.equal(bridge.requests.length, 2, 'the usual sync, then the new account’s history');
+  assert.equal(daysAgo(startOf(bridge.requests[0])), 8, 'since the last sync, with a week of overlap');
+  assert.equal(daysAgo(startOf(bridge.requests[1])), 90);
+  assert.deepEqual([result.accounts, result.newAccounts, result.added], [2, 1, 1]);
+
+  // Six months for every account, asked for in pieces of at most 90 days.
+  bridge.requests = [];
+  const history = await post('/api/bank/simplefin/history', { months: 6 });
+  assert.equal(bridge.requests.length, 3);
+  assert.equal(daysAgo(startOf(bridge.requests[0])), 183);
+  assert.equal(history.result.added, 0, 'nothing already here is added twice');
+  assert.equal(history.result.oldest, '2026-01-05');
+  await assert.rejects(post('/api/bank/simplefin/history', { months: 5 }), (err) => err.status === 400);
+  await post('/api/bank/simplefin/disconnect', {});
+});

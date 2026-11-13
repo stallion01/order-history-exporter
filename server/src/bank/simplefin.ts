@@ -26,6 +26,8 @@ export interface SyncResult {
   added: number;
   merged: number;
   errors: string[];
+  // The earliest transaction SimpleFIN sent, which shows how far back the banks went.
+  oldest?: string | null;
 }
 
 export function decodeToken(token: string): string {
@@ -97,6 +99,7 @@ interface SimplefinAccountSet {
 const isoDate = (seconds: number) => new Date(seconds * 1000).toISOString().slice(0, 10);
 
 export function guessKind(name: string): AccountKind {
+  if (/\bloan\b|mortgage|\bheloc\b|\bcre\b/i.test(name)) return 'loan';
   if (/card|visa|master ?card|amex|american express|discover|credit|rewards/i.test(name)) return 'credit';
   if (/saving|money market/i.test(name)) return 'savings';
   if (/checking|chk|spending/i.test(name)) return 'checking';
@@ -121,52 +124,68 @@ export function simplefinService(store: BankStore, box: SecretBox, fetchImpl: Fe
     };
   }
 
-  async function runSync(username: string | null): Promise<SyncResult> {
+  // Asks SimpleFIN for every account's transactions from start to now, in pieces of
+  // at most 90 days. With only, keeps just those accounts' transactions.
+  async function pull(access: string, start: Date, until: Date, result: SyncResult, username: string | null, seen: Set<string>, created: Set<string>, only?: Set<string>) {
+    while (start < until) {
+      const end = new Date(Math.min(start.getTime() + MAX_RANGE_DAYS * DAY_MS, until.getTime() + DAY_MS));
+      const data = await fetchAccounts(access, { start, end }, fetchImpl);
+      for (const e of data.errlist || []) if (e.msg) result.errors.push(e.msg);
+      for (const e of data.errors || []) if (typeof e === 'string') result.errors.push(e);
+      const institutions = new Map((data.connections || []).map((c) => [c.conn_id, c.name || c.org_name || null]));
+      for (const raw of data.accounts || []) {
+        if (only && !only.has(raw.id)) continue;
+        let id = store.accountForSimplefin(raw.id);
+        if (!id) {
+          id = store.createAccount({
+            name: String(raw.name || 'Account').slice(0, 100),
+            institution: ((raw.conn_id && institutions.get(raw.conn_id)) || raw.org?.name || null)?.slice(0, 100) ?? null,
+            kind: guessKind(raw.name || ''),
+            owner: 'mixed',
+            currency: /^[A-Z]{3}$/.test(raw.currency || '') ? raw.currency : 'USD',
+            simplefinId: raw.id,
+          });
+          created.add(raw.id);
+          result.newAccounts++;
+        }
+        if (!seen.has(raw.id)) {
+          seen.add(raw.id);
+          result.accounts++;
+        }
+        const balance = Number(raw.balance);
+        if (Number.isFinite(balance)) store.setBalance(id, balance, raw['balance-date'] ? isoDate(raw['balance-date']) : null);
+        // Pending charges change id when they post, so only posted ones are kept.
+        const transactions: IncomingTransaction[] = (raw.transactions || [])
+          .filter((t) => !t.pending && t.posted > 0 && Number.isFinite(Number(t.amount)))
+          .map((t) => ({ externalId: String(t.id), posted: isoDate(t.posted), amount: Number(t.amount), description: t.description || t.payee || 'Transaction', memo: t.memo || null, payee: t.payee || null }));
+        for (const t of transactions) if (!result.oldest || t.posted < result.oldest) result.oldest = t.posted;
+        const summary = store.importTransactions(id, 'simplefin', transactions, { fileName: 'SimpleFIN sync', username });
+        result.added += summary.added;
+        result.merged += summary.merged;
+        store.markSynced(id);
+      }
+      start = end;
+    }
+  }
+
+  // The usual sync covers the days since the last one. An account seen for the first
+  // time then gets its last 90 days too. historyDays instead goes back that far for
+  // every account.
+  async function runSync(username: string | null, historyDays?: number): Promise<SyncResult> {
     const access = accessUrl();
     if (!access) throw new Error('SimpleFIN is not connected.');
     const attemptAt = new Date();
     store.setSetting(KEY_ATTEMPT, attemptAt.toISOString());
-    const result: SyncResult = { accounts: 0, newAccounts: 0, added: 0, merged: 0, errors: [] };
+    const result: SyncResult = { accounts: 0, newAccounts: 0, added: 0, merged: 0, errors: [], oldest: null };
     try {
       const lastSuccess = store.getSetting(KEY_SUCCESS);
-      let start = new Date(lastSuccess ? Date.parse(lastSuccess) - OVERLAP_DAYS * DAY_MS : attemptAt.getTime() - FIRST_SYNC_DAYS * DAY_MS);
+      const firstDay = attemptAt.getTime() - FIRST_SYNC_DAYS * DAY_MS;
+      const start = new Date(historyDays ? attemptAt.getTime() - historyDays * DAY_MS : lastSuccess ? Date.parse(lastSuccess) - OVERLAP_DAYS * DAY_MS : firstDay);
       const seen = new Set<string>();
-      while (start < attemptAt) {
-        const end = new Date(Math.min(start.getTime() + MAX_RANGE_DAYS * DAY_MS, attemptAt.getTime() + DAY_MS));
-        const data = await fetchAccounts(access, { start, end }, fetchImpl);
-        for (const e of data.errlist || []) if (e.msg) result.errors.push(e.msg);
-        for (const e of data.errors || []) if (typeof e === 'string') result.errors.push(e);
-        const institutions = new Map((data.connections || []).map((c) => [c.conn_id, c.name || c.org_name || null]));
-        for (const raw of data.accounts || []) {
-          let id = store.accountForSimplefin(raw.id);
-          if (!id) {
-            id = store.createAccount({
-              name: String(raw.name || 'Account').slice(0, 100),
-              institution: ((raw.conn_id && institutions.get(raw.conn_id)) || raw.org?.name || null)?.slice(0, 100) ?? null,
-              kind: guessKind(raw.name || ''),
-              owner: 'mixed',
-              currency: /^[A-Z]{3}$/.test(raw.currency || '') ? raw.currency : 'USD',
-              simplefinId: raw.id,
-            });
-            result.newAccounts++;
-          }
-          if (!seen.has(raw.id)) {
-            seen.add(raw.id);
-            result.accounts++;
-          }
-          const balance = Number(raw.balance);
-          if (Number.isFinite(balance)) store.setBalance(id, balance, raw['balance-date'] ? isoDate(raw['balance-date']) : null);
-          // Pending charges change id when they post, so only posted ones are kept.
-          const transactions: IncomingTransaction[] = (raw.transactions || [])
-            .filter((t) => !t.pending && t.posted > 0 && Number.isFinite(Number(t.amount)))
-            .map((t) => ({ externalId: String(t.id), posted: isoDate(t.posted), amount: Number(t.amount), description: t.description || t.payee || 'Transaction', memo: t.memo || null, payee: t.payee || null }));
-          const summary = store.importTransactions(id, 'simplefin', transactions, { fileName: 'SimpleFIN sync', username });
-          result.added += summary.added;
-          result.merged += summary.merged;
-          store.markSynced(id);
-        }
-        start = end;
-      }
+      const created = new Set<string>();
+      await pull(access, start, attemptAt, result, username, seen, created);
+      // Accounts added at the bank since the last sync: the 90 days before that.
+      if (created.size && start.getTime() > firstDay) await pull(access, new Date(firstDay), start, result, username, new Set(seen), new Set(), created);
       store.setSetting(KEY_SUCCESS, attemptAt.toISOString());
     } catch (err) {
       result.errors.push((err as Error).message);
@@ -195,6 +214,14 @@ export function simplefinService(store: BankStore, box: SecretBox, fetchImpl: Fe
         throw new Error('SimpleFIN was checked a few minutes ago. Try again in a little while.');
       }
       running = runSync(username).finally(() => {
+        running = null;
+      });
+      return running;
+    },
+    // Goes back further for every account: up to a year, as far as each bank allows.
+    async history(username: string | null, days: number): Promise<SyncResult> {
+      if (running) throw new Error('SimpleFIN is already being checked. Try again when it finishes.');
+      running = runSync(username, Math.min(Math.max(Math.round(days), 1), 366)).finally(() => {
         running = null;
       });
       return running;

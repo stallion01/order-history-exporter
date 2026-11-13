@@ -500,6 +500,20 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
     return { result, status: needSimplefin().status() };
   });
 
+  // Older transactions for every account: the last 3, 6, 9 or 12 months.
+  app.post('/api/bank/simplefin/history', async (request) => {
+    const body = parse(z.object({ months: z.union([z.literal(3), z.literal(6), z.literal(9), z.literal(12)]) }), request.body);
+    const days = Math.round(body.months * 30.5);
+    let result;
+    try {
+      result = await needSimplefin().history(user(request), days);
+    } catch (err) {
+      throw new HttpError(409, (err as Error).message);
+    }
+    audit(request, 'simplefin.history', { months: body.months, accounts: result.accounts, added: result.added, errors: result.errors.length });
+    return { result, status: needSimplefin().status() };
+  });
+
   app.post('/api/bank/simplefin/disconnect', async (request) => {
     needSimplefin().disconnect();
     audit(request, 'simplefin.disconnect');
