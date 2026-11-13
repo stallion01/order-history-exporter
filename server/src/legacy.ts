@@ -16,6 +16,8 @@ export interface Filters {
   category: string[] | string | null;
   q: string | null;
   status: string | null;
+  // One business's orders: by a linked charge, the card that paid, or where they went.
+  entity?: number | null;
 }
 
 export interface SortPage {

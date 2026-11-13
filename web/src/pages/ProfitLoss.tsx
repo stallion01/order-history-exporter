@@ -2,12 +2,12 @@
 // and the return on the money invested in the properties.
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Pencil } from 'lucide-react';
 import { post, useApi } from '../api';
 import { ACTIVITY_LABELS, TAX_FORM_LABELS, businessQuery, useBusiness } from '../business';
 import { MonthlyInOut } from '../charts';
-import type { IncomeSource } from '../charts';
+import type { IncomeSource, MonthPart } from '../charts';
 import { money, monthLabel, wholeMoney } from '../format';
 import { Banner, Button, Card, Field, Input, Loading, PageHeader, Stat, TD, TH, TR, cx } from '../ui';
 
@@ -94,6 +94,14 @@ export function ProfitLoss() {
   const { business, current, entities } = useBusiness();
   const data = useApi<Report>(`/api/pl?period=${encodeURIComponent(period)}${businessQuery(business)}`);
   const report = data.data;
+  const navigate = useNavigate();
+  // Transactions for some days, filtered further by extra; the business chosen in the
+  // menu carries over to the transactions page.
+  const transactions = (from: string, to: string, extra: Record<string, string> = {}) => `/transactions?${new URLSearchParams({ preset: 'custom', from, to, ...extra })}`;
+  const monthEnd = (month: string) => `${month}-${String(new Date(Number(month.slice(0, 4)), Number(month.slice(5)), 0).getDate()).padStart(2, '0')}`;
+  // One month from the chart: all of it, its spending, or its income from one source.
+  const openMonth = (month: string, part?: MonthPart) =>
+    navigate(transactions(`${month}-01`, monthEnd(month), part === 'spend' ? { direction: 'out' } : part ? { direction: 'in', source: part } : {}));
 
   return (
     <>
@@ -198,7 +206,7 @@ export function ProfitLoss() {
           )}
 
           <Card title="Revenue and expenses by month" className="mt-5">
-            <MonthlyInOut rows={report.months.map((m) => ({ month: m.month, spend: m.expenses, income: m.revenue, sources: m.sources }))} />
+            <MonthlyInOut rows={report.months.map((m) => ({ month: m.month, spend: m.expenses, income: m.revenue, sources: m.sources }))} onSelect={openMonth} />
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -214,7 +222,7 @@ export function ProfitLoss() {
                   {report.months.map((m) => (
                     <tr key={m.month} className={TR}>
                       <td className={TD}>
-                        <Link to={`/transactions?preset=custom&from=${m.month}-01&to=${m.month}-${String(new Date(Number(m.month.slice(0, 4)), Number(m.month.slice(5)), 0).getDate()).padStart(2, '0')}`} className="hover:underline">
+                        <Link to={transactions(`${m.month}-01`, monthEnd(m.month))} className="hover:underline">
                           {monthLabel(m.month)}
                         </Link>
                       </td>
@@ -240,10 +248,24 @@ export function ProfitLoss() {
 
           <div className="mt-5 grid items-start gap-5 lg:grid-cols-2">
             <Card title="Revenue by source">
-              <Shares rows={report.sources.map((s) => ({ label: SOURCE_NAMES[s.key], amount: s.amount, colour: SOURCE_COLOURS[s.key] }))} total={report.revenue} of="of revenue" />
+              <Shares
+                rows={report.sources.map((s) => ({ label: SOURCE_NAMES[s.key], amount: s.amount, colour: SOURCE_COLOURS[s.key], to: transactions(report.period.from, report.period.to, { direction: 'in', source: s.key }) }))}
+                total={report.revenue}
+                of="of revenue"
+              />
             </Card>
             <Card title="Operating expenses">
-              <Shares rows={report.categories.map((c) => ({ label: c.category, amount: c.amount, colour: 'bg-[var(--color-bar)]' }))} total={report.revenue} of="of revenue" limit={12} />
+              <Shares
+                rows={report.categories.map((c) => ({
+                  label: c.category,
+                  amount: c.amount,
+                  colour: 'bg-[var(--color-bar)]',
+                  to: c.category === 'Uncategorized' ? undefined : transactions(report.period.from, report.period.to, { direction: 'out', category: c.category }),
+                }))}
+                total={report.revenue}
+                of="of revenue"
+                limit={12}
+              />
             </Card>
           </div>
 
@@ -316,7 +338,7 @@ export function ProfitLoss() {
 }
 
 // Amounts with their share of a total, as labelled bars.
-function Shares({ rows, total, of, limit = 8 }: { rows: { label: string; amount: number; colour: string }[]; total: number; of: string; limit?: number }) {
+function Shares({ rows, total, of, limit = 8 }: { rows: { label: string; amount: number; colour: string; to?: string }[]; total: number; of: string; limit?: number }) {
   const [all, setAll] = useState(false);
   if (!rows.length) return <p className="py-4 text-center text-sm text-slate-500">Nothing in this period.</p>;
   const max = Math.max(...rows.map((r) => Math.abs(r.amount)), 1);
@@ -324,19 +346,32 @@ function Shares({ rows, total, of, limit = 8 }: { rows: { label: string; amount:
   return (
     <>
       <ul className="space-y-2">
-        {shown.map((r) => (
-          <li key={r.label} className="text-sm">
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="min-w-0 truncate">{r.label}</span>
-              <span className="shrink-0 tabular-nums">
-                {money(r.amount)} <span className="text-xs text-slate-500 dark:text-slate-400">{total ? `${((r.amount / total) * 100).toFixed(1)}% ${of}` : ''}</span>
-              </span>
-            </div>
-            <div className="mt-1 h-2 rounded-r-full bg-slate-100 dark:bg-slate-800">
-              <div className={cx('h-full rounded-r-full', r.colour)} style={{ width: `${Math.max(1, (Math.abs(r.amount) / max) * 100)}%` }} />
-            </div>
-          </li>
-        ))}
+        {shown.map((r) => {
+          const body = (
+            <>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className={cx('min-w-0 truncate', r.to && 'group-hover:underline')}>{r.label}</span>
+                <span className="shrink-0 tabular-nums">
+                  {money(r.amount)} <span className="text-xs text-slate-500 dark:text-slate-400">{total ? `${((r.amount / total) * 100).toFixed(1)}% ${of}` : ''}</span>
+                </span>
+              </div>
+              <div className="mt-1 h-2 rounded-r-full bg-slate-100 dark:bg-slate-800">
+                <div className={cx('h-full rounded-r-full', r.colour)} style={{ width: `${Math.max(1, (Math.abs(r.amount) / max) * 100)}%` }} />
+              </div>
+            </>
+          );
+          return (
+            <li key={r.label} className="text-sm">
+              {r.to ? (
+                <Link to={r.to} className="group -mx-2 block rounded-md px-2 py-1 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-emerald-600 dark:hover:bg-slate-800/60">
+                  {body}
+                </Link>
+              ) : (
+                <div className="py-1">{body}</div>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {rows.length > limit && (
         <button type="button" onClick={() => setAll(!all)} className="mt-2 text-sm text-emerald-700 hover:underline dark:text-emerald-400">

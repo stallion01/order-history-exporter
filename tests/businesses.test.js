@@ -125,6 +125,35 @@ test("the year's summary puts each business on its own form", async () => {
   assert.ok(forms['form-1065'] && forms['form-8825']);
 });
 
+test("store orders follow the business chosen: by the card that paid or the place they went", async () => {
+  await post('/api/orders', {
+    store: 'amazon',
+    orders: [
+      { orderId: 'A-1', detailRead: true, items: [{ name: 'Thing 1', price: 1, quantity: 1 }], date: '2026-02-05', total: 40, payment: 'Visa ending 1111', deliveryZip: '99901' },
+      { orderId: 'A-2', detailRead: true, items: [{ name: 'Thing 2', price: 1, quantity: 1 }], date: '2026-02-06', total: 25, payment: 'Visa ending 2222', deliveryZip: '99902' },
+      { orderId: 'A-3', detailRead: true, items: [{ name: 'Thing 3', price: 1, quantity: 1 }], date: '2026-02-07', total: 10, payment: 'Visa ending 3333', deliveryZip: '99903' },
+    ],
+  });
+  const card = (
+    await post('/api/bank/import', {
+      content: 'Date,Description,Amount\n03/01/2026,COFFEE,-5.00\n',
+      fileName: 'card.csv',
+      newAccount: { name: 'Lakeside card (1111)', kind: 'credit', owner: 'business' },
+    })
+  ).accountId;
+  await post(`/api/bank/accounts/${card}`, { entityId: str });
+  await post('/api/places/entity', { zip: '99902', entityId: ltr });
+
+  const one = await get(`/api/report?years=2026&entity=${str}`);
+  assert.equal(one.totals.orders, 1, 'paid on its card');
+  assert.equal(one.totals.spend, 40);
+  assert.equal(one.totals.unassigned, 1, 'the order nothing ties to a business');
+  const other = await get(`/api/report?years=2026&entity=${ltr}`);
+  assert.deepEqual([other.totals.orders, other.totals.spend], [1, 25], 'delivered to its place');
+  assert.equal((await get('/api/report?years=2026')).totals.orders, 3, 'all businesses');
+  assert.equal((await get(`/api/orders?years=2026&entity=${ltr}`)).orders.map((o) => o.orderId).join(), 'A-2');
+});
+
 test("a lease's payments go to its own business's account", async () => {
   const { lease } = await post('/api/leases', { unit: 'Unit 2', tenant: 'Pat Example', start: '2026-02-01', entityId: ltr });
   assert.equal(lease.entityId, ltr);

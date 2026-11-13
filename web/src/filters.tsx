@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { isoDaysAgo } from './format';
+import { useBusiness } from './business';
 import { Field, Input, MultiSelect, Select } from './ui';
 
 export interface Meta {
@@ -48,6 +49,7 @@ export function useFilters() {
     }
   }
   const range = (): { from: string; to: string; years?: string[] } => dateRange();
+  const { business } = useBusiness();
 
   // The query string for the API, from the filters plus anything extra.
   function query(extra: Record<string, string | number | undefined> = {}) {
@@ -59,6 +61,7 @@ export function useFilters() {
       zip: values('zip'),
       payment: values('payment'),
       q: value('q'),
+      entity: business ?? undefined,
       ...extra,
     };
     for (const [key, v] of Object.entries(all)) {

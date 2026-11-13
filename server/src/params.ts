@@ -69,6 +69,7 @@ export function filtersFrom(query: Query): Filters {
     category: listParam(query, 'category'),
     q: query.get('q') || null,
     status,
+    entity: /^\d+$/.test(query.get('entity') || '') ? Number(query.get('entity')) : null,
   };
 }
 

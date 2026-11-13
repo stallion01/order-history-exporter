@@ -2,16 +2,16 @@
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { ArrowLeftRight, BedDouble, FileCheck2, KeyRound, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, TrendingUp, Upload, Wallet } from 'lucide-react';
-import { BusinessPicker } from './business';
+import { BusinessPicker, useBusiness } from './business';
 import { cx } from './ui';
 
 // The sidebar order. Phones show the ones marked phone as tabs, the rest under More.
 export const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, phone: true },
   { to: '/profit-loss', label: 'Profit & loss', icon: TrendingUp },
-  { to: '/stays', label: 'Stays', icon: BedDouble },
+  { to: '/stays', label: 'Stays', icon: BedDouble, strOnly: true },
   { to: '/leases', label: 'Leases', icon: KeyRound },
-  { to: '/accounts', label: 'Accounts', icon: Landmark },
+  { to: '/accounts', label: 'Accounts', icon: Landmark, divider: true },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight, phone: true },
   { to: '/review', label: 'Review', icon: Inbox, phone: true },
   { to: '/receipts', label: 'Receipts', icon: Receipt, phone: true },
@@ -22,10 +22,19 @@ export const NAV = [
   { to: '/year-end', label: 'Year end', icon: FileCheck2 },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
+type NavEntry = { to: string; label: string; icon: typeof Menu; end?: boolean; phone?: boolean; strOnly?: boolean; divider?: boolean };
+
+// The pages for the business chosen: Stays only for a short-term rental (or all of them).
+export function useNav(): NavEntry[] {
+  const { current } = useBusiness();
+  return (NAV as NavEntry[]).filter((n) => !n.strOnly || !current || current.activity === 'str');
+}
+
 // On phones, the pages without a tab of their own are under More.
 const PHONE_NAV = [...NAV.filter((n) => n.phone), { to: '/more', label: 'More', icon: Menu, end: false, phone: true }];
 
 export function Layout({ username, onSignOut, children }: { username: string; onSignOut: () => void; children: ReactNode }) {
+  const nav = useNav();
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[15rem_1fr]">
       {/* Stays in place while the page scrolls; scrolls itself if the window is short. */}
@@ -36,7 +45,8 @@ export function Layout({ username, onSignOut, children }: { username: string; on
         </div>
         <BusinessPicker className="mx-3 mb-3" />
         <nav aria-label="Main" className="flex-1 space-y-1 px-3">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+          {nav.map(({ to, label, icon: Icon, end, divider }) => [
+            divider && <hr key={`${to}-divider`} className="!my-3 border-slate-700" aria-hidden />,
             <NavLink
               key={to}
               to={to}
@@ -47,8 +57,8 @@ export function Layout({ username, onSignOut, children }: { username: string; on
             >
               <Icon className="size-4" aria-hidden />
               {label}
-            </NavLink>
-          ))}
+            </NavLink>,
+          ])}
         </nav>
         <div className="border-t border-slate-800 px-5 py-4 text-sm">
           <div className="truncate text-slate-400" title={username}>

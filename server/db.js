@@ -1123,6 +1123,50 @@ function openDatabase(file) {
     return { sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params };
   }
 
+  // Which business each order belongs to: the business of a charge linked to it, else
+  // of the card that paid (an account's last four digits), else of the place it was
+  // delivered to. null when none of those says.
+  function orderBusinesses(orders) {
+    const out = new Map();
+    if (!orders.length) return out;
+    const linked = new Map();
+    for (const row of db
+      .prepare(
+        'SELECT l.store, l.order_id, COALESCE(t.entity_id, a.entity_id) AS entity FROM order_links l JOIN bank_transactions t ON t.id = l.transaction_id JOIN bank_accounts a ON a.id = t.account_id'
+      )
+      .all()) {
+      if (row.entity !== null) linked.set(`${row.store}\u0000${row.order_id}`, row.entity);
+    }
+    const cards = new Map();
+    for (const account of db.prepare('SELECT name, last4, entity_id FROM bank_accounts WHERE entity_id IS NOT NULL').all()) {
+      const digits = account.last4 ? String(account.last4) : (/\((\d{4})\)\s*$/.exec(account.name) || [])[1];
+      if (digits && !cards.has(digits)) cards.set(digits, account.entity_id);
+    }
+    const places = new Map(db.prepare('SELECT zip, entity_id FROM place_entities').all().map((r) => [r.zip, r.entity_id]));
+    for (const order of orders) {
+      const key = `${order.store}\u0000${order.order_id}`;
+      let entity = linked.get(key) ?? null;
+      if (entity === null) {
+        for (const match of String(order.payment || '').matchAll(/ending (\d{4})\b/gi)) {
+          if (cards.has(match[1])) {
+            entity = cards.get(match[1]);
+            break;
+          }
+        }
+      }
+      if (entity === null && order.delivery_zip) entity = places.get(zip5(order.delivery_zip)) ?? null;
+      out.set(key, entity);
+    }
+    return out;
+  }
+
+  // The orders of one business, when the filters choose one.
+  function forBusiness(orders, filters) {
+    if (!filters.entity) return orders;
+    const owners = orderBusinesses(orders);
+    return orders.filter((o) => owners.get(`${o.store}\u0000${o.order_id}`) === filters.entity);
+  }
+
   function allItemsByOrder() {
     const byOrder = new Map();
     for (const row of db.prepare('SELECT * FROM items ORDER BY store, order_id, position').all()) {
@@ -1172,7 +1216,7 @@ function openDatabase(file) {
   function enrichedItems(raw = {}) {
     const filters = normalize(raw);
     const { sql, params } = whereFor(filters);
-    const orders = db.prepare(`SELECT o.* FROM orders o ${sql}`).all(...params);
+    const orders = forBusiness(db.prepare(`SELECT o.* FROM orders o ${sql}`).all(...params), filters);
     const byOrder = allItemsByOrder();
     const marks = allMarks();
     const rules = taxRules();
@@ -1244,7 +1288,15 @@ function openDatabase(file) {
   function report(raw = {}) {
     const filters = normalize(raw);
     const { sql, params } = whereFor(filters);
-    const orders = db.prepare(`SELECT o.* FROM orders o ${sql}`).all(...params);
+    const everyOrder = db.prepare(`SELECT o.* FROM orders o ${sql}`).all(...params);
+    const orders = forBusiness(everyOrder, filters);
+    // With a business chosen: the orders in these filters that no business could be
+    // found for, so the page can say they're left out.
+    let unassigned = null;
+    if (filters.entity) {
+      const owners = orderBusinesses(everyOrder);
+      unassigned = everyOrder.filter((o) => owners.get(`${o.store}\u0000${o.order_id}`) === null).length;
+    }
     const items = enrichedItems(filters);
     const itemsByOrder = new Map();
     for (const item of items) {
@@ -1318,7 +1370,7 @@ function openDatabase(file) {
       .slice(0, 10);
 
     return {
-      totals: { ...totals, estimatedItems },
+      totals: { ...totals, estimatedItems, unassigned },
       byMonth: finish(months).sort((a, b) => a.label.localeCompare(b.label)),
       byStore: finish(stores),
       byPayment: finish(payments),
@@ -1337,6 +1389,7 @@ function openDatabase(file) {
     let rows = db
       .prepare(`SELECT o.* FROM orders o ${sql} ORDER BY ${column} IS NULL, ${column} ${order}, o.order_date DESC, o.store, o.order_id`)
       .all(...params);
+    rows = forBusiness(rows, filters);
     if (filters.category) {
       const matching = new Set(enrichedItems(filters).map((item) => `${item.store}\u0000${item.orderId}`));
       rows = rows.filter((row) => matching.has(`${row.store}\u0000${row.order_id}`));

@@ -11,7 +11,7 @@ import { money, whole } from '../format';
 import { Banner, Card, Empty, Loading, PageHeader, Stat, TD, TH, TR } from '../ui';
 
 export function Dashboard({ meta }: { meta: Meta | null }) {
-  const { business } = useBusiness();
+  const { business, current } = useBusiness();
   const { query, params, range } = useFilters();
   const navigate = useNavigate();
 
@@ -45,7 +45,14 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
 
   return (
     <>
-      <PageHeader title="Dashboard" description="Business spending across your bank and card accounts, and your synced stores. Anything marked Personal is left out." />
+      <PageHeader
+        title={current ? current.name : 'Dashboard'}
+        description={
+          current
+            ? `${current.name}'s spending across its bank and card accounts, and the store orders that belong to it. Anything marked Personal is left out.`
+            : 'Business spending across your bank and card accounts, and your synced stores. Anything marked Personal is left out.'
+        }
+      />
       <FilterBar meta={meta} />
       <BankSummary range={range()} />
       {report.error && <Banner>{report.error.message}</Banner>}
@@ -60,7 +67,21 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
           </div>
           {caveats.length > 0 && <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{caveats.join(' ')}</p>}
 
-          {business !== null && <p className="mt-5 text-xs text-slate-500 dark:text-slate-400">Store orders below are for all businesses; their charges above are this business's.</p>}
+          {business !== null && (
+            <p className="mt-5 text-xs text-slate-500 dark:text-slate-400">
+              Store orders below are this business's: paid by a charge or card on its accounts, or delivered to one of its places.
+              {totals.unassigned > 0 && (
+                <>
+                  {' '}
+                  {whole(totals.unassigned)} other order(s) in this period aren't tied to any business, so they're left out.{' '}
+                  <Link to="/settings#places" className="text-emerald-700 hover:underline dark:text-emerald-400">
+                    Choose which business a delivery place belongs to
+                  </Link>
+                  .
+                </>
+              )}
+            </p>
+          )}
           <Card title="Store orders by month" className="mt-5">
             <MonthlyBars rows={data.byMonth} onSelect={openMonth} />
           </Card>
