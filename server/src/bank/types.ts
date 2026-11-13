@@ -13,11 +13,11 @@ export interface IncomingTransaction {
   payee?: string | null;
 }
 
-export type AccountKind = 'checking' | 'savings' | 'credit' | 'other';
+export type AccountKind = 'checking' | 'savings' | 'credit' | 'loan' | 'other';
 export type Owner = 'business' | 'personal' | 'mixed';
 export type Source = 'simplefin' | 'ofx' | 'csv' | 'receipt' | 'lease';
 
-export const ACCOUNT_KINDS: AccountKind[] = ['checking', 'savings', 'credit', 'other'];
+export const ACCOUNT_KINDS: AccountKind[] = ['checking', 'savings', 'credit', 'loan', 'other'];
 export const OWNERS: Owner[] = ['business', 'personal', 'mixed'];
 export const TX_KINDS = ['normal', 'transfer', 'ignored'] as const;
 export type TxKind = (typeof TX_KINDS)[number];

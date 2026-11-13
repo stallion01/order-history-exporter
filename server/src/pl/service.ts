@@ -24,6 +24,27 @@ const INVESTED = 'pl.invested';
 const INVESTED_ON = 'pl.investedOn';
 const DAY_MS = 86400000;
 const SOURCES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'lease', 'other'];
+const MARKET_VALUE = 'pl.marketValue.';
+const LOAN_PAYMENTS = 'Loan & Mortgage Payments';
+
+// Spending categories grouped for the cash-flow chart, first match wins. Capital
+// purchases on the asset register are a group of their own.
+export const CASH_GROUPS = ['Mortgages & Loans', 'Taxes', 'Insurance', 'Utilities', 'Fees & Services', 'Repairs & Maintenance', 'Supplies & Furnishings', 'Capital improvements', 'Admin & Other'] as const;
+const GROUP_RULES: [(typeof CASH_GROUPS)[number], RegExp][] = [
+  ['Mortgages & Loans', /mortgage|loan|interest/i],
+  ['Taxes', /tax/i],
+  ['Insurance', /insurance/i],
+  ['Utilities', /utilit|phone|internet|water|propane|trash|electric/i],
+  ['Fees & Services', /fee|advertis|listing|professional|software|subscription|management|commission/i],
+  ['Repairs & Maintenance', /repair|maint|contractor|lawn|garden|tools|building|appliance/i],
+  ['Supplies & Furnishings', /supplies|linen|bedding|household|kitchen|furniture|bath|grocery|paper|electronics|health/i],
+];
+export const cashGroup = (category: string) => GROUP_RULES.find(([, rule]) => rule.test(category))?.[0] ?? 'Admin & Other';
+
+const monthsBefore = (month: string, n: number) => {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1 - n, 1)).toISOString().slice(0, 7);
+};
 
 const cents = (n: number) => Math.round(n * 100) / 100;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -77,10 +98,10 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
     // A transaction shared between businesses counts for this one's share.
     const shareOf = (tx: { entityId: number | null; shares: { entityId: number; percent: number }[] }) =>
       entity === null || !tx.shares.length ? 1 : (tx.shares.find((s) => s.entityId === entity)?.percent ?? 0) / 100;
-    const months = new Map<string, { month: string; revenue: number; expenses: number; capital: number; sources: Record<IncomeSource, number> }>();
+    const months = new Map<string, { month: string; revenue: number; expenses: number; capital: number; sources: Record<IncomeSource, number>; byCategory: Map<string, number> }>();
     const at = (month: string) => {
       let m = months.get(month);
-      if (!m) months.set(month, (m = { month, revenue: 0, expenses: 0, capital: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, lease: 0, other: 0 } }));
+      if (!m) months.set(month, (m = { month, revenue: 0, expenses: 0, capital: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, lease: 0, other: 0 }, byCategory: new Map() }));
       return m;
     };
     const sources: Record<IncomeSource, number> = { airbnb: 0, vrbo: 0, booking: 0, lease: 0, other: 0 };
@@ -106,8 +127,10 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
       .all(from, to, ...(entity === null ? [] : [entity])) as Row[];
     const capitalByCategory = new Map<string, number>();
     for (const a of assets) {
-      at((a.posted as string).slice(0, 7)).capital += a.cost;
+      const month = at((a.posted as string).slice(0, 7));
+      month.capital += a.cost;
       const category = a.category || 'Uncategorized';
+      month.byCategory.set(category, (month.byCategory.get(category) || 0) - a.cost);
       capitalByCategory.set(category, (capitalByCategory.get(category) || 0) + a.cost);
     }
 
@@ -116,7 +139,9 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
     for (const line of correlate.spendLines({ from, to, status: null, kind: 'normal' })) {
       if (line.status === 'personal') continue;
       if (entity !== null && line.entityId !== entity) continue;
-      at(line.posted.slice(0, 7)).expenses += line.amount;
+      const month = at(line.posted.slice(0, 7));
+      month.expenses += line.amount;
+      month.byCategory.set(line.category, (month.byCategory.get(line.category) || 0) + line.amount);
       categories.set(line.category, (categories.get(line.category) || 0) + line.amount);
     }
     for (const [category, cost] of capitalByCategory) categories.set(category, (categories.get(category) || 0) - cost);
@@ -145,7 +170,104 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
           capital: cents(m.capital),
           noi: cents(m.revenue - m.expenses),
           sources: Object.fromEntries(SOURCES.map((k) => [k, cents(m.sources[k])])) as Record<IncomeSource, number>,
+          byCategory: m.byCategory,
         })),
+    };
+  }
+
+  // A business's market value, entered by hand; for all of them, the total of those set.
+  function marketValue(entity: number) {
+    return Number(bank.getSetting(MARKET_VALUE + entity)) || null;
+  }
+  function saveMarketValue(entityId: number, value: number | null) {
+    if (!correlate.entities().some((e) => e.id === entityId)) throw new Error('That business was not found.');
+    bank.setSetting(MARKET_VALUE + entityId, value ? String(value) : null);
+  }
+
+  // Money in and out month by month, like a bank statement would show it: income, then
+  // spending in groups, loan payments (interest and principal) and capital purchases.
+  // Also what the business is worth (market value less debt, plus cash in its
+  // accounts) and the cash-on-cash return on what was invested.
+  function cashFlow(entity: number | null = null) {
+    const now = today();
+    const current = now.slice(0, 7);
+    const first = monthsBefore(current, 24);
+    const f = figures(`${first}-01`, now, entity);
+    const empty = () => Object.fromEntries(CASH_GROUPS.map((g) => [g, 0])) as Record<(typeof CASH_GROUPS)[number], number>;
+    const byMonth = new Map<string, { income: number; groups: ReturnType<typeof empty> }>();
+    for (let i = 24; i >= 0; i--) byMonth.set(monthsBefore(current, i), { income: 0, groups: empty() });
+    for (const m of f.months) {
+      const slot = byMonth.get(m.month);
+      if (!slot) continue;
+      slot.income += m.revenue;
+      for (const [category, amount] of m.byCategory) slot.groups[cashGroup(category)] += amount;
+      slot.groups['Capital improvements'] += m.capital;
+    }
+    // Loan principal is a transfer, so it isn't an expense, but it is money out.
+    const principal = bank.listTransactions({
+      from: `${first}-01`,
+      to: now,
+      status: 'notpersonal',
+      kind: 'transfer',
+      direction: 'out',
+      category: [LOAN_PAYMENTS],
+      entity: entity === null ? null : [entity],
+    }).transactions;
+    for (const tx of principal) {
+      const slot = byMonth.get(tx.posted.slice(0, 7));
+      if (slot) slot.groups['Mortgages & Loans'] += Math.abs(tx.amount);
+    }
+    const months = [...byMonth.entries()].map(([month, m]) => {
+      const groups = Object.fromEntries(Object.entries(m.groups).map(([g, v]) => [g, cents(v)])) as ReturnType<typeof empty>;
+      const out = Object.values(m.groups).reduce((t, v) => t + v, 0);
+      return { month, income: cents(m.income), groups, out: cents(out), net: cents(m.income - out) };
+    });
+
+    // The last twelve whole months, and the one before this.
+    const whole = months.slice(-13, -1);
+    const sum = (list: typeof months, pick: (m: (typeof months)[number]) => number) => cents(list.reduce((t, m) => t + pick(m), 0));
+    const debt = (m: (typeof months)[number]) => m.groups['Mortgages & Loans'];
+    const capital = (m: (typeof months)[number]) => m.groups['Capital improvements'];
+    const ttm = {
+      from: `${whole[0].month}-01`,
+      to: `${whole[whole.length - 1].month}-${String(new Date(Date.UTC(Number(whole[whole.length - 1].month.slice(0, 4)), Number(whole[whole.length - 1].month.slice(5)), 0)).getUTCDate()).padStart(2, '0')}`,
+      income: sum(whole, (m) => m.income),
+      expenses: sum(whole, (m) => m.out - debt(m) - capital(m)),
+      debt: sum(whole, debt),
+      capital: sum(whole, capital),
+      net: sum(whole, (m) => m.net),
+    };
+    const invested = settings(entity).invested;
+    // Cash on cash at the end of each of the last twelve months: the twelve months to
+    // then, over what was invested.
+    const cocSeries = months.slice(-13, -1).map((m, i) => {
+      const window = months.slice(i + 1, i + 13);
+      return { month: m.month, value: invested ? sum(window, (x) => x.net) / invested : null };
+    });
+
+    // Worth: market values less what's owed, plus cash in the business's accounts.
+    const businesses = correlate.entities().filter((e) => entity === null || e.id === entity);
+    const values = businesses.map((e) => ({ id: e.id, name: e.name, value: marketValue(e.id) }));
+    let cash = 0;
+    let owed = 0;
+    for (const a of bank.accounts()) {
+      if (a.balance === null || a.owner === 'personal') continue;
+      if (entity !== null && a.entityId !== entity) continue;
+      if (a.kind === 'loan') owed += Math.abs(a.balance);
+      else if (a.kind === 'credit') owed += Math.max(-a.balance, 0);
+      else if (a.balance > 0) cash += a.balance;
+    }
+    const value = cents(values.reduce((t, v) => t + (v.value || 0), 0));
+    return {
+      groups: CASH_GROUPS,
+      months: months.slice(-13),
+      lastMonth: months[months.length - 2],
+      average: whole.length ? cents(ttm.net / whole.length) : 0,
+      ttm,
+      invested,
+      cashOnCash: invested ? ttm.net / invested : null,
+      cocSeries,
+      netWorth: { value, values, debt: cents(owed), cash: cents(cash), total: cents(value - owed + cash) },
     };
   }
 
@@ -228,6 +350,7 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
       period: { ...range, kind: period.kind, year: period.kind === 'year' ? period.year : null },
       years: years.map(({ annualRevenue: _unused, ...rest }) => rest),
       ...main,
+      months: main.months.map(({ byCategory: _unused, ...rest }) => rest),
       margin: main.revenue ? main.noi / main.revenue : null,
       ...returns(main.noi, range.from, range.to, entity),
       ttm: { from: ttmRange.from, to: ttmRange.to, revenue: ttm.revenue, expenses: ttm.expenses, noi: ttm.noi, ...ttmReturn },
@@ -244,7 +367,7 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
     };
   }
 
-  return { settings, saveSettings, report };
+  return { settings, saveSettings, report, cashFlow, saveMarketValue };
 }
 
 export type PlService = ReturnType<typeof plService>;

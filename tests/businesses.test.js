@@ -167,3 +167,38 @@ test("a lease's payments go to its own business's account", async () => {
   assert.equal((await get(`/api/pl?period=2026&entity=${ltr}`)).sources.find((s) => s.key === 'lease').amount, 2000);
   assert.equal((await get(`/api/pl?period=2026&entity=${str}`)).revenue, 5000, 'unchanged');
 });
+
+test('cash flow: income, spending by group, loan principal, net worth and cash-on-cash', async () => {
+  const birch = (await post('/api/entities', { name: 'Birch Stays LLC', kind: 'business', activity: 'str', taxForm: 'form-1065', invested: 100000, investedOn: '2020-01-01' })).id;
+  // Last month, whatever today is.
+  const now = new Date();
+  const last = new Date(now.getFullYear(), now.getMonth() - 1, 10);
+  const day = `${String(last.getMonth() + 1).padStart(2, '0')}/10/${last.getFullYear()}`;
+  const month = `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, '0')}`;
+  const account = (
+    await post('/api/bank/import', {
+      content: `Date,Description,Amount\n${day},AIRBNB 4000 PAYMENTS,3000.00\n${day},CITY WATER DEPT,-200.00\n${day},MORTGAGE PRINCIPAL,-1000.00\n`,
+      fileName: 'birch.csv',
+      newAccount: { name: 'Birch checking', kind: 'checking', owner: 'business' },
+    })
+  ).accountId;
+  await post(`/api/bank/accounts/${account}`, { entityId: birch });
+  const { transactions } = await get(`/api/bank/transactions?kind=all&preset=all&account=${account}&limit=50`);
+  const by = (text) => transactions.find((t) => t.description.includes(text)).id;
+  await post('/api/bank/transactions/update', { ids: [by('AIRBNB')], category: 'Rental Income' });
+  await post('/api/bank/transactions/update', { ids: [by('WATER')], category: 'Utilities' });
+  await post('/api/bank/transactions/update', { ids: [by('PRINCIPAL')], category: 'Loan & Mortgage Payments', kind: 'transfer' });
+
+  const flow = await get(`/api/pl/cashflow?entity=${birch}`);
+  assert.equal(flow.months.length, 13, 'a year and this month');
+  assert.equal(flow.lastMonth.month, month);
+  assert.deepEqual([flow.lastMonth.income, flow.lastMonth.groups.Utilities, flow.lastMonth.groups['Mortgages & Loans'], flow.lastMonth.net], [3000, 200, 1000, 1800]);
+  assert.deepEqual([flow.ttm.income, flow.ttm.expenses, flow.ttm.debt, flow.ttm.net], [3000, 200, 1000, 1800]);
+  assert.equal(flow.average, 150);
+  assert.equal(flow.cashOnCash, 0.018);
+  assert.equal(flow.cocSeries.at(-1).value, 0.018);
+
+  await post('/api/pl/market-value', { entityId: birch, value: 250000 });
+  const worth = (await get(`/api/pl/cashflow?entity=${birch}`)).netWorth;
+  assert.deepEqual([worth.value, worth.debt, worth.total], [250000, 0, 250000 + worth.cash]);
+});

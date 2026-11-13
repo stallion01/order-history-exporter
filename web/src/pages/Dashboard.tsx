@@ -6,6 +6,7 @@ import { FilterBar, useFilters } from '../filters';
 import type { Meta } from '../filters';
 import { when } from '../bank';
 import { useBusiness } from '../business';
+import { CashFlowOverview } from '../cashflow';
 import type { Account, SimplefinStatus } from '../bank';
 import { money, whole } from '../format';
 import { Banner, Card, Empty, Loading, PageHeader, Stat, TD, TH, TR } from '../ui';
@@ -53,6 +54,8 @@ export function Dashboard({ meta }: { meta: Meta | null }) {
             : 'Business spending across your bank and card accounts, and your synced stores. Anything marked Personal is left out.'
         }
       />
+      <CashFlowOverview />
+      <h2 className="mb-3 mt-8 text-lg font-semibold tracking-tight">Spending</h2>
       <FilterBar meta={meta} />
       <BankSummary range={range()} />
       {report.error && <Banner>{report.error.message}</Banner>}

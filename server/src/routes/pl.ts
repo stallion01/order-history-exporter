@@ -26,6 +26,25 @@ export function plRoutes(app: FastifyInstance, pl: PlService) {
     return pl.report(period, business ? Number(business) : null);
   });
 
+  // Cash flow, net worth and cash-on-cash return, for the dashboard.
+  app.get('/api/pl/cashflow', async (request) => {
+    const business = queryOf(request.query).get('entity');
+    if (business && !/^\d+$/.test(business)) throw new HttpError(400, 'Unknown business.');
+    return pl.cashFlow(business ? Number(business) : null);
+  });
+
+  app.post('/api/pl/market-value', async (request) => {
+    const result = z.object({ entityId: z.number().int().positive(), value: z.number().min(0).max(1e10).nullable() }).safeParse(request.body);
+    if (!result.success) throw new HttpError(400, result.error.issues[0]?.message || 'Invalid request.');
+    (request as unknown as AuthedRequest).audit('pl.marketValue', result.data);
+    try {
+      pl.saveMarketValue(result.data.entityId, result.data.value);
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+    return { ok: true };
+  });
+
   app.post('/api/pl/settings', async (request) => {
     const result = settingsBody.safeParse(request.body);
     if (!result.success) throw new HttpError(400, result.error.issues[0]?.message || 'Invalid request.');
