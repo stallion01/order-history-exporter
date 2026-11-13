@@ -117,3 +117,42 @@ test('removing the rule puts things back', async () => {
   assert.deepEqual(await items(), { S1: 'unreviewed', S2: 'unreviewed', S3: 'unreviewed', W1: 'unreviewed' });
   assert.deepEqual(await charges(), { SAMSCLUB: 'business', SAMS: null, SHELL: null });
 });
+
+test('a rule with several conditions needs them all, and beats a simpler rule', async () => {
+  await post('/api/tax/rules', { field: 'store', value: 'samsclub', status: 'personal' });
+  await post('/api/tax/rules', {
+    field: 'multi',
+    status: 'business',
+    conditions: [
+      { field: 'store', value: 'samsclub' },
+      { field: 'payment', value: 'Card ending 9999', not: true },
+    ],
+  });
+  // Saving it again, conditions in another order, changes nothing.
+  await post('/api/tax/rules', {
+    field: 'multi',
+    status: 'business',
+    conditions: [
+      { field: 'payment', value: 'Card ending 9999', not: true },
+      { field: 'store', value: 'samsclub' },
+    ],
+  });
+  assert.equal((await get('/api/tax/rules')).rules.length, 2);
+  // W1 was paid with the same card but at another store.
+  assert.deepEqual(await items(), { S1: 'business', S2: 'personal', S3: 'business', W1: 'unreviewed' });
+
+  // Two places at once: any of a field's values matches.
+  await post('/api/tax/rules', {
+    field: 'multi',
+    status: 'personal',
+    conditions: [
+      { field: 'store', value: 'walmart' },
+      { field: 'payment', value: 'Card ending 9999' },
+      { field: 'payment', value: 'Card ending 0000' },
+    ],
+  });
+  assert.equal((await items()).W1, 'personal');
+
+  await assert.rejects(post('/api/tax/rules', { field: 'multi', status: 'business', conditions: [{ field: 'store', value: 'samsclub' }] }), { status: 400 });
+  await assert.rejects(post('/api/tax/rules', { field: 'multi', status: 'business', conditions: [{ field: 'store', value: 'x' }, { field: 'nope', value: 'y' }] }), { status: 400 });
+});

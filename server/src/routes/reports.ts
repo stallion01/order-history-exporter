@@ -5,6 +5,7 @@ import type { OrdersDb } from '../legacy';
 import {
   HttpError,
   RULE_FIELDS,
+  SIMPLE_FIELDS,
   STATUSES,
   filtersFrom,
   formParam,
@@ -151,7 +152,20 @@ export function reportRoutes(app: FastifyInstance, db: OrdersDb, rulesChanged: (
     if (!STATUSES.includes(body.status)) throw new HttpError(400, 'Unknown status.');
     // At a store, anything not on a business card is personal.
     const storeCard = body.field === 'store_card';
-    const rule = { field: body.field, value: storeCard ? storeParam(body.value) : textParam(body.value, 'Rule value'), status: storeCard ? 'personal' : body.status };
+    let value: string;
+    if (body.field === 'multi') {
+      // Several conditions, all of which must match: [{ field, value, not }].
+      const list = Array.isArray(body.conditions) ? body.conditions : [];
+      if (list.length < 2 || list.length > 8) throw new HttpError(400, 'A rule with several conditions needs 2 to 8 of them.');
+      const conditions = list.map((c: Record<string, unknown>) => {
+        if (!SIMPLE_FIELDS.includes(c?.field as string)) throw new HttpError(400, 'Unknown condition.');
+        return { field: c.field as string, value: textParam(c.value, 'Condition value'), not: c.not === true };
+      });
+      value = JSON.stringify(conditions);
+    } else {
+      value = storeCard ? storeParam(body.value) : textParam(body.value, 'Rule value');
+    }
+    const rule = { field: body.field, value, status: storeCard ? 'personal' : body.status };
     db.saveTaxRule(rule);
     if (storeCard) rulesChanged();
     audit(request, 'rule.save', rule);

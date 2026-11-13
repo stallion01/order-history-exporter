@@ -919,6 +919,14 @@ function openDatabase(file) {
   const taxRules = () => db.prepare('SELECT id, field, value, status FROM tax_rules ORDER BY field, value').all().map((row) => ({ ...row }));
 
   function saveTaxRule({ field, value, status }) {
+    // Several conditions are stored in one order, so the same rule isn't saved twice.
+    if (field === 'multi') {
+      const conditions = (Array.isArray(value) ? value : JSON.parse(value))
+        .map((c) => ({ field: c.field, value: c.field === 'zip' ? zip5(c.value) : c.value, not: Boolean(c.not) }))
+        .sort((a, b) => a.field.localeCompare(b.field) || Number(a.not) - Number(b.not) || a.value.localeCompare(b.value));
+      const unique = [...new Map(conditions.map((c) => [JSON.stringify(c), c])).values()];
+      value = JSON.stringify(unique);
+    }
     db.prepare(
       'INSERT INTO tax_rules (field, value, status) VALUES (?, ?, ?) ON CONFLICT (field, value) DO UPDATE SET status = excluded.status'
     ).run(field, field === 'zip' ? zip5(value) : value, status);

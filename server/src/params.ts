@@ -14,8 +14,11 @@ const STORE_ID = /^[a-z0-9_-]{1,40}$/i;
 const MAX_PAGE = 200;
 
 export const STATUSES = ['business', 'personal'];
+// Fields a rule's condition can test.
+export const SIMPLE_FIELDS = ['zip', 'payment', 'store', 'category'];
 // store_card: at that store, business only when paid with a Business account's card.
-export const RULE_FIELDS = ['zip', 'payment', 'store', 'category', 'store_card'];
+// multi: several conditions, all of which must match.
+export const RULE_FIELDS = [...SIMPLE_FIELDS, 'store_card', 'multi'];
 
 export type Query = URLSearchParams;
 // A repeated key (?store=a&store=b) arrives as an array; keep each value.

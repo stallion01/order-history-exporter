@@ -102,23 +102,45 @@ function resolveStatus(item, mark, rules) {
   if (item.card && rules.some((rule) => rule.field === 'store_card' && rule.value === item.store)) {
     return { status: item.card === 'business' ? 'business' : 'personal', source: 'rule' };
   }
-  const matching = rules.filter((rule) => {
-    switch (rule.field) {
-      case 'zip':
-        return item.deliveryZip === rule.value;
-      case 'payment':
-        return item.payment === rule.value;
-      case 'store':
-        return item.store === rule.value;
-      case 'category':
-        return item.category === rule.value;
-      default:
-        return false;
-    }
-  });
-  if (matching.some((rule) => rule.status === 'personal')) return { status: 'personal', source: 'rule' };
-  if (matching.some((rule) => rule.status === 'business')) return { status: 'business', source: 'rule' };
-  return { status: 'unreviewed', source: 'none' };
+  // The rule with the most conditions wins, being the most specific; among equally
+  // specific rules, personal beats business.
+  const matching = rules
+    .map((rule) => ({ rule, conditions: conditionsOf(rule) }))
+    .filter(({ conditions }) => conditions && matchesAll(item, conditions));
+  if (!matching.length) return { status: 'unreviewed', source: 'none' };
+  const most = Math.max(...matching.map((m) => m.conditions.length));
+  const best = matching.filter((m) => m.conditions.length === most);
+  return { status: best.some((m) => m.rule.status === 'personal') ? 'personal' : 'business', source: 'rule' };
+}
+
+const RULE_FIELDS = ['zip', 'payment', 'store', 'category'];
+const itemValue = (item, field) => ({ zip: item.deliveryZip, payment: item.payment, store: item.store, category: item.category })[field];
+
+// A rule's conditions: [{ field, value, not }]. A one-condition rule keeps its field and
+// value; a rule with several has field 'multi' and the conditions as JSON in value.
+function conditionsOf(rule) {
+  if (RULE_FIELDS.includes(rule.field)) return [{ field: rule.field, value: rule.value, not: false }];
+  if (rule.field !== 'multi') return null;
+  try {
+    const list = JSON.parse(rule.value);
+    return Array.isArray(list) && list.length ? list : null;
+  } catch {
+    return null;
+  }
+}
+
+// Every field must match. Several "is" values for one field mean any of them; an
+// "is not" value must not match.
+function matchesAll(item, conditions) {
+  const fields = new Set(conditions.map((c) => c.field));
+  for (const field of fields) {
+    const value = itemValue(item, field);
+    const own = conditions.filter((c) => c.field === field);
+    const is = own.filter((c) => !c.not);
+    if (is.length && !is.some((c) => c.value === value)) return false;
+    if (own.some((c) => c.not && c.value === value)) return false;
+  }
+  return true;
 }
 
 // items: enriched items for the tax year. lineFor(category) gives this form's line.

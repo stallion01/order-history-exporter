@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Download, Trash2 } from 'lucide-react';
+import { Download, Plus, Trash2, X } from 'lucide-react';
 import { download, post, useApi } from '../api';
 import { placeOptions } from '../filters';
 import type { Meta } from '../filters';
@@ -15,6 +15,9 @@ const FIELD_LABELS: Record<string, string> = {
   category: 'Category is',
   store_card: 'Store, unless on a Business card',
 };
+// A condition's field on its own, for "Store is not Amazon" and the like.
+const FIELD_NAMES: Record<string, string> = { zip: 'Delivered to', payment: 'Payment method', store: 'Store', category: 'Category' };
+type Condition = { field: string; value: string; not: boolean };
 
 export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: Record<string, { name: string; lines: [string, string][] }>; onMetaChange: () => void }) {
   const lastYear = String(new Date().getFullYear() - 1);
@@ -22,7 +25,8 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
   const [form, setForm] = useState('schedule-c');
   const [zip, setZip] = useState('');
   const [error, setError] = useState('');
-  const [rule, setRule] = useState({ field: 'zip', value: '', status: 'business' });
+  const [conditions, setConditions] = useState<Condition[]>([{ field: 'zip', value: '', not: false }]);
+  const [ruleStatus, setRuleStatus] = useState('business');
   const [newCategory, setNewCategory] = useState('');
 
   useEffect(() => {
@@ -33,14 +37,21 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
   const report = useApi<any>(`/api/tax/report?${query}`);
   const rules = useApi<{ rules: { id: number; field: string; value: string; status: string }[] }>('/api/tax/rules');
 
-  const ruleOptions: [string, string][] = {
-    zip: placeOptions(meta),
-    payment: (meta?.payments || []).map((p): [string, string] => [p, p]),
-    store: (meta?.stores || []).map((s): [string, string] => [s.store, s.name]),
-    store_card: (meta?.stores || []).map((s): [string, string] => [s.store, s.name]),
-    category: (meta?.categories || []).map((c): [string, string] => [c.name, c.name]),
-  }[rule.field] || [];
-  const ruleValue = ruleOptions.some(([v]) => v === rule.value) ? rule.value : ruleOptions[0]?.[0] || '';
+  const optionsFor = (field: string): [string, string][] =>
+    ({
+      zip: placeOptions(meta),
+      payment: (meta?.payments || []).map((p): [string, string] => [p, p]),
+      store: (meta?.stores || []).map((s): [string, string] => [s.store, s.name]),
+      store_card: (meta?.stores || []).map((s): [string, string] => [s.store, s.name]),
+      category: (meta?.categories || []).map((c): [string, string] => [c.name, c.name]),
+    })[field] || [];
+  // Each condition's value, or the first choice when none is picked yet.
+  const chosen = conditions.map((c) => {
+    const options = optionsFor(c.field);
+    return { ...c, value: options.some(([v]) => v === c.value) ? c.value : options[0]?.[0] || '' };
+  });
+  const storeCard = chosen[0]?.field === 'store_card';
+  const change = (index: number, patch: Partial<Condition>) => setConditions(chosen.map((c, i) => (i === index ? { ...c, ...patch, ...(patch.field ? { value: '' } : {}) } : c)));
 
   async function act(fn: () => Promise<unknown>) {
     setError('');
@@ -54,7 +65,13 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
 
   const addRule = (event: FormEvent) => {
     event.preventDefault();
-    act(() => post('/api/tax/rules', { ...rule, value: ruleValue }));
+    const [first] = chosen;
+    const body =
+      chosen.length === 1 && !first.not ? { field: first.field, value: first.value, status: ruleStatus } : { field: 'multi', conditions: chosen, status: ruleStatus };
+    act(async () => {
+      await post('/api/tax/rules', body);
+      setConditions([{ field: 'zip', value: '', not: false }]);
+    });
   };
 
   const addCategory = (event: FormEvent) => {
@@ -76,6 +93,25 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
     });
 
   const storeName = (value: string) => meta?.stores.find((s) => s.store === value)?.name || value;
+  const valueName = (field: string, value: string) => optionsFor(field).find(([v]) => v === value)?.[1] || value;
+  // A saved rule in words, such as "Store is Amazon and Payment method is not Visa ending 1234".
+  const describe = (r: { field: string; value: string }) => {
+    let list: Condition[] = [{ field: r.field, value: r.value, not: false }];
+    if (r.field === 'multi') {
+      try {
+        list = JSON.parse(r.value);
+      } catch {
+        return r.value;
+      }
+    }
+    const order = ['store', 'payment', 'zip', 'category'];
+    return [...list].sort((a, b) => order.indexOf(a.field) - order.indexOf(b.field)).map((c, i) => (
+      <span key={i}>
+        {i > 0 && ' and '}
+        {FIELD_NAMES[c.field]} {c.not ? 'is not' : 'is'} <span className="font-medium">{valueName(c.field, c.value)}</span>
+      </span>
+    ));
+  };
   const data = report.data;
   const totals = data?.totals;
   const estimated = data ? data.lines.reduce((sum: number, line: any) => sum + line.estimated, 0) : 0;
@@ -216,36 +252,65 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
       <div className="mt-5 grid items-start gap-5 lg:grid-cols-2">
         <Card title="Business and personal rules">
           <p className="mb-3 text-xs text-slate-500">
-            For example, everything delivered to a rental's ZIP, or everything on a business card. Your own marks always win, and a personal rule beats a business one. &quot;Store, unless on a Business card&quot; makes that store&apos;s orders and bank charges Personal unless they were paid with a card on an account marked Business.
+            For example, everything delivered to a rental's ZIP, or Amazon orders on one card delivered to one place. Every condition in a rule must match. Your own marks always win; then the rule with the most conditions, and a personal rule beats an equally specific business one. &quot;Store, unless on a Business card&quot; makes that store&apos;s orders and bank charges Personal unless they were paid with a card on an account marked Business.
           </p>
-          <form onSubmit={addRule} className="grid grid-cols-2 items-end gap-3">
-            <Field label="When">
-              <Select value={rule.field} onChange={(e) => setRule({ ...rule, field: e.target.value, value: '' })}>
-                {Object.entries(FIELD_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Value">
-              <Select value={ruleValue} onChange={(e) => setRule({ ...rule, value: e.target.value })} disabled={!ruleOptions.length}>
-                {ruleOptions.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Treat as">
-              <Select value={rule.field === 'store_card' ? 'personal' : rule.status} onChange={(e) => setRule({ ...rule, status: e.target.value })} disabled={rule.field === 'store_card'}>
-                <option value="business">Business</option>
-                <option value="personal">Personal</option>
-              </Select>
-            </Field>
-            <Button type="submit" variant="primary" disabled={!ruleValue}>
-              Add rule
-            </Button>
+          <form onSubmit={addRule} className="space-y-3">
+            {chosen.map((c, i) => {
+              const options = optionsFor(c.field);
+              return (
+                <div key={i} className="grid grid-cols-[1fr_auto] items-end gap-2 sm:grid-cols-[minmax(0,10rem)_minmax(0,6rem)_minmax(0,1fr)_auto]">
+                  <Field label={i === 0 ? 'When' : 'And'}>
+                    <Select value={c.field} onChange={(e) => change(i, { field: e.target.value })}>
+                      {Object.entries(i === 0 && chosen.length === 1 ? FIELD_LABELS : FIELD_NAMES).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {i === 0 && chosen.length === 1 ? label : FIELD_NAMES[value]}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  {!storeCard && (
+                    <Field label="Is">
+                      <Select value={c.not ? 'not' : 'is'} onChange={(e) => change(i, { not: e.target.value === 'not' })}>
+                        <option value="is">is</option>
+                        <option value="not">is not</option>
+                      </Select>
+                    </Field>
+                  )}
+                  <Field label="Value">
+                    <Select value={c.value} onChange={(e) => change(i, { value: e.target.value })} disabled={!options.length}>
+                      {options.map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  {chosen.length > 1 ? (
+                    <Button variant="ghost" aria-label="Remove this condition" onClick={() => setConditions(chosen.filter((_, j) => j !== i))}>
+                      <X className="size-4" aria-hidden />
+                    </Button>
+                  ) : (
+                    <span />
+                  )}
+                </div>
+              );
+            })}
+            {!storeCard && chosen.length < 8 && (
+              <Button onClick={() => setConditions([...chosen, { field: chosen.some((c) => c.field === 'store') ? 'payment' : 'store', value: '', not: false }])}>
+                <Plus className="size-4" aria-hidden /> Add a condition
+              </Button>
+            )}
+            <div className="grid grid-cols-2 items-end gap-3">
+              <Field label="Treat as">
+                <Select value={storeCard ? 'personal' : ruleStatus} onChange={(e) => setRuleStatus(e.target.value)} disabled={storeCard}>
+                  <option value="business">Business</option>
+                  <option value="personal">Personal</option>
+                </Select>
+              </Field>
+              <Button type="submit" variant="primary" disabled={chosen.some((c) => !c.value)}>
+                Add rule
+              </Button>
+            </div>
           </form>
           <ul className="mt-4 divide-y divide-slate-100 text-sm dark:divide-slate-800">
             {(rules.data?.rules || []).map((r) => (
@@ -257,11 +322,11 @@ export function Tax({ meta, forms, onMetaChange }: { meta: Meta | null; forms: R
                     </>
                   ) : (
                     <>
-                      {FIELD_LABELS[r.field]} <span className="font-medium">{r.field === 'store' ? storeName(r.value) : r.value}</span>: {STATUS_LABELS[r.status]}
+                      {describe(r)}: {STATUS_LABELS[r.status]}
                     </>
                   )}
                 </span>
-                <Button variant="ghost" aria-label={`Remove rule for ${r.value}`} onClick={() => act(() => post('/api/tax/rules/delete', { id: r.id }))}>
+                <Button variant="ghost" aria-label="Remove this rule" onClick={() => act(() => post('/api/tax/rules/delete', { id: r.id }))}>
                   <Trash2 className="size-4" aria-hidden />
                 </Button>
               </li>
