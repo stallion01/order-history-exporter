@@ -132,7 +132,7 @@ export function MonthlyBars({ rows, onSelect }: { rows: Row[]; onSelect?: (row: 
   );
 }
 
-export type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'other';
+export type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'lease' | 'other';
 export interface InOutMonth {
   month: string; // 2026-03
   spend: number;
@@ -145,6 +145,7 @@ const INCOME_SOURCES: { key: IncomeSource; label: string; fill: string; swatch: 
   { key: 'airbnb', label: 'Airbnb', fill: 'fill-[var(--color-airbnb)]', swatch: 'bg-[var(--color-airbnb)]' },
   { key: 'vrbo', label: 'Vrbo', fill: 'fill-[var(--color-vrbo)]', swatch: 'bg-[var(--color-vrbo)]' },
   { key: 'booking', label: 'Booking.com', fill: 'fill-[var(--color-booking)]', swatch: 'bg-[var(--color-booking)]' },
+  { key: 'lease', label: 'Leases', fill: 'fill-[var(--color-lease)]', swatch: 'bg-[var(--color-lease)]' },
   { key: 'other', label: 'Other income', fill: 'fill-[var(--color-other-income)]', swatch: 'bg-[var(--color-other-income)]' },
 ];
 
@@ -179,7 +180,7 @@ export function MonthlyInOut({ rows, onSelect }: { rows: InOutMonth[]; onSelect?
     const [endY, endM] = rows[rows.length - 1].month.split('-').map(Number);
     while (y < endY || (y === endY && m <= endM)) {
       const key = `${y}-${String(m).padStart(2, '0')}`;
-      months.push(byMonth.get(key) || { month: key, spend: 0, income: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, other: 0 } });
+      months.push(byMonth.get(key) || { month: key, spend: 0, income: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, lease: 0, other: 0 } });
       if (m === 12) {
         y++;
         m = 1;

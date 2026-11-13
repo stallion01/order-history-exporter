@@ -443,7 +443,7 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
     type Month = { month: string; spend: number; income: number; sources: Record<IncomeSource, number> };
     const months = new Map<string, Month>();
     const at = (month: string) =>
-      months.get(month) || months.set(month, { month, spend: 0, income: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, other: 0 } }).get(month)!;
+      months.get(month) || months.set(month, { month, spend: 0, income: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, lease: 0, other: 0 } }).get(month)!;
     for (const line of lines) at(line.posted.slice(0, 7)).spend += line.amount;
     for (const tx of bank.listTransactions({ ...filters, kind: 'normal', direction: 'in' }).transactions) {
       const m = at(tx.posted.slice(0, 7));

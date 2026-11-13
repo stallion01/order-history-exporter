@@ -78,7 +78,7 @@ export interface SimplefinStatus {
 export const KIND_LABELS = { checking: 'Checking', savings: 'Savings', credit: 'Credit card', other: 'Other' };
 export const OWNER_LABELS = { business: 'Business', personal: 'Personal', mixed: 'Mixed (decide each)' };
 export const ENTITY_KIND_LABELS = { business: 'Business', rental: 'Rental property', other: 'Other' };
-export const SOURCE_LABELS: Record<string, string> = { simplefin: 'SimpleFIN', ofx: 'OFX/QFX file', csv: 'CSV file', receipt: 'Receipt' };
+export const SOURCE_LABELS: Record<string, string> = { simplefin: 'SimpleFIN', ofx: 'OFX/QFX file', csv: 'CSV file', receipt: 'Receipt', lease: 'Lease' };
 const WHY: Record<string, string> = {
   user: 'your choice',
   rule: 'from a rule',

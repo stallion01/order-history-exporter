@@ -20,6 +20,8 @@ import { Orders } from './pages/Orders';
 import { Settings } from './pages/Settings';
 import { StayDetail } from './pages/StayDetail';
 import { Stays } from './pages/Stays';
+import { LeaseDetail } from './pages/LeaseDetail';
+import { Leases } from './pages/Leases';
 import { Setup as SetupScreen, SignIn } from './pages/SignIn';
 import type { SignedInUser } from './pages/SignIn';
 import { Tax } from './pages/Tax';
@@ -97,6 +99,8 @@ function App() {
         <Route path="/receipts/:id" element={<ReceiptDetail meta={meta} />} />
         <Route path="/stays" element={<Stays />} />
         <Route path="/stays/:id" element={<StayDetail />} />
+        <Route path="/leases" element={<Leases />} />
+        <Route path="/leases/:id" element={<LeaseDetail />} />
         <Route path="/orders" element={<Orders meta={meta} />} />
         <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
         <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />

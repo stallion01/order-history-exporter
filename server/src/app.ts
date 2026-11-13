@@ -28,6 +28,8 @@ import { authRoutes, SESSION_COOKIE } from './routes/auth';
 import { reportRoutes } from './routes/reports';
 import { stayRoutes } from './routes/stays';
 import { stayService } from './stays/service';
+import { leaseRoutes } from './routes/leases';
+import { leaseService } from './leases/service';
 import type { StayService } from './stays/service';
 import { SYNC_ROUTES, syncRoutes } from './routes/sync';
 import { isPrivateAddress, sameSecret } from './security';
@@ -201,6 +203,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   receiptRoutes(app, receipts, categoryNames);
   reportRoutes(app, db, () => bank.applyRules());
   stayRoutes(app, stays);
+  leaseRoutes(app, leaseService({ db: db.raw, bank }));
   authRoutes(app, store, tokens);
 
   const webRoot = options.webRoot;

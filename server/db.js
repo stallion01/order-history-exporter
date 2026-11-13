@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 17;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -523,6 +523,52 @@ const SCHEMA_V16 = `
   );
 `;
 
+// Leases: mid-term tenancies, the rent expected each month, and what was paid (rent,
+// security deposits held and paid back). Payments received outside the bank become
+// transactions of their own; one that reached the bank links to its transaction.
+const SCHEMA_V17 = `
+  CREATE TABLE leases (
+    id INTEGER PRIMARY KEY,
+    ref TEXT,
+    property_id TEXT,
+    unit TEXT NOT NULL,
+    tenant TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    start_date TEXT NOT NULL,
+    end_date TEXT,
+    rent REAL,
+    deposit REAL,
+    channel TEXT,
+    ended INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE lease_months (
+    lease_id INTEGER NOT NULL REFERENCES leases (id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    amount REAL NOT NULL,
+    note TEXT,
+    PRIMARY KEY (lease_id, month)
+  );
+
+  CREATE TABLE lease_payments (
+    id INTEGER PRIMARY KEY,
+    lease_id INTEGER NOT NULL REFERENCES leases (id) ON DELETE CASCADE,
+    paid_on TEXT NOT NULL,
+    amount REAL NOT NULL,
+    purpose TEXT NOT NULL,
+    channel TEXT,
+    note TEXT,
+    verified INTEGER NOT NULL DEFAULT 1,
+    transaction_id INTEGER REFERENCES bank_transactions (id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX lease_payments_lease ON lease_payments (lease_id);
+`;
+
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
@@ -693,6 +739,7 @@ function migrate(db, file) {
     if (version < 14) db.exec(SCHEMA_V14);
     if (version < 15) db.exec(SCHEMA_V15);
     if (version < 16) db.exec(SCHEMA_V16);
+    if (version < 17) db.exec(SCHEMA_V17);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

@@ -118,23 +118,27 @@ export function storeName(text: string): { key: string; label: string } {
 
 // Where income came from, for showing rental payouts by platform. The SQL below
 // must give the same answer as incomeSource for any text.
-export type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'other';
-export const INCOME_SOURCE_NAMES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'other'];
+export type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'lease' | 'other';
+export const INCOME_SOURCE_NAMES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'lease', 'other'];
 export const incomeSource = (text: string): IncomeSource => {
   const t = text.toLowerCase();
   if (t.includes('airbnb')) return 'airbnb';
   if (t.includes('vrbo') || t.includes('homeaway')) return 'vrbo';
   if (t.includes('booking.com') || t.includes('booking com')) return 'booking';
+  // Rent from a lease, as the Leases page records it.
+  if (t.includes('lease rent')) return 'lease';
   return 'other';
 };
 export function incomeSourceSql(source: IncomeSource, text: string) {
   const airbnb = `${text} LIKE '%airbnb%'`;
   const vrbo = `(${text} LIKE '%vrbo%' OR ${text} LIKE '%homeaway%')`;
   const booking = `(${text} LIKE '%booking.com%' OR ${text} LIKE '%booking com%')`;
+  const lease = `${text} LIKE '%lease rent%'`;
   if (source === 'airbnb') return airbnb;
   if (source === 'vrbo') return `(${vrbo} AND NOT ${airbnb})`;
   if (source === 'booking') return `(${booking} AND NOT ${airbnb} AND NOT ${vrbo})`;
-  return `(NOT ${airbnb} AND NOT ${vrbo} AND NOT ${booking})`;
+  if (source === 'lease') return `(${lease} AND NOT ${airbnb} AND NOT ${vrbo} AND NOT ${booking})`;
+  return `(NOT ${airbnb} AND NOT ${vrbo} AND NOT ${booking} AND NOT ${lease})`;
 }
 
 // Categories that are income. Money in filed anywhere else is a refund.
