@@ -4,15 +4,16 @@ import { NavLink } from 'react-router-dom';
 import { ArrowLeftRight, BedDouble, FileCheck2, KeyRound, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, TrendingUp, Upload, Wallet } from 'lucide-react';
 import { cx } from './ui';
 
+// The sidebar order. Phones show the ones marked phone as tabs, the rest under More.
 export const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, phone: true },
-  { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight, phone: true },
   { to: '/profit-loss', label: 'Profit & loss', icon: TrendingUp },
-  { to: '/review', label: 'Review', icon: Inbox, phone: true },
-  { to: '/receipts', label: 'Receipts', icon: Receipt, phone: true },
   { to: '/stays', label: 'Stays', icon: BedDouble },
   { to: '/leases', label: 'Leases', icon: KeyRound },
   { to: '/accounts', label: 'Accounts', icon: Landmark },
+  { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight, phone: true },
+  { to: '/review', label: 'Review', icon: Inbox, phone: true },
+  { to: '/receipts', label: 'Receipts', icon: Receipt, phone: true },
   { to: '/import', label: 'Import', icon: Upload },
   { to: '/orders', label: 'Orders', icon: Package },
   { to: '/items', label: 'Items', icon: Tags },
