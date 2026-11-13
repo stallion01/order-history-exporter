@@ -89,6 +89,7 @@ test('profit and loss for one business, and for all of them side by side', async
   assert.equal(one.expenses, 1000);
   assert.equal(one.noi, 4000);
   assert.equal(one.settings.invested, 1000000);
+  assert.equal(one.annualReturn, one.annualNoi / 1000000, 'on its own investment, not both');
   assert.deepEqual(one.sources.map((s) => [s.key, s.amount]), [['airbnb', 5000]]);
 
   const other = await get(`/api/pl?period=2026&entity=${ltr}`);

@@ -229,7 +229,7 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
       years: years.map(({ annualRevenue: _unused, ...rest }) => rest),
       ...main,
       margin: main.revenue ? main.noi / main.revenue : null,
-      ...returns(main.noi, range.from, range.to),
+      ...returns(main.noi, range.from, range.to, entity),
       ttm: { from: ttmRange.from, to: ttmRange.to, revenue: ttm.revenue, expenses: ttm.expenses, noi: ttm.noi, ...ttmReturn },
       sinceStart: {
         from: start,
