@@ -228,6 +228,7 @@ export function Transactions({ meta }: { meta: Meta | null }) {
                   selected={selected.includes(tx.id)}
                   onSelect={(checked) => setSelected((s) => (checked ? [...s, tx.id] : s.filter((id) => id !== tx.id)))}
                   onChanged={list.reload}
+                  onPayee={setSearch}
                 />
               ))}
             </ul>

@@ -1,10 +1,12 @@
 // Transactions that need a decision, and the rules that save making it again.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react';
-import { post, useApi } from '../api';
-import { BulkBar, TxRow } from '../bank';
-import type { Entity, Transaction } from '../bank';
+import { ChevronDown, ChevronUp, Plus, Search, Trash2, X } from 'lucide-react';
+import { get, post, useApi } from '../api';
+import { BulkBar, TxRow, txGrid } from '../bank';
+import type { Account, Entity, Transaction } from '../bank';
+import { useBusiness } from '../business';
+import { useFilters } from '../filters';
 import type { Meta } from '../filters';
 import { money, plural, whole } from '../format';
 import { Banner, Button, Card, Empty, Field, Input, Loading, MultiSelect, PageHeader, Pager, Select, TD, TH, TR } from '../ui';
@@ -22,16 +24,58 @@ interface Rule {
   sharedEntities: number[] | null;
 }
 
+// Most selected at once: what the bulk change takes.
+const MOST = 5000;
+
 export function Review({ meta }: { meta: Meta | null }) {
-  const [offset, setOffset] = useState(0);
-  const list = useApi<{ total: number; transactions: Transaction[] }>(`/api/bank/transactions?review=1&sort=date&dir=desc&limit=${PAGE}&offset=${offset}`);
+  const filters = useFilters();
+  const { business } = useBusiness();
+  const offset = Number(filters.value('page')) || 0;
+  const sort = filters.value('sort') || 'date';
+  const dir = filters.value('dir') || 'desc';
+  const [search, setSearch] = useState(filters.value('q'));
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (search !== filters.value('q')) filters.set({ q: search });
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+  // Everything waiting for review, narrowed by the filters (no date range: all of it).
+  const reviewQuery = (extra: Record<string, string | number>) => {
+    const out = new URLSearchParams({ review: '1', preset: 'all' });
+    for (const key of ['account', 'entity']) for (const v of filters.values(key)) out.append(key, v);
+    if (business && !filters.values('entity').length) out.append('entity', String(business));
+    for (const key of ['q', 'direction']) if (filters.value(key)) out.set(key, filters.value(key));
+    for (const [key, v] of Object.entries(extra)) out.set(key, String(v));
+    return out.toString();
+  };
+  const list = useApi<{ total: number; transactions: Transaction[] }>(`/api/bank/transactions?${reviewQuery({ sort, dir, limit: PAGE, offset })}`);
+  const accounts = useApi<{ accounts: Account[] }>('/api/bank/accounts');
   const rules = useApi<{ rules: Rule[]; accounts: { id: number; name: string }[] }>('/api/bank/rules');
   const receipts = useApi<{ counts: { review: number } }>('/api/receipts?limit=1');
   const unmatched = useApi<{ total: number }>('/api/bank/transactions?unmatched=1&limit=1');
   const signs = useApi<{ problems: SignProblem[] }>('/api/bank/sign-problems');
   const entities = meta?.entities || [];
   const [selected, setSelected] = useState<number[]>([]);
+  const [selecting, setSelecting] = useState(false);
   const categories = meta?.categories.map((c) => c.name) || [];
+  // Every transaction that matches, not just this page, a page at a time.
+  async function selectAll(total: number) {
+    setSelecting(true);
+    const ids: number[] = [];
+    try {
+      for (let at = 0; at < Math.min(total, MOST); at += 200) {
+        const page = await get<{ transactions: Transaction[] }>(`/api/bank/transactions?${reviewQuery({ sort, dir, limit: 200, offset: at })}`);
+        ids.push(...page.transactions.map((t) => t.id));
+        if (page.transactions.length < 200) break;
+      }
+      setSelected(ids.slice(0, MOST));
+    } finally {
+      setSelecting(false);
+    }
+  }
+  const filtered = Boolean(filters.value('q') || filters.value('direction') || filters.values('account').length || filters.values('entity').length);
   useEffect(() => setSelected([]), [list.data]);
   const reload = () => {
     list.reload();
@@ -80,7 +124,61 @@ export function Review({ meta }: { meta: Meta | null }) {
         </Banner>
       )}
       {signs.data && signs.data.problems.length > 0 && <SignProblems problems={signs.data.problems} onDone={reload} />}
-      <Card title={data ? `${whole(data.total)} to review` : 'To review'} padded={false} className="mb-6">
+      <form className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5" onSubmit={(e) => e.preventDefault()} aria-label="Filters">
+        <Field label="Search" className="col-span-2 md:col-span-1 xl:col-span-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-slate-400" aria-hidden />
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Payee or description" className="pl-8" />
+            {search && (
+              <button type="button" onClick={() => setSearch('')} className="absolute top-1/2 right-2 -translate-y-1/2 text-slate-400 hover:text-slate-700" aria-label="Clear the search">
+                <X className="size-4" aria-hidden />
+              </button>
+            )}
+          </div>
+        </Field>
+        <MultiSelect label="Account" allLabel="All accounts" options={(accounts.data?.accounts || []).map((a) => [String(a.id), a.name])} selected={filters.values('account')} onChange={(next) => filters.set({ account: next })} />
+        {entities.length > 0 && (
+          <MultiSelect
+            label="Business or property"
+            allLabel="All"
+            options={[...entities.map((e): [string, string] => [String(e.id), e.name]), ['none', 'Not assigned']]}
+            selected={filters.values('entity')}
+            onChange={(next) => filters.set({ entity: next })}
+          />
+        )}
+        <Field label="Money in or out">
+          <Select value={filters.value('direction')} onChange={(e) => filters.set({ direction: e.target.value })}>
+            <option value="">Both</option>
+            <option value="out">Spending only</option>
+            <option value="in">Income only</option>
+          </Select>
+        </Field>
+      </form>
+      <Card
+        title={data ? `${whole(data.total)} to review${filtered ? ' (filtered)' : ''}` : 'To review'}
+        actions={
+          data && data.total > 0 ? (
+            <>
+              {filtered && (
+                <Button
+                  className="min-h-8"
+                  onClick={() => {
+                    setSearch('');
+                    filters.set({ q: '', account: [], entity: [], direction: '' });
+                  }}
+                >
+                  Clear filters
+                </Button>
+              )}
+              <Button className="min-h-8" busy={selecting} onClick={() => (selected.length >= Math.min(data.total, MOST) ? setSelected([]) : selectAll(data.total))}>
+                {selected.length >= Math.min(data.total, MOST) ? 'Select none' : `Select all ${whole(Math.min(data.total, MOST))}`}
+              </Button>
+            </>
+          ) : undefined
+        }
+        padded={false}
+        className="mb-6"
+      >
         <BulkBar ids={selected} categories={categories} entities={entities} onDone={reload} />
         {!data && list.loading && <Loading />}
         {data && !data.transactions.length && (
@@ -89,21 +187,45 @@ export function Review({ meta }: { meta: Meta | null }) {
           </Empty>
         )}
         {data && data.transactions.length > 0 && (
-          <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-            {data.transactions.map((tx) => (
-              <TxRow
-                key={tx.id}
-                tx={tx}
-                categories={categories}
-                entities={entities}
-                selected={selected.includes(tx.id)}
-                onSelect={(checked) => setSelected((s) => (checked ? [...s, tx.id] : s.filter((id) => id !== tx.id)))}
-                onChanged={reload}
+          <>
+            <div className={`hidden ${txGrid(entities.length > 0)} gap-x-3 border-b border-slate-100 px-4 py-2 text-xs font-medium text-slate-600 md:grid dark:border-slate-800 dark:text-slate-400`}>
+              <input
+                type="checkbox"
+                aria-label="Select all on this page"
+                className="size-4 accent-emerald-700"
+                checked={data.transactions.every((t) => selected.includes(t.id))}
+                onChange={(e) => {
+                  const page = data.transactions.map((t) => t.id);
+                  setSelected((s) => (e.target.checked ? [...new Set([...s, ...page])] : s.filter((id) => !page.includes(id))));
+                }}
               />
-            ))}
-          </ul>
+              <SortButton label="Date" column="date" sort={sort} dir={dir} onSort={(c, d) => filters.set({ sort: c, dir: d })} />
+              <SortButton label="Payee (click a name to show only it)" column="payee" sort={sort} dir={dir} onSort={(c, d) => filters.set({ sort: c, dir: d })} />
+              <span>Category</span>
+              <span>Business or personal</span>
+              {entities.length > 0 && <span>Business or property</span>}
+              <span>Type</span>
+              <span className="text-right">
+                <SortButton label="Amount" column="amount" sort={sort} dir={dir} onSort={(c, d) => filters.set({ sort: c, dir: d })} />
+              </span>
+            </div>
+            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+              {data.transactions.map((tx) => (
+                <TxRow
+                  key={tx.id}
+                  tx={tx}
+                  categories={categories}
+                  entities={entities}
+                  selected={selected.includes(tx.id)}
+                  onSelect={(checked) => setSelected((s) => (checked ? [...s, tx.id] : s.filter((id) => id !== tx.id)))}
+                  onChanged={reload}
+                  onPayee={setSearch}
+                />
+              ))}
+            </ul>
+          </>
         )}
-        {data && <Pager offset={offset} pageSize={PAGE} total={data.total} onChange={setOffset} />}
+        {data && <Pager offset={offset} pageSize={PAGE} total={data.total} onChange={(next) => filters.set({ page: String(next) })} />}
       </Card>
 
       {/* On wider screens the rules stay in view at the bottom, scrolling on their own,
@@ -129,6 +251,21 @@ export function Review({ meta }: { meta: Meta | null }) {
         </div>
       </div>
     </>
+  );
+}
+
+function SortButton({ label, column, sort, dir, onSort }: { label: string; column: string; sort: string; dir: string; onSort: (column: string, dir: string) => void }) {
+  const active = sort === column;
+  return (
+    <button
+      type="button"
+      className={active ? 'text-left text-slate-900 dark:text-white' : 'text-left hover:text-slate-900 dark:hover:text-white'}
+      onClick={() => onSort(column, active ? (dir === 'asc' ? 'desc' : 'asc') : column === 'date' || column === 'amount' ? 'desc' : 'asc')}
+      aria-label={`Sort by ${label}`}
+    >
+      {label}
+      {active ? (dir === 'asc' ? ' ↑' : ' ↓') : ''}
+    </button>
   );
 }
 

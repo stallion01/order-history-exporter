@@ -135,16 +135,13 @@ test('removing a payment or a lease takes its transactions out of the ledger', a
 });
 
 // Dates around today, so the rent roll and the expiry reminder have something to show.
-const day = (offset) => {
-  const d = new Date();
-  d.setDate(d.getDate() + offset);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+// In UTC, as the server counts days.
+const day = (offset) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 const monthOf = (offset) => {
   const d = new Date();
-  d.setDate(1);
-  d.setMonth(d.getMonth() + offset);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + offset);
+  return d.toISOString().slice(0, 7);
 };
 const csvDate = (iso) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(0, 4)}`;
 let robin;

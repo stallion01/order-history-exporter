@@ -144,6 +144,7 @@ export function TxRow({
   selected,
   onSelect,
   onChanged,
+  onPayee,
 }: {
   tx: Transaction;
   categories: string[];
@@ -151,6 +152,8 @@ export function TxRow({
   selected?: boolean;
   onSelect?: (checked: boolean) => void;
   onChanged: () => void;
+  // When given, the payee's name becomes a button that shows only that payee.
+  onPayee?: (name: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -188,7 +191,13 @@ export function TxRow({
         <div className="hidden pt-1 whitespace-nowrap text-slate-600 md:block dark:text-slate-400">{tx.posted}</div>
         <div className="min-w-0">
           <div className="truncate font-medium" title={tx.description}>
-            {label}
+            {onPayee ? (
+              <button type="button" onClick={() => onPayee(label)} className="max-w-full truncate text-left hover:text-emerald-700 hover:underline dark:hover:text-emerald-400" title={`Show only ${label}`}>
+                {label}
+              </button>
+            ) : (
+              label
+            )}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
             <span className="md:hidden">{tx.posted} ·</span>
