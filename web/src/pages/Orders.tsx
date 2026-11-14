@@ -4,6 +4,7 @@ import { Download } from 'lucide-react';
 import { download, useApi } from '../api';
 import { FilterBar, useFilters } from '../filters';
 import type { Meta } from '../filters';
+import { StoreOrdersGuide } from '../storeguide';
 import { money, whole } from '../format';
 import { Banner, Button, Card, Empty, Loading, PageHeader, Pager, SortHeader, TD, TH, TR } from '../ui';
 
@@ -50,7 +51,7 @@ export function Orders({ meta }: { meta: Meta | null }) {
     <>
       <PageHeader
         title="Orders"
-        description="Every order synced from your stores."
+        description="Every order synced from your stores by the Chrome extension."
         actions={
           <>
             <Button onClick={() => save('items')} disabled={!data?.total}>
@@ -64,6 +65,7 @@ export function Orders({ meta }: { meta: Meta | null }) {
           </>
         }
       />
+      <StoreOrdersGuide compact={Boolean(data?.total)} />
       <FilterBar meta={meta} />
       {(error || downloadError) && <Banner>{error?.message || downloadError}</Banner>}
       <Card title={data ? `${whole(data.total)} orders` : 'Orders'} padded={false}>

@@ -137,6 +137,37 @@ function TwoFactorCard({ user, onChange }: { user: SignedInUser; onChange: () =>
   );
 }
 
+// The extension's own page address, so Orders and Import can open it. Chrome shows it
+// in the address bar when the extension's page is open.
+function ExtensionAddress() {
+  const saved = useApi<{ url: string | null }>('/api/settings/extension');
+  const [value, setValue] = useState<string | null>(null);
+  const [state, setState] = useState('');
+  const current = value ?? saved.data?.url ?? '';
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setState('');
+    try {
+      await post('/api/settings/extension', { url: current.trim() || null });
+      setState('Saved');
+      saved.reload();
+    } catch (e) {
+      setState((e as Error).message);
+    }
+  };
+  return (
+    <form onSubmit={save} className="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800">
+      <Field label="Extension page address (for the Open the extension button)">
+        <Input value={current} onChange={(e) => setValue(e.target.value)} placeholder="chrome-extension://…/src/app/app.html" spellCheck={false} className="font-mono" />
+      </Field>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button type="submit">Save address</Button>
+        {state && <span className="text-xs text-slate-600 dark:text-slate-400">{state}</span>}
+      </div>
+    </form>
+  );
+}
+
 function ExtensionCard() {
   const [token, setToken] = useState('');
   const [copied, setCopied] = useState(false);
@@ -172,6 +203,7 @@ function ExtensionCard() {
         </div>
       </dl>
       <p className="mt-3 text-xs text-slate-500">In the extension, choose Database, then enter these and press Test connection. The token only allows syncing orders.</p>
+      <ExtensionAddress />
       <div className="mt-3 flex flex-wrap gap-2">
         {!token ? (
           <Button onClick={reveal}>

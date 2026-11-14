@@ -719,3 +719,13 @@ test('SimpleFIN: a newly added account gets 90 days, and older history can be pu
   await assert.rejects(post('/api/bank/simplefin/history', { months: 5 }), (err) => err.status === 400);
   await post('/api/bank/simplefin/disconnect', {});
 });
+
+test('the Chrome extension page address is kept for the Open the extension link', async () => {
+  assert.deepEqual(await get('/api/settings/extension'), { url: null });
+  await assert.rejects(post('/api/settings/extension', { url: 'https://example.com/app.html' }), /chrome-extension/);
+  const url = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/src/app/app.html';
+  assert.deepEqual(await post('/api/settings/extension', { url }), { url });
+  assert.deepEqual(await get('/api/settings/extension'), { url });
+  await post('/api/settings/extension', { url: '' });
+  assert.deepEqual(await get('/api/settings/extension'), { url: null });
+});

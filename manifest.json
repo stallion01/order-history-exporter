@@ -22,5 +22,8 @@
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
-  "optional_host_permissions": ["https://*/*", "http://*/*"]
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "web_accessible_resources": [
+    { "resources": ["src/app/app.html"], "matches": ["https://*.ts.net/*", "http://127.0.0.1/*", "http://localhost/*"] }
+  ]
 }

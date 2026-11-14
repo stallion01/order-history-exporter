@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ImportHistory } from './ImportHistory';
+import { StoreOrdersGuide } from '../storeguide';
 import { FileUp } from 'lucide-react';
 import { post, useApi } from '../api';
 import { Amount, KIND_LABELS, OWNER_LABELS, importLink } from '../bank';
@@ -151,7 +152,7 @@ export function Import() {
 
   return (
     <>
-      <PageHeader title="Import a statement" description="Bring in transactions from a file your bank or card lets you download: OFX, QFX, QBO or CSV. Anything already here is recognised and not added twice." />
+      <PageHeader title="Import a statement" description="Bring in transactions from a file your bank or card lets you download: OFX, QFX, QBO or CSV. Anything already here is recognised and not added twice. Store orders come from the Chrome extension (below)." />
       {flash && !done && <Banner tone="info">{flash}</Banner>}
       {error && <Banner>{error}</Banner>}
       {done && (
@@ -330,6 +331,9 @@ export function Import() {
       )}
 
       <ImportHistory refresh={done?.importId} />
+      <div className="mt-6">
+        <StoreOrdersGuide />
+      </div>
     </>
   );
 }

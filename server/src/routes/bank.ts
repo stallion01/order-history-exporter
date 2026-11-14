@@ -165,6 +165,17 @@ export function bankRoutes(app: FastifyInstance, bank: BankStore, simplefin: Sim
 
 
   // Imports whose amounts look the wrong way round, and putting them right.
+  // Where the Chrome extension's page is, so the app can link to it. Each install
+  // of the extension has its own address.
+  const EXTENSION_URL = /^chrome-extension:\/\/[a-p]{32}\/[\w./-]*$/;
+  app.get('/api/settings/extension', async () => ({ url: bank.getSetting('extension.url') }));
+  app.post('/api/settings/extension', async (request) => {
+    const body = parse(z.object({ url: z.string().trim().max(200).nullable() }), request.body);
+    if (body.url && !EXTENSION_URL.test(body.url)) throw new HttpError(400, 'That should look like chrome-extension://…/src/app/app.html');
+    bank.setSetting('extension.url', body.url || null);
+    return { url: body.url || null };
+  });
+
   app.get('/api/bank/sign-problems', async () => ({ problems: bank.signProblems() }));
   app.post('/api/bank/sign-problems/fix', async (request) => {
     const body = parse(z.object({ keys: z.array(z.string().max(100)).max(200).optional() }), request.body ?? {});
