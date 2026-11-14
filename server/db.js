@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 22;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -581,6 +581,13 @@ const SCHEMA_V17 = `
 // Loans whose balance the user keeps (the bank feed doesn't bring it): the balance is
 // reduced by each payment's principal, entered by the user, and each payment is split
 // into principal and interest in a split account.
+// Money the owner puts into the business, or takes out: transfers, not income or
+// spending, so choosing either category makes the transaction a transfer.
+const SCHEMA_V22 = `
+  INSERT OR IGNORE INTO categories (name, position) VALUES ('Owner Contribution', (SELECT COALESCE(MAX(position), 0) + 1 FROM categories));
+  INSERT OR IGNORE INTO categories (name, position) VALUES ('Owner Withdrawal', (SELECT COALESCE(MAX(position), 0) + 1 FROM categories));
+`;
+
 const SCHEMA_V21 = `
   ALTER TABLE bank_accounts ADD COLUMN balance_manual INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE bank_accounts ADD COLUMN tracked_from TEXT;
@@ -712,6 +719,8 @@ const BANK_CATEGORIES = [
   ['Rental Income', null, null],
   ['Refunds & Returns', null, null],
   ['Other Income', null, null],
+  ['Owner Contribution', null, null],
+  ['Owner Withdrawal', null, null],
 ];
 
 // Whitelisted so request data can never choose a column name.
@@ -819,6 +828,7 @@ function migrate(db, file) {
     if (version < 19) db.exec(SCHEMA_V19);
     if (version < 20) db.exec(SCHEMA_V20);
     if (version < 21) db.exec(SCHEMA_V21);
+    if (version < 22) db.exec(SCHEMA_V22);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

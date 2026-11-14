@@ -3,7 +3,7 @@
 // capital purchases go on an asset register; and what still needs a decision is listed.
 import { FORM_KEYS } from '../legacy';
 import type { DatabaseSync } from 'node:sqlite';
-import { ACCOUNT_NUMBER_IN_PAYMENT, PAID_TO_CARD } from '../bank/merchant';
+import { ACCOUNT_NUMBER_IN_PAYMENT, OWNER_CONTRIBUTION, OWNER_WITHDRAWAL, PAID_TO_CARD } from '../bank/merchant';
 import type { BankStore } from '../bank/store';
 import type { CorrelationService, SpendLine } from '../correlate/service';
 import type { OrdersDb } from '../legacy';
@@ -195,13 +195,20 @@ export function cpaService(options: { raw: DatabaseSync; db: OrdersDb; bank: Ban
   function transfers(year: number) {
     const owners = new Map(bank.accounts().map((a) => [a.id, a]));
     return bank
-      .listTransactions({ years: [String(year)], kind: 'transfer', direction: 'out' }, { sort: 'date', direction: 'asc' })
-      .transactions.map((t) => {
+      .listTransactions({ years: [String(year)], kind: 'transfer' }, { sort: 'date', direction: 'asc' })
+      // Money out of each account, and money in that the owner put in (its other side may
+      // not be in Business Hub).
+      .transactions.filter((t) => t.amount < 0 || t.category === OWNER_CONTRIBUTION)
+      .map((t) => {
         const from = owners.get(t.accountId);
         const partner = t.transferId ? bank.transactionById(t.transferId) : null;
         const to = partner ? owners.get(partner.account_id) : null;
         const kind =
-          from?.owner === 'business' && to?.owner === 'personal'
+          t.category === OWNER_WITHDRAWAL
+            ? 'Owner draw'
+            : t.category === OWNER_CONTRIBUTION
+              ? 'Owner contribution'
+              : from?.owner === 'business' && to?.owner === 'personal'
             ? 'Owner draw'
             : from?.owner === 'personal' && to?.owner === 'business'
               ? 'Owner contribution'
@@ -210,6 +217,8 @@ export function cpaService(options: { raw: DatabaseSync; db: OrdersDb; bank: Ban
                 : PAID_TO_CARD.test(t.description) || ACCOUNT_NUMBER_IN_PAYMENT.test(t.description)
                   ? 'Credit card payment'
                   : 'Payment or transfer to an account not in Business Hub';
+        // Money in: it came from the owner, into this account.
+        if (t.amount > 0) return { posted: t.posted, from: partner && to ? to.name : 'The owner', to: t.account, amount: t.amount, kind, description: t.description };
         return { posted: t.posted, from: t.account, to: to?.name ?? null, amount: -t.amount, kind, description: t.description };
       });
   }

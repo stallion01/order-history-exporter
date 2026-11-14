@@ -547,14 +547,14 @@ test('upgrading an older database keeps its orders, backs it up, and queues miss
 
   const upgraded = openDatabase(file);
   assert.equal(upgraded.listOrders({}).total, 3);
-  assert.ok(fs.existsSync(`${file}.before-v21.bak`), 'a backup was made first');
+  assert.ok(fs.existsSync(`${file}.before-v22.bak`), 'a backup was made first');
   const pending = upgraded.syncPlan('samsclub', { from: null, to: null }).pendingDetails.map((o) => o.orderId);
   assert.deepEqual(pending, ['NOPRICE'], 'only orders missing prices are read again');
   assert.equal(upgraded.syncPlan('ebay', { from: null, to: null }).pendingDetails.length, 0);
   assert.ok(upgraded.categoryList().some((c) => c.name === 'Cleaning Supplies'));
   upgraded.close();
 
-  const backup = new DatabaseSync(`${file}.before-v21.bak`, { readOnly: true });
+  const backup = new DatabaseSync(`${file}.before-v22.bak`, { readOnly: true });
   assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 3);
   backup.close();
 });

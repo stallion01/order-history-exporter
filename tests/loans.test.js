@@ -121,3 +121,30 @@ test('bank interest and laundry income are their own income sources', async () =
   const pl = await get('/api/pl?preset=all');
   if (pl.sources) assert.ok(pl.sources.some((s) => s.key === 'interest' && s.amount === 12.34));
 });
+
+test('owner contributions and withdrawals are transfers, not income or spending', async () => {
+  await post('/api/bank/import', {
+    content: 'Date,Description,Debit,Credit\n08/01/2026,TRANSFER FROM OWNER,,5000.00\n08/15/2026,ONLINE TRANSFER TO OWNER,1500.00,\n08/20/2026,HARDWARE STORE,20.00,\n',
+    fileName: 'checking-august.csv',
+    newAccount: { name: 'Third checking', kind: 'checking', owner: 'business' },
+  });
+  const rows = (await all()).filter((t) => t.account === 'Third checking');
+  const put = rows.find((t) => t.amount === 5000);
+  const took = rows.find((t) => t.amount === -1500);
+  await post('/api/bank/transactions/update', { ids: [put.id], category: 'Owner Contribution' });
+  await post('/api/bank/transactions/update', { ids: [took.id], category: 'Owner Withdrawal' });
+  const after = (await all()).filter((t) => t.account === 'Third checking');
+  assert.deepEqual(after.find((t) => t.id === put.id).kind, 'transfer');
+  assert.deepEqual(after.find((t) => t.id === took.id).kind, 'transfer');
+  const august = (await get('/api/bank/spending?preset=all')).byMonth.find((m) => m.month === '2026-08');
+  assert.equal(august.income, 0);
+  assert.equal(august.spend, 20);
+  // The year-end workbook lists them as owner contributions and draws.
+  const ExcelJS = require('exceljs');
+  const book = new ExcelJS.Workbook();
+  await book.xlsx.load(Buffer.from(await (await call('/api/cpa/workbook.xlsx?year=2026')).arrayBuffer()));
+  const sheet = book.getWorksheet('Transfers');
+  const listed = sheet.getSheetValues().slice(2).filter(Boolean).map((row) => row.slice(1).join(' | '));
+  assert.ok(listed.some((r) => r.includes('Owner contribution') && r.includes('5000')), listed.join(' / '));
+  assert.ok(listed.some((r) => r.includes('Owner draw') && r.includes('1500')), listed.join(' / '));
+});

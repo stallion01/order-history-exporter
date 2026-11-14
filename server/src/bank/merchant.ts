@@ -151,6 +151,12 @@ export function incomeSourceSql(source: IncomeSource, text: string, leased = '0'
   return `(NOT ${platform} AND NOT ${lease} AND NOT ${interest} AND NOT ${laundry})`;
 }
 
+// Money the owner puts in or takes out. These are always transfers: never income or
+// spending.
+export const OWNER_CONTRIBUTION = 'Owner Contribution';
+export const OWNER_WITHDRAWAL = 'Owner Withdrawal';
+export const TRANSFER_CATEGORIES = [OWNER_CONTRIBUTION, OWNER_WITHDRAWAL];
+
 // Categories that are income. Money in filed anywhere else is a refund.
 export const INCOME_CATEGORIES = ['Rental Income', 'Other Income'];
 export const REFUNDS = 'Refunds & Returns';

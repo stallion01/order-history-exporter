@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { fitIdToTransaction } from './ofx';
-import { ACCOUNT_NUMBER_IN_PAYMENT, CARD_NUMBER_IN_PAYMENT, CARD_PAYMENT_WORDS, INCOME_CATEGORIES, PAID_TO_CARD, REFUNDS, STORE_PAYEES, TRANSFER_WORDS, categoryHint, incomeSourceSql, payeeFor } from './merchant';
+import { ACCOUNT_NUMBER_IN_PAYMENT, CARD_NUMBER_IN_PAYMENT, CARD_PAYMENT_WORDS, INCOME_CATEGORIES, PAID_TO_CARD, REFUNDS, STORE_PAYEES, TRANSFER_CATEGORIES, TRANSFER_WORDS, categoryHint, incomeSourceSql, payeeFor } from './merchant';
 import type { IncomeSource } from './merchant';
 import { MONEY_IN, MONEY_OUT } from './csv';
 import { toCents } from './types';
@@ -309,7 +309,7 @@ export function createBankStore(db: DatabaseSync) {
     const id = Number(
       db
         .prepare('INSERT INTO bank_rules (pattern, account_id, category, status, kind, entity_id, shared_entities, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(rule.pattern, rule.accountId ?? null, rule.category ?? null, rule.status ?? null, rule.kind ?? null, shared ? null : rule.entityId ?? null, shared, now()).lastInsertRowid
+        .run(rule.pattern, rule.accountId ?? null, rule.category ?? null, rule.status ?? null, rule.kind ?? (rule.category && TRANSFER_CATEGORIES.includes(rule.category) ? 'transfer' : null), shared ? null : rule.entityId ?? null, shared, now()).lastInsertRowid
     );
     transaction(() => {
       applyRules();
@@ -1374,6 +1374,8 @@ export function createBankStore(db: DatabaseSync) {
     changes: { category?: string | null; status?: string | null; kind?: TxKind | null; note?: string | null; entity?: number | null; shares?: Share[] | null; flipSign?: boolean }
   ) {
     if (!ids.length) return 0;
+    // Owner contributions and withdrawals are transfers, unless a type is chosen too.
+    if (changes.category && TRANSFER_CATEGORIES.includes(changes.category) && !('kind' in changes)) changes = { ...changes, kind: 'transfer' };
     const list = ids.map(Number).filter(Number.isInteger).join(',');
     return transaction(() => {
       const rows = db.prepare(`SELECT id, account_id, posted, amount, description, transfer_id, kind_source FROM bank_transactions WHERE id IN (${list})`).all() as Row[];
