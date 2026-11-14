@@ -5,6 +5,7 @@ import { ArrowLeftRight, BedDouble, FileCheck2, KeyRound, FileSpreadsheet, Inbox
 import { BusinessPicker, useBusiness } from './business';
 import { ExpiryWarning } from './rentroll';
 import { LoanPaymentPrompt } from './loans';
+import { UpdateNotice } from './update';
 import { cx } from './ui';
 
 // The sidebar order. Phones show the ones marked phone as tabs, the rest under More.
@@ -88,6 +89,7 @@ export function Layout({ username, onSignOut, children }: { username: string; on
           {children}
           <ExpiryWarning />
           <LoanPaymentPrompt />
+          <UpdateNotice />
         </main>
       </div>
 
