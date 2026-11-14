@@ -9,6 +9,7 @@ import { MONTHS, money, plural } from '../format';
 import { useFilters } from '../filters';
 import { PLATFORM_NAMES, dateRange, platformColor } from '../stays';
 import type { Stay, StayList } from '../stays';
+import { PlatformLogo } from '../platformlogo';
 import { Banner, Button, Card, Loading, cx } from '../ui';
 
 type ColorBy = 'platform' | 'payment';
@@ -212,6 +213,7 @@ function MonthCalendar({ month, colorBy, wide }: { month: string; colorBy: Color
                                     .slice(0, 2)}
                           </span>
                           {span >= 8 && <span className="ml-auto shrink-0 opacity-80">{s.nights}n</span>}
+                          {span >= 5 && <PlatformLogo platform={s.platform} className={cx('opacity-95', span < 8 && 'ml-auto')} />}
                         </Link>
                       );
                     })}
@@ -318,8 +320,10 @@ export function StaysCalendar() {
           <>
             {(['airbnb', 'vrbo', 'booking', 'direct'] as const).map((p) => (
               <span key={p} className="inline-flex items-center gap-1.5">
-                <span className="size-3 rounded-full" style={{ backgroundColor: platformColor(p) }} aria-hidden />
-                {PLATFORM_NAMES[p]}
+                <span className="flex size-5 items-center justify-center rounded-full" style={{ backgroundColor: platformColor(p), color: p === 'booking' ? '#0f172a' : '#fff' }}>
+                  <PlatformLogo platform={p} className="size-3.5" />
+                </span>
+                {p === 'direct' ? 'Direct (Hospitable)' : PLATFORM_NAMES[p]}
               </span>
             ))}
             <span className="inline-flex items-center gap-1">
