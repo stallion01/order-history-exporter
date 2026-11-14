@@ -8,6 +8,7 @@ import { post, useApi } from './api';
 import { businessQuery, useBusiness } from './business';
 import { money, monthLabel, wholeMoney } from './format';
 import { Banner, Button, Card, Field, Input, Loading, cx } from './ui';
+import { LoanBalances } from './loans';
 
 type Group = 'Mortgages & Loans' | 'Taxes' | 'Insurance' | 'Utilities' | 'Fees & Services' | 'Repairs & Maintenance' | 'Supplies & Furnishings' | 'Capital improvements' | 'Admin & Other';
 interface CashMonth {
@@ -166,6 +167,7 @@ function NetWorthCard({ d, entityId, onSaved }: { d: CashFlow; entityId: number 
       )}
       <Row label="Debt" value={-w.debt} />
       <Row label="Cash" value={w.cash} />
+      <LoanBalances entityId={entityId} onSaved={onSaved} />
       {own && !own.value && !editing && (
         <button type="button" onClick={() => setEditing(true)} className="mt-2 text-sm font-medium text-emerald-700 hover:underline dark:text-emerald-400">
           Add the market value
@@ -175,7 +177,7 @@ function NetWorthCard({ d, entityId, onSaved }: { d: CashFlow; entityId: number 
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">No market value yet for {missing.map((m) => m.name).join(', ')}. Choose that business in the menu to add it.</p>
       )}
       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-        Debt is the balance of accounts typed Loan, and what&apos;s owed on cards.{' '}
+        Debt is the balance of accounts typed Loan (or the balance you keep for one), and what&apos;s owed on cards.{' '}
         <Link to="/accounts" className="text-emerald-700 hover:underline dark:text-emerald-400">
           Accounts
         </Link>

@@ -587,8 +587,8 @@ test('spending and income by month, with income split by platform', async () => 
   const { accountId } = await post('/api/bank/import', { content: csv, fileName: 'months.csv', mapping, newAccount: { name: 'Months Checking', kind: 'checking', owner: 'business' } });
   const { byMonth } = await get(`/api/bank/spending?account=${accountId}&preset=all`);
   assert.deepEqual(byMonth, [
-    { month: '2026-04', spend: 100, income: 1050, sources: { airbnb: 500, vrbo: 300, booking: 200, lease: 0, other: 50 } },
-    { month: '2026-05', spend: 1000, income: 250, sources: { airbnb: 250, vrbo: 0, booking: 0, lease: 0, other: 0 } },
+    { month: '2026-04', spend: 100, income: 1050, sources: { airbnb: 500, vrbo: 300, booking: 200, lease: 0, interest: 0, laundry: 0, other: 50 } },
+    { month: '2026-05', spend: 1000, income: 250, sources: { airbnb: 250, vrbo: 0, booking: 0, lease: 0, interest: 0, laundry: 0, other: 0 } },
   ]);
   const { byStore } = await get(`/api/bank/spending?account=${accountId}&preset=all`);
   assert.deepEqual(byStore.map((s) => [s.label, s.spend]), [['Powerco', 1000], ['Trashco Springfield', 100]]);

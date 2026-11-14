@@ -35,6 +35,8 @@ export interface Account {
   lastDate: string | null;
   sources: Source[];
   entityId: number | null;
+  // A loan whose balance the user keeps, reduced by each payment's principal.
+  balanceTracked: boolean;
 }
 
 export type ImportOutcome = 'added' | 'merged' | 'skipped';
@@ -189,6 +191,7 @@ export function createBankStore(db: DatabaseSync) {
     lastDate: row.last_date ?? null,
     sources: row.sources ? (String(row.sources).split(',') as Source[]) : [],
     entityId: row.entity_id ?? null,
+    balanceTracked: Boolean(row.balance_manual),
   });
 
   const ACCOUNT_SQL = `
@@ -254,7 +257,8 @@ export function createBankStore(db: DatabaseSync) {
 
   function setBalance(id: number, balance: number | null, balanceDate: string | null) {
     if (balance === null) return;
-    db.prepare('UPDATE bank_accounts SET balance = ?, balance_date = ? WHERE id = ? AND (balance_date IS NULL OR balance_date <= ?)').run(balance, balanceDate, id, balanceDate ?? '9999');
+    // A loan balance the user keeps isn't replaced by the feed's.
+    db.prepare('UPDATE bank_accounts SET balance = ?, balance_date = ? WHERE id = ? AND balance_manual = 0 AND (balance_date IS NULL OR balance_date <= ?)').run(balance, balanceDate, id, balanceDate ?? '9999');
   }
 
   // A file's account number is kept only as a salted hash, to recognise the account next time.

@@ -10,6 +10,8 @@
   --color-vrbo: #009e73;
   --color-booking: #e6a100;
   --color-lease: #6941c6;
+  --color-interest: #b5589a;
+  --color-laundry: #1a8fa3;
   --color-other-income: #7a8699;
   --color-direct: #b5589a;
   /* Stays calendar, coloured by payment. */
@@ -29,6 +31,8 @@
     --color-vrbo: #2bbd8f;
     --color-booking: #f2bd3a;
     --color-lease: #a48af0;
+    --color-interest: #d483bd;
+    --color-laundry: #4cbfd3;
     --color-other-income: #a3adbd;
     --color-direct: #d483bd;
     --color-paid: #2fa862;

@@ -34,7 +34,7 @@ export function useBankQuery() {
 }
 
 // Income sources the dashboard chart links to.
-const SOURCE_LABELS: Record<string, string> = { airbnb: 'Airbnb income', vrbo: 'Vrbo income', booking: 'Booking.com income', lease: 'lease rent', other: 'other income' };
+const SOURCE_LABELS: Record<string, string> = { airbnb: 'Airbnb income', vrbo: 'Vrbo income', booking: 'Booking.com income', lease: 'lease rent', interest: 'interest', laundry: 'laundry income', other: 'other income' };
 
 export function Transactions({ meta }: { meta: Meta | null }) {
   const filters = useBankQuery();

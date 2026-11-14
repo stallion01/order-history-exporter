@@ -74,12 +74,14 @@ interface Report {
   sinceStart: { from: string; noi: number; capital: number; invested: number | null; recovered: number | null; payback: number | null };
 }
 
-const SOURCE_NAMES: Record<IncomeSource, string> = { airbnb: 'Airbnb', vrbo: 'Vrbo', booking: 'Booking.com', lease: 'Leases', other: 'Direct bookings and other' };
+const SOURCE_NAMES: Record<IncomeSource, string> = { airbnb: 'Airbnb', vrbo: 'Vrbo', booking: 'Booking.com', lease: 'Leases', interest: 'Interest', laundry: 'Laundry', other: 'Other' };
 const SOURCE_COLOURS: Record<IncomeSource, string> = {
   airbnb: 'bg-[var(--color-airbnb)]',
   vrbo: 'bg-[var(--color-vrbo)]',
   booking: 'bg-[var(--color-booking)]',
   lease: 'bg-[var(--color-lease)]',
+  interest: 'bg-[var(--color-interest)]',
+  laundry: 'bg-[var(--color-laundry)]',
   other: 'bg-[var(--color-other-income)]',
 };
 

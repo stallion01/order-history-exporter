@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -578,6 +578,30 @@ const SCHEMA_V17 = `
 // matched to the lease, and the matches the user took back, so they aren't made again.
 // Store charges the user says have no online order (bought in the store), so they
 // aren't listed as needing one.
+// Loans whose balance the user keeps (the bank feed doesn't bring it): the balance is
+// reduced by each payment's principal, entered by the user, and each payment is split
+// into principal and interest in a split account.
+const SCHEMA_V21 = `
+  ALTER TABLE bank_accounts ADD COLUMN balance_manual INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE bank_accounts ADD COLUMN tracked_from TEXT;
+  ALTER TABLE bank_accounts ADD COLUMN split_account_id INTEGER;
+  CREATE TABLE loan_payments (
+    id INTEGER PRIMARY KEY,
+    transaction_id INTEGER NOT NULL UNIQUE REFERENCES bank_transactions (id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES bank_accounts (id) ON DELETE CASCADE,
+    paid_on TEXT NOT NULL,
+    amount REAL NOT NULL,
+    -- Null when the payment was skipped (already counted in the balance).
+    principal REAL,
+    interest REAL,
+    balance_before REAL,
+    balance_after REAL,
+    -- The same payment leaving checking, set aside so it isn't counted twice.
+    paid_from INTEGER REFERENCES bank_transactions (id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+  );
+`;
+
 const SCHEMA_V20 = `
   ALTER TABLE bank_transactions ADD COLUMN no_order INTEGER NOT NULL DEFAULT 0;
 `;
@@ -794,6 +818,7 @@ function migrate(db, file) {
     if (version < 18) db.exec(SCHEMA_V18);
     if (version < 19) db.exec(SCHEMA_V19);
     if (version < 20) db.exec(SCHEMA_V20);
+    if (version < 21) db.exec(SCHEMA_V21);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

@@ -118,8 +118,8 @@ export function storeName(text: string): { key: string; label: string } {
 
 // Where income came from, for showing rental payouts by platform. The SQL below
 // must give the same answer as incomeSource for any text.
-export type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'lease' | 'other';
-export const INCOME_SOURCE_NAMES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'lease', 'other'];
+export type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'lease' | 'interest' | 'laundry' | 'other';
+export const INCOME_SOURCE_NAMES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'lease', 'interest', 'laundry', 'other'];
 // leased: the deposit is linked to a lease on the Leases page (rent sent by Zelle, say).
 export const incomeSource = (text: string, leased = false): IncomeSource => {
   const t = text.toLowerCase();
@@ -128,6 +128,9 @@ export const incomeSource = (text: string, leased = false): IncomeSource => {
   if (t.includes('booking.com') || t.includes('booking com')) return 'booking';
   // Rent from a lease, as the Leases page records it.
   if (leased || t.includes('lease rent')) return 'lease';
+  // Interest the bank pays, and coin laundry in the buildings.
+  if (t.includes('interest')) return 'interest';
+  if (t.includes('laundry')) return 'laundry';
   return 'other';
 };
 // leased: SQL that is true when the transaction is linked to a lease.
@@ -139,8 +142,13 @@ export function incomeSourceSql(source: IncomeSource, text: string, leased = '0'
   if (source === 'airbnb') return airbnb;
   if (source === 'vrbo') return `(${vrbo} AND NOT ${airbnb})`;
   if (source === 'booking') return `(${booking} AND NOT ${airbnb} AND NOT ${vrbo})`;
-  if (source === 'lease') return `(${lease} AND NOT ${airbnb} AND NOT ${vrbo} AND NOT ${booking})`;
-  return `(NOT ${airbnb} AND NOT ${vrbo} AND NOT ${booking} AND NOT ${lease})`;
+  const platform = `(${airbnb} OR ${vrbo} OR ${booking})`;
+  const interest = `${text} LIKE '%interest%'`;
+  const laundry = `${text} LIKE '%laundry%'`;
+  if (source === 'lease') return `(${lease} AND NOT ${platform})`;
+  if (source === 'interest') return `(${interest} AND NOT ${platform} AND NOT ${lease})`;
+  if (source === 'laundry') return `(${laundry} AND NOT ${platform} AND NOT ${lease} AND NOT ${interest})`;
+  return `(NOT ${platform} AND NOT ${lease} AND NOT ${interest} AND NOT ${laundry})`;
 }
 
 // Categories that are income. Money in filed anywhere else is a refund.

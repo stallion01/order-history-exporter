@@ -23,7 +23,7 @@ type Row = Record<string, any>;
 const INVESTED = 'pl.invested';
 const INVESTED_ON = 'pl.investedOn';
 const DAY_MS = 86400000;
-const SOURCES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'lease', 'other'];
+const SOURCES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'lease', 'interest', 'laundry', 'other'];
 const MARKET_VALUE = 'pl.marketValue.';
 const LOAN_PAYMENTS = 'Loan & Mortgage Payments';
 
@@ -101,10 +101,10 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
     const months = new Map<string, { month: string; revenue: number; expenses: number; capital: number; sources: Record<IncomeSource, number>; byCategory: Map<string, number> }>();
     const at = (month: string) => {
       let m = months.get(month);
-      if (!m) months.set(month, (m = { month, revenue: 0, expenses: 0, capital: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, lease: 0, other: 0 }, byCategory: new Map() }));
+      if (!m) months.set(month, (m = { month, revenue: 0, expenses: 0, capital: 0, sources: { airbnb: 0, vrbo: 0, booking: 0, lease: 0, interest: 0, laundry: 0, other: 0 }, byCategory: new Map() }));
       return m;
     };
-    const sources: Record<IncomeSource, number> = { airbnb: 0, vrbo: 0, booking: 0, lease: 0, other: 0 };
+    const sources: Record<IncomeSource, number> = { airbnb: 0, vrbo: 0, booking: 0, lease: 0, interest: 0, laundry: 0, other: 0 };
     const incomeCategories = new Map<string, number>();
     for (const tx of bank.listTransactions({ ...filters, direction: 'in' }).transactions) {
       const amount = tx.amount * shareOf(tx);

@@ -4,6 +4,7 @@ import { NavLink } from 'react-router-dom';
 import { ArrowLeftRight, BedDouble, FileCheck2, KeyRound, FileSpreadsheet, Inbox, Landmark, LayoutDashboard, LogOut, Menu, Package, Receipt, Settings, Tags, TrendingUp, Upload, Wallet } from 'lucide-react';
 import { BusinessPicker, useBusiness } from './business';
 import { ExpiryWarning } from './rentroll';
+import { LoanPaymentPrompt } from './loans';
 import { cx } from './ui';
 
 // The sidebar order. Phones show the ones marked phone as tabs, the rest under More.
@@ -86,6 +87,7 @@ export function Layout({ username, onSignOut, children }: { username: string; on
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-24 md:px-8 md:pb-10">
           {children}
           <ExpiryWarning />
+          <LoanPaymentPrompt />
         </main>
       </div>
 

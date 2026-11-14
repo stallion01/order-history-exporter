@@ -11,6 +11,8 @@ export interface Account {
   name: string;
   institution: string | null;
   kind: 'checking' | 'savings' | 'credit' | 'loan' | 'other';
+  // A loan whose balance the user keeps.
+  balanceTracked?: boolean;
   owner: 'business' | 'personal' | 'mixed';
   last4: string | null;
   currency: string;
@@ -539,66 +541,99 @@ export function ShareEditor({ entities, initial, busy, onSave, onCancel }: { ent
   );
 }
 
-// Sets a choice on every selected transaction.
+// Sets choices on every selected transaction: pick any of them, then apply them together.
 export function BulkBar({ ids, categories, entities = [], onDone }: { ids: number[]; categories: string[]; entities?: Entity[]; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Choices wait here until Apply, so several can be made for the same selection.
+  const [category, setCategory] = useState('');
+  const [entity, setEntity] = useState('');
+  const [status, setStatus] = useState('');
+  const [kind, setKind] = useState('');
+  const reset = () => {
+    setCategory('');
+    setEntity('');
+    setStatus('');
+    setKind('');
+  };
   if (!ids.length) return null;
-  async function apply(changes: TxChange) {
+  const changes: TxChange = {
+    ...(category ? { category } : {}),
+    ...(entity ? { entity: Number(entity) } : {}),
+    ...(status ? { status } : {}),
+    ...(kind ? { kind } : {}),
+  };
+  const chosen = Object.keys(changes).length;
+  async function apply(change: TxChange) {
     setBusy(true);
     setError('');
     try {
-      await post('/api/bank/transactions/update', { ids, ...changes });
+      await post('/api/bank/transactions/update', { ids, ...change });
+      reset();
       onDone();
     } catch (e) {
       setError((e as Error).message);
     }
     setBusy(false);
   }
+  const picked = (value: string) => (value ? 'border-emerald-500 ring-1 ring-emerald-500 dark:border-emerald-500' : '');
   return (
-    <div className="sticky top-14 z-10 flex flex-wrap items-center gap-2 border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-sm md:top-0 dark:border-emerald-900 dark:bg-emerald-950">
-      <span className="font-medium">{ids.length} selected</span>
-      <select className={cx(SMALL_SELECT, 'w-auto')} disabled={busy} value="" onChange={(e) => e.target.value && apply({ category: e.target.value })} aria-label="Set category for selected">
-        <option value="">Set category…</option>
-        {categories.map((c) => (
-          <option key={c}>{c}</option>
-        ))}
-      </select>
-      {entities.length > 0 && (
-        <select className={cx(SMALL_SELECT, 'w-auto')} disabled={busy} value="" onChange={(e) => e.target.value && apply({ entity: Number(e.target.value) })} aria-label="Set business or property for selected">
-          <option value="">Set business or property…</option>
-          {entities.map((en) => (
-            <option key={en.id} value={en.id}>
-              {en.name}
-            </option>
+    <div className="sticky top-14 z-10 border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-sm md:top-0 dark:border-emerald-900 dark:bg-emerald-950">
+      <div className="mb-2 font-medium">
+        {ids.length} selected<span className="font-normal text-slate-600 dark:text-slate-400"> · choose what to change, then Apply</span>
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <select className={cx(SMALL_SELECT, picked(category))} disabled={busy} value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Category for selected">
+          <option value="">Category: no change</option>
+          {categories.map((c) => (
+            <option key={c}>{c}</option>
           ))}
         </select>
-      )}
-      <Button className="min-h-8" disabled={busy} onClick={() => apply({ status: 'business' })}>
-        Business
-      </Button>
-      <Button className="min-h-8" disabled={busy} onClick={() => apply({ status: 'personal' })}>
-        Personal
-      </Button>
-      <Button className="min-h-8" disabled={busy} onClick={() => apply({ kind: 'transfer' })}>
-        Transfer
-      </Button>
-      <Button className="min-h-8" disabled={busy} onClick={() => apply({ kind: 'ignored' })}>
-        Ignore
-      </Button>
-      <Button
-        className="min-h-8"
-        disabled={busy}
-        title="For transactions imported the wrong way round: money in shown as spending, or the reverse"
-        onClick={() =>
-          window.confirm(`Swap money in and out for ${ids.length === 1 ? 'this transaction' : `these ${ids.length} transactions`}? Amounts with a minus lose it, and the rest gain one.`) &&
-          apply({ flipSign: true })
-        }
-      >
-        <ArrowLeftRight className="size-4" aria-hidden />
-        Swap in/out
-      </Button>
-      {error && <span className="text-red-700 dark:text-red-400">{error}</span>}
+        {entities.length > 0 && (
+          <select className={cx(SMALL_SELECT, picked(entity))} disabled={busy} value={entity} onChange={(e) => setEntity(e.target.value)} aria-label="Business or property for selected">
+            <option value="">Business or property: no change</option>
+            {entities.map((en) => (
+              <option key={en.id} value={en.id}>
+                {en.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <select className={cx(SMALL_SELECT, picked(status))} disabled={busy} value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Business or personal for selected">
+          <option value="">Business or personal: no change</option>
+          <option value="business">Business</option>
+          <option value="personal">Personal</option>
+        </select>
+        <select className={cx(SMALL_SELECT, picked(kind))} disabled={busy} value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Type for selected">
+          <option value="">Type: no change</option>
+          <option value="normal">Spending or income</option>
+          <option value="transfer">Transfer</option>
+          <option value="ignored">Ignore</option>
+        </select>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button variant="primary" className="min-h-8" busy={busy} disabled={!chosen} onClick={() => apply(changes)}>
+          {chosen ? `Apply to ${ids.length === 1 ? '1 transaction' : `${ids.length} transactions`}` : 'Apply'}
+        </Button>
+        {chosen > 0 && (
+          <Button variant="ghost" className="min-h-8" disabled={busy} onClick={reset}>
+            Clear choices
+          </Button>
+        )}
+        <Button
+          className="ml-auto min-h-8"
+          disabled={busy}
+          title="For transactions imported the wrong way round: money in shown as spending, or the reverse"
+          onClick={() =>
+            window.confirm(`Swap money in and out for ${ids.length === 1 ? 'this transaction' : `these ${ids.length} transactions`}? Amounts with a minus lose it, and the rest gain one.`) &&
+            apply({ flipSign: true })
+          }
+        >
+          <ArrowLeftRight className="size-4" aria-hidden />
+          Swap in/out
+        </Button>
+        {error && <span className="basis-full text-red-700 dark:text-red-400">{error}</span>}
+      </div>
     </div>
   );
 }
