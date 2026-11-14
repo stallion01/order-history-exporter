@@ -115,6 +115,15 @@ export function correlationRoutes(app: FastifyInstance, correlate: CorrelationSe
     return { suggestions: correlate.orderSuggestions(id), split: correlate.splitOf(id) };
   });
 
+  // A store charge bought in the store has no online order to find.
+  app.post('/api/bank/transactions/:id/no-order', async (request) => {
+    const id = txOf(request);
+    const body = parse(z.object({ noOrder: z.boolean() }), request.body);
+    if (!bank.setNoOrder(id, body.noOrder)) throw new HttpError(404, 'That transaction was not found.');
+    audit(request, 'order.none', { transactionId: id, noOrder: body.noOrder });
+    return { noOrder: body.noOrder };
+  });
+
   app.post('/api/bank/match-orders', async (request) => {
     const linked = correlate.matchOrders();
     audit(request, 'order.match', { linked });

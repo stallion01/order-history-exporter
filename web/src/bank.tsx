@@ -63,6 +63,8 @@ export interface Transaction {
   entitySource: string | null;
   shares: Share[];
   orders: { store: string; orderId: string; amount: number }[];
+  // Bought in the store: no online order to match.
+  noOrder: boolean;
   // Stays this deposit paid for, from Hospitable.
   stays: { id: string; guest: string | null; property: string | null; arrival: string; departure: string }[];
 }
@@ -176,6 +178,19 @@ export function TxRow({
     setBusy(false);
   }
 
+  async function setNoOrder(noOrder: boolean) {
+    setBusy(true);
+    setError('');
+    try {
+      await post(`/api/bank/transactions/${tx.id}/no-order`, { noOrder });
+      setPanel(null);
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    setBusy(false);
+  }
+
   const entityValue = tx.shares.length ? 'split' : tx.entityId ? String(tx.entityId) : '';
   return (
     <li className={cx('px-4 py-3 text-sm', tx.kind !== 'normal' && 'bg-slate-50/70 dark:bg-slate-900/60')}>
@@ -232,7 +247,17 @@ export function TxRow({
                 {tx.stays.length === 1 ? `Stay: ${tx.stays[0].guest || 'guest'}` : `${tx.stays.length} stays`}
               </Link>
             )}
-            {(tx.orders.length > 0 || isStoreCharge) && (
+            {tx.orders.length === 0 && isStoreCharge && (tx.noOrder || tx.receiptId) ? (
+              <span className="inline-flex items-center gap-1">
+                <ShoppingCart className="size-3" aria-hidden />
+                {tx.noOrder ? 'Bought in the store' : 'No order needed: has a receipt'}
+                {tx.noOrder && (
+                  <button type="button" className="text-emerald-700 hover:underline dark:text-emerald-400" disabled={busy} onClick={() => setNoOrder(false)}>
+                    Undo
+                  </button>
+                )}
+              </span>
+            ) : (tx.orders.length > 0 || isStoreCharge) && (
               <button
                 type="button"
                 aria-expanded={panel === 'orders'}
@@ -318,7 +343,7 @@ export function TxRow({
         </div>
       </div>
       {error && <p className="mt-2 text-xs text-red-700 dark:text-red-400">{error}</p>}
-      {panel === 'orders' && <OrdersPanel tx={tx} onChanged={onChanged} />}
+      {panel === 'orders' && <OrdersPanel tx={tx} onChanged={onChanged} onNoOrder={() => setNoOrder(true)} />}
       {panel === 'share' && (
         <ShareEditor
           entities={entities}
@@ -359,7 +384,7 @@ interface OrderSuggestion {
 }
 
 // The store orders a charge paid for, how it splits by item, and others it might be.
-function OrdersPanel({ tx, onChanged }: { tx: Transaction; onChanged: () => void }) {
+function OrdersPanel({ tx, onChanged, onNoOrder }: { tx: Transaction; onChanged: () => void; onNoOrder: () => void }) {
   const [data, setData] = useState<{ suggestions: OrderSuggestion[]; split: { category: string; status: string | null; amount: number }[] } | null>(null);
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(false);
@@ -455,6 +480,17 @@ function OrdersPanel({ tx, onChanged }: { tx: Transaction; onChanged: () => void
               Search
             </Button>
           </form>
+          {tx.orders.length === 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2 dark:border-slate-800">
+              <span className="text-slate-500">Bought at the store, not online?</span>
+              <Button className="min-h-7 px-2 py-0.5 text-xs" disabled={busy} onClick={onNoOrder}>
+                No order: bought in the store
+              </Button>
+              <Link to="/receipts" className="text-emerald-700 hover:underline dark:text-emerald-400">
+                Or add its receipt
+              </Link>
+            </div>
+          )}
         </>
       )}
     </div>

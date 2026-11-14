@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -576,6 +576,12 @@ const SCHEMA_V17 = `
 // estate), suggested from their Schedule C and E lines.
 // Leases: the names a tenant's rent arrives under at the bank, so deposits can be
 // matched to the lease, and the matches the user took back, so they aren't made again.
+// Store charges the user says have no online order (bought in the store), so they
+// aren't listed as needing one.
+const SCHEMA_V20 = `
+  ALTER TABLE bank_transactions ADD COLUMN no_order INTEGER NOT NULL DEFAULT 0;
+`;
+
 const SCHEMA_V19 = `
   ALTER TABLE leases ADD COLUMN payers TEXT;
   -- Rent due each month, for a lease without a month-by-month schedule.
@@ -787,6 +793,7 @@ function migrate(db, file) {
     if (version < 17) db.exec(SCHEMA_V17);
     if (version < 18) db.exec(SCHEMA_V18);
     if (version < 19) db.exec(SCHEMA_V19);
+    if (version < 20) db.exec(SCHEMA_V20);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

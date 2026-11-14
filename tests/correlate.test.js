@@ -128,6 +128,21 @@ test('a charge on a different card is not matched; it can be linked by hand, and
   await post(`/api/bank/transactions/${walmart.id}/orders/unlink`, { store: 'walmart', orderId: 'W1' });
   await post('/api/bank/match-orders');
   assert.deepEqual((await charge('WALMART'))[0].orders, [], 'not linked again on its own');
+
+  // Bought in the store: no order to find, but it then needs its own category.
+  await post(`/api/bank/transactions/${walmart.id}/no-order`, { noOrder: true });
+  assert.equal((await charge('WALMART'))[0].noOrder, true);
+  assert.equal((await get('/api/bank/transactions?preset=all&unmatched=1')).total, 0);
+  const review = await get('/api/bank/transactions?preset=all&review=1&limit=200');
+  assert.equal(review.transactions.some((t) => t.id === walmart.id), !(await charge('WALMART'))[0].category || !(await charge('WALMART'))[0].status);
+  await post(`/api/bank/transactions/${walmart.id}/no-order`, { noOrder: false });
+  assert.equal((await get('/api/bank/transactions?preset=all&unmatched=1')).total, 1);
+
+  // Linking an order clears the mark.
+  await post(`/api/bank/transactions/${walmart.id}/no-order`, { noOrder: true });
+  await post(`/api/bank/transactions/${walmart.id}/orders/link`, { store: 'walmart', orderId: 'W1' });
+  assert.equal((await charge('WALMART'))[0].noOrder, false);
+  await post(`/api/bank/transactions/${walmart.id}/orders/unlink`, { store: 'walmart', orderId: 'W1' });
 });
 
 test('orders and charges already in the database are matched when the server starts', async () => {

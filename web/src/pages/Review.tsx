@@ -54,7 +54,9 @@ export function Review({ meta }: { meta: Meta | null }) {
   const accounts = useApi<{ accounts: Account[] }>('/api/bank/accounts');
   const rules = useApi<{ rules: Rule[]; accounts: { id: number; name: string }[] }>('/api/bank/rules');
   const receipts = useApi<{ counts: { review: number } }>('/api/receipts?limit=1');
-  const unmatched = useApi<{ total: number }>('/api/bank/transactions?unmatched=1&limit=1');
+  const unmatched = useApi<{ total: number }>(`/api/bank/transactions?unmatched=1&preset=all&limit=1${business ? `&entity=${business}` : ''}`);
+  // Everything waiting, in every business, to say when some is outside this one.
+  const everywhere = useApi<{ total: number }>('/api/bank/transactions?review=1&kind=normal&preset=all&limit=1');
   const signs = useApi<{ problems: SignProblem[] }>('/api/bank/sign-problems');
   const entities = meta?.entities || [];
   const [selected, setSelected] = useState<number[]>([]);
@@ -81,7 +83,11 @@ export function Review({ meta }: { meta: Meta | null }) {
     list.reload();
     rules.reload();
     signs.reload();
+    unmatched.reload();
+    everywhere.reload();
   };
+  // Waiting in other businesses, or in none, while one business is chosen.
+  const elsewhere = business && !filters.values('entity').length && list.data && everywhere.data ? everywhere.data.total - list.data.total : 0;
   const data = list.data;
   // Whether the rules panel is showing, remembered on this device.
   const [rulesOpen, setRulesOpen] = useState(() => {
@@ -117,10 +123,18 @@ export function Review({ meta }: { meta: Meta | null }) {
       )}
       {unmatched.data && unmatched.data.total > 0 && (
         <Banner tone="warning">
-          {unmatched.data.total === 1 ? '1 store charge has' : `${unmatched.data.total} store charges have`} no matching order, so they can't be split by item yet.{' '}
+          {unmatched.data.total === 1 ? '1 store charge has' : `${unmatched.data.total} store charges have`} no online order matched, so they can't be split by item yet. Bought in a store? Mark it so, or add its receipt.{' '}
           <Link to="/transactions?preset=all&unmatched=1" className="font-medium underline">
-            Match them
+            See them
           </Link>
+        </Banner>
+      )}
+      {elsewhere > 0 && !filtered && (
+        <Banner tone="info">
+          {elsewhere === 1 ? '1 more transaction is' : `${whole(elsewhere)} more transactions are`} waiting in other businesses or not assigned to one.{' '}
+          <button type="button" className="font-medium underline" onClick={() => filters.set({ entity: [...entities.map((e) => String(e.id)), 'none'] })}>
+            Show everything
+          </button>
         </Banner>
       )}
       {signs.data && signs.data.problems.length > 0 && <SignProblems problems={signs.data.problems} onDone={reload} />}

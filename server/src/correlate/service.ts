@@ -240,6 +240,8 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
        ON CONFLICT (transaction_id, store, order_id) DO UPDATE SET amount = excluded.amount, source = excluded.source`
     ).run(txId, store, orderId, part, source, now());
     raw.prepare('DELETE FROM order_link_rejections WHERE transaction_id = ? AND store = ? AND order_id = ?').run(txId, store, orderId);
+    // It has an order after all.
+    raw.prepare('UPDATE bank_transactions SET no_order = 0 WHERE id = ?').run(txId);
   }
 
   function linkByUser(txId: number, store: string, orderId: string) {

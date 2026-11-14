@@ -94,6 +94,9 @@ export const ORDER_STORE_PAYEES: Record<string, string[]> = {
   homedepot: ['Home Depot'],
 };
 const ALL_STORE_PAYEES = [...new Set(Object.values(ORDER_STORE_PAYEES).flat())];
+// A store charge that could still be matched to an online order: not marked as bought
+// in the store, and with no receipt attached (a receipt already says what it was for).
+const AWAITS_ORDER = 't.no_order = 0 AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.transaction_id = t.id)';
 
 // What linked store orders say about a transaction.
 export interface OrderInfo {
@@ -869,7 +872,7 @@ export function createBankStore(db: DatabaseSync) {
     }
     if (filters.storeUnlinked) {
       clauses.push(
-        `t.amount < 0 AND t.kind = 'normal' AND t.payee IN (${ALL_STORE_PAYEES.map(() => '?').join(', ')}) AND NOT EXISTS (SELECT 1 FROM order_links l WHERE l.transaction_id = t.id)`
+        `t.amount < 0 AND t.kind = 'normal' AND t.payee IN (${ALL_STORE_PAYEES.map(() => '?').join(', ')}) AND ${AWAITS_ORDER} AND COALESCE(t.status, '') != 'personal' AND NOT EXISTS (SELECT 1 FROM order_links l WHERE l.transaction_id = t.id)`
       );
       params.push(...ALL_STORE_PAYEES);
     }
@@ -879,8 +882,9 @@ export function createBankStore(db: DatabaseSync) {
     }
     if (filters.review) {
       // Needs a decision: no business/personal status, or no category (store charges
-      // get theirs from matched orders later, so they only need a status).
-      clauses.push(`t.kind = 'normal' AND (t.status IS NULL OR (t.category IS NULL AND COALESCE(t.payee, '') NOT IN (${[...STORE_PAYEES].map(() => '?').join(', ')})))`);
+      // still waiting for their online order get theirs from it later, so they only need
+      // a status; ones bought in the store, or with a receipt, need a category too).
+      clauses.push(`t.kind = 'normal' AND (t.status IS NULL OR (t.category IS NULL AND NOT (COALESCE(t.payee, '') IN (${[...STORE_PAYEES].map(() => '?').join(', ')}) AND ${AWAITS_ORDER})))`);
       params.push(...STORE_PAYEES);
     }
     return { sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params };
@@ -916,6 +920,8 @@ export function createBankStore(db: DatabaseSync) {
           .sort((a, b) => a.id - b.id)
       : [],
     receiptId: row.receipt_id ?? null,
+    // Bought in the store: no online order to match.
+    noOrder: Boolean(row.no_order),
     receiptVendor: row.receipt_vendor ?? null,
     // Receipts not linked to anything yet with this charge's exact amount, dated just before it.
     possibleReceipts: row.possible_receipts ? String(row.possible_receipts).split(',').map(Number) : [],
@@ -990,6 +996,11 @@ export function createBankStore(db: DatabaseSync) {
   }
 
   const reviewCount = () => listTransactions({ review: true, kind: 'normal' }, { limit: 1 }).total;
+
+  // Marks a store charge as bought in the store (no online order), or takes that back.
+  function setNoOrder(id: number, noOrder: boolean) {
+    return db.prepare('UPDATE bank_transactions SET no_order = ? WHERE id = ?').run(noOrder ? 1 : 0, id).changes > 0;
+  }
 
   /* ---------- Editing ---------- */
 
@@ -1467,6 +1478,7 @@ export function createBankStore(db: DatabaseSync) {
     saveCsvLayout,
     listTransactions,
     reviewCount,
+    setNoOrder,
     updateTransactions,
     signProblems,
     fixSignProblems,

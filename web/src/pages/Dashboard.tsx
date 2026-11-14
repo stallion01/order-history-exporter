@@ -191,6 +191,9 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
   period.set('status', 'notpersonal');
   if (business) period.set('entity', String(business));
   const totals = useApi<{ total: number; moneyOut: number; moneyIn: number }>(`/api/bank/transactions?${period}&limit=1`);
+  // What needs review in the business being looked at (all of them when none is chosen), as the Review page shows it.
+  const review = useApi<{ total: number }>(`/api/bank/transactions?review=1&kind=normal&preset=all&limit=1${business ? `&entity=${business}` : ''}`);
+  const reviewCount = review.data?.total ?? 0;
   const spending = useApi<{ byCategory: { key: string; label: string; spend: number }[]; byEntity: { key: string; label: string; spend: number }[]; byMonth: InOutMonth[]; byStore: { key: string; label: string; spend: number }[] }>(
     `/api/bank/spending?${period}`
   );
@@ -251,8 +254,8 @@ function BankSummary({ range }: { range: { from: string; to: string; years?: str
         <Stat
           label="To review"
           value={
-            <Link to="/review" className={accounts.data.reviewCount ? 'text-amber-700 hover:underline dark:text-amber-400' : 'hover:underline'}>
-              {whole(accounts.data.reviewCount)}
+            <Link to="/review" className={reviewCount ? 'text-amber-700 hover:underline dark:text-amber-400' : 'hover:underline'}>
+              {whole(reviewCount)}
             </Link>
           }
           hint="Need a category, or business or personal"
