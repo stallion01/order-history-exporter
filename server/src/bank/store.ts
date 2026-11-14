@@ -94,6 +94,9 @@ export const ORDER_STORE_PAYEES: Record<string, string[]> = {
   homedepot: ['Home Depot'],
 };
 const ALL_STORE_PAYEES = [...new Set(Object.values(ORDER_STORE_PAYEES).flat())];
+// Linked to a lease: a payment recorded on the Leases page points at it, or the Leases
+// page made it (rent received outside the bank).
+const LEASE_LINKED = "(EXISTS (SELECT 1 FROM lease_payments lp WHERE lp.transaction_id = t.id) OR EXISTS (SELECT 1 FROM bank_tx_sources ls WHERE ls.transaction_id = t.id AND ls.source = 'lease'))";
 // A store charge that could still be matched to an online order: not marked as bought
 // in the store, and with no receipt attached (a receipt already says what it was for).
 const AWAITS_ORDER = 't.no_order = 0 AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.transaction_id = t.id)';
@@ -853,7 +856,7 @@ export function createBankStore(db: DatabaseSync) {
     // Spending includes refunds (money back that reduces it); income leaves them out.
     if (filters.direction === 'out') clauses.push(`(t.amount < 0 OR ${REFUND_SQL})`);
     if (filters.direction === 'in') clauses.push(`(t.amount > 0 AND NOT ${REFUND_SQL})`);
-    if (filters.source) clauses.push(incomeSourceSql(filters.source, "lower(COALESCE(t.payee, '') || ' ' || t.description)"));
+    if (filters.source) clauses.push(incomeSourceSql(filters.source, "lower(COALESCE(t.payee, '') || ' ' || t.description)", LEASE_LINKED));
     if (filters.q) {
       const like = `%${filters.q.replace(/[\\%_]/g, '\\$&')}%`;
       clauses.push(`(t.description LIKE ? ESCAPE '\\' OR t.payee LIKE ? ESCAPE '\\' OR t.memo LIKE ? ESCAPE '\\' OR t.note LIKE ? ESCAPE '\\')`);
@@ -920,6 +923,8 @@ export function createBankStore(db: DatabaseSync) {
           .sort((a, b) => a.id - b.id)
       : [],
     receiptId: row.receipt_id ?? null,
+    // Rent or another payment linked to a lease.
+    lease: Boolean(row.lease_linked),
     // Bought in the store: no online order to match.
     noOrder: Boolean(row.no_order),
     receiptVendor: row.receipt_vendor ?? null,
@@ -967,6 +972,7 @@ export function createBankStore(db: DatabaseSync) {
       .prepare(
         `SELECT t.*, a.name AS account_name, pa.name AS transfer_account,
                 (SELECT r.id FROM receipts r WHERE r.transaction_id = t.id ORDER BY r.id LIMIT 1) AS receipt_id,
+                ${LEASE_LINKED} AS lease_linked,
                 (SELECT r.vendor FROM receipts r WHERE r.transaction_id = t.id ORDER BY r.id LIMIT 1) AS receipt_vendor,
                 CASE WHEN t.amount < 0 AND t.kind != 'transfer' AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.transaction_id = t.id) THEN
                   (SELECT GROUP_CONCAT(r.id) FROM receipts r

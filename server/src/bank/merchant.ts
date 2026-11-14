@@ -120,20 +120,22 @@ export function storeName(text: string): { key: string; label: string } {
 // must give the same answer as incomeSource for any text.
 export type IncomeSource = 'airbnb' | 'vrbo' | 'booking' | 'lease' | 'other';
 export const INCOME_SOURCE_NAMES: IncomeSource[] = ['airbnb', 'vrbo', 'booking', 'lease', 'other'];
-export const incomeSource = (text: string): IncomeSource => {
+// leased: the deposit is linked to a lease on the Leases page (rent sent by Zelle, say).
+export const incomeSource = (text: string, leased = false): IncomeSource => {
   const t = text.toLowerCase();
   if (t.includes('airbnb')) return 'airbnb';
   if (t.includes('vrbo') || t.includes('homeaway')) return 'vrbo';
   if (t.includes('booking.com') || t.includes('booking com')) return 'booking';
   // Rent from a lease, as the Leases page records it.
-  if (t.includes('lease rent')) return 'lease';
+  if (leased || t.includes('lease rent')) return 'lease';
   return 'other';
 };
-export function incomeSourceSql(source: IncomeSource, text: string) {
+// leased: SQL that is true when the transaction is linked to a lease.
+export function incomeSourceSql(source: IncomeSource, text: string, leased = '0') {
   const airbnb = `${text} LIKE '%airbnb%'`;
   const vrbo = `(${text} LIKE '%vrbo%' OR ${text} LIKE '%homeaway%')`;
   const booking = `(${text} LIKE '%booking.com%' OR ${text} LIKE '%booking com%')`;
-  const lease = `${text} LIKE '%lease rent%'`;
+  const lease = `(${text} LIKE '%lease rent%' OR ${leased})`;
   if (source === 'airbnb') return airbnb;
   if (source === 'vrbo') return `(${vrbo} AND NOT ${airbnb})`;
   if (source === 'booking') return `(${booking} AND NOT ${airbnb} AND NOT ${vrbo})`;

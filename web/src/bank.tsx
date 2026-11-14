@@ -65,6 +65,8 @@ export interface Transaction {
   orders: { store: string; orderId: string; amount: number }[];
   // Bought in the store: no online order to match.
   noOrder: boolean;
+  // Linked to a lease.
+  lease: boolean;
   // Stays this deposit paid for, from Hospitable.
   stays: { id: string; guest: string | null; property: string | null; arrival: string; departure: string }[];
 }

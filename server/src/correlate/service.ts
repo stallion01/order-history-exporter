@@ -496,7 +496,7 @@ export function correlationService({ db, bank }: { db: OrdersDb; bank: BankStore
     for (const tx of bank.listTransactions({ ...filters, kind: 'normal', direction: 'in' }).transactions) {
       const m = at(tx.posted.slice(0, 7));
       m.income += tx.amount;
-      m.sources[incomeSource(`${tx.payee || ''} ${tx.description}`)] += tx.amount;
+      m.sources[incomeSource(`${tx.payee || ''} ${tx.description}`, tx.lease)] += tx.amount;
     }
     return [...months.values()]
       .map((m) => ({

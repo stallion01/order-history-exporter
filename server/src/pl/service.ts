@@ -108,7 +108,7 @@ export function plService({ db, bank, correlate }: { db: DatabaseSync; bank: Ban
     const incomeCategories = new Map<string, number>();
     for (const tx of bank.listTransactions({ ...filters, direction: 'in' }).transactions) {
       const amount = tx.amount * shareOf(tx);
-      const source = incomeSource(`${tx.payee || ''} ${tx.description}`);
+      const source = incomeSource(`${tx.payee || ''} ${tx.description}`, tx.lease);
       sources[source] += amount;
       const m = at(tx.posted.slice(0, 7));
       m.revenue += amount;

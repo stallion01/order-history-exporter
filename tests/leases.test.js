@@ -116,6 +116,12 @@ test('lease rent is its own income source on the dashboard', async () => {
   const jan = byMonth.find((m) => m.month === '2026-01');
   assert.equal(jan.sources.lease, 600, 'the deposit is not income');
   assert.equal(jan.income, 600);
+  // Rent that came by Zelle and is linked to the lease counts as lease rent too.
+  const mar = byMonth.find((m) => m.month === '2026-03');
+  assert.equal(mar.sources.lease, 1200);
+  assert.equal(mar.sources.other, 0);
+  const listed = await get('/api/bank/transactions?preset=all&direction=in&source=lease');
+  assert.ok(listed.transactions.some((t) => t.amount === 1200 && t.lease));
 });
 
 test('removing a payment or a lease takes its transactions out of the ledger', async () => {
