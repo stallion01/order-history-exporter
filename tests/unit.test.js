@@ -19,6 +19,8 @@ const SCRIPTS = [
   'src/stores/ebay.js',
   'src/stores/newegg.js',
   'src/stores/homedepot.js',
+  'src/stores/target.js',
+  'src/stores/costco.js',
 ];
 
 function load(html = '<!doctype html><body></body>', url = 'https://www.amazon.com/') {
@@ -572,4 +574,296 @@ test('snapshot removes personal details but keeps structure', () => {
   }
   assert.ok(html.includes('order-card'));
   assert.ok(html.includes('Order placed'));
+});
+
+/* ---------- Target ---------- */
+
+const TARGET_URL = 'https://www.target.com/orders';
+
+test('target online list: orders by link, packages, picture names, no buy-again or receipt links', () => {
+  const win = load(fixture('target-list'), TARGET_URL);
+  const store = win.OHE.stores.target;
+  const { orders } = plain(store.extractList(win.document, { today: '2026-11-24', range: {} }));
+  assert.deepEqual(orders.map((o) => o.orderId), ['912000000000001', '912000000000002', '912000000000003']);
+  assert.equal(orders[0].date, '2026-11-20');
+  assert.equal(orders[0].total, 60.41);
+  assert.equal(orders[0].status, 'Picked up, Drive Up at Anytown East');
+  assert.deepEqual(orders[0].items, [{ name: '17" Test Rope Bin Gray - Testroom™', quantity: 2 }, { name: 'Test Thank You Notes 24ct - up&up™' }]);
+  assert.equal(orders[1].detailUrl, 'https://www.target.com/orders/912000000000002');
+  assert.equal(orders[1].status, 'Picked up, Drive Up at Anytown South; Delivered Thu, Aug 27; Canceled, Wed, Aug 26');
+  // A cancelled package's items aren't listed, here or on the order's page.
+  assert.deepEqual(orders[1].items.map((i) => i.name), ['Test Step Trash Can 46L', 'Test Freezer Bags 30ct']);
+  assert.deepEqual(orders[2].items, []);
+  assert.equal(orders[2].total, 0);
+  assert.equal(orders[2].status, 'Canceled on Wed, May 6');
+});
+
+test('target in-store list: store purchases keep their own ids and pages', () => {
+  const win = load(fixture('target-list-instore'), TARGET_URL);
+  const { orders } = plain(win.OHE.stores.target.extractList(win.document, { today: '2026-11-24', range: {} }));
+  assert.deepEqual(orders.map((o) => o.orderId), ['1111-2222-3333-4444', '1111-2222-3333-5555']);
+  assert.equal(orders[0].date, '2026-11-20');
+  assert.equal(orders[0].total, 67.46);
+  assert.equal(orders[0].status, 'Purchased, Store trip at Anytown South');
+  assert.equal(orders[0].detailUrl, 'https://www.target.com/orders/stores/1111-2222-3333-4444');
+  assert.deepEqual(orders[0].items.map((i) => i.name), ['96"x30" Test Wrapping Paper - Testz™', 'Test Correction Fluid 0.3 fl oz']);
+});
+
+test('target loads more purchases only until the list reaches the start date', () => {
+  const win = load(fixture('target-list'), TARGET_URL);
+  const store = win.OHE.stores.target;
+  store.extractList(win.document, { today: '2026-11-24', range: { from: '2026-01-01', to: '2026-11-24' } });
+  assert.match(store.nextElement(win.document).textContent, /Load more purchases/);
+  store.extractList(win.document, { today: '2026-11-24', range: { from: '2026-06-01', to: '2026-11-24' } });
+  assert.equal(store.nextElement(win.document), null);
+  store.extractList(win.document, { today: '2026-11-24', range: {} });
+  assert.ok(store.nextElement(win.document));
+});
+
+test('target views: both tabs, and switching waits for the other tab to be chosen', async () => {
+  const win = load(fixture('target-list'), TARGET_URL);
+  const store = win.OHE.stores.target;
+  assert.deepEqual(plain(store.views.list(win.document, {})), ['online', 'instore']);
+  assert.equal(await store.views.apply(win.document, 'online'), true);
+  const instore = win.document.querySelector('[data-test="tabInstore"]');
+  instore.addEventListener('click', () => {
+    instore.setAttribute('aria-selected', 'true');
+    win.document.querySelector('[data-test="tab-tabContent-tab-Online"]').innerHTML = '<a href="/orders/stores/1111-2222-3333-4444">View purchase</a>';
+  });
+  assert.equal(await store.views.apply(win.document, 'instore'), true);
+  assert.equal(load().OHE.stores.target.views.list(load().document, {}), null);
+});
+
+test('target detail: unit prices in each wording, no cancelled items, money rows, free fulfillment, card, address', () => {
+  const win = load(fixture('target-detail'), 'https://www.target.com/orders/912000000000002');
+  const patch = plain(win.OHE.stores.target.extractDetail(win.document));
+  assert.deepEqual(patch.items, [
+    { name: '15pc Test Drawing Set - Testco™', quantity: 1, price: 10 },
+    { name: 'Test Gummy Candy', quantity: 2, price: 2.99 },
+    { name: '46L Test Step Trash Can', quantity: 1, price: 35 },
+  ]);
+  // The cancelled clipper isn't among them, so the items add up to the subtotal.
+  assert.equal(Math.round(patch.items.reduce((sum, item) => sum + item.price * item.quantity, 0) * 100) / 100, 50.98);
+  assert.equal(patch.total, 50.69);
+  assert.equal(patch.subtotal, 50.98);
+  assert.equal(patch.tax, 2.26);
+  assert.equal(patch.shipping, 0);
+  assert.equal(patch.currency, 'USD');
+  assert.equal(patch.payment, 'Target Circle Debit Card ending 1234');
+  assert.equal(patch.deliveryAddress, '12 Test Orchard Dr SE Anytown, MI 49000');
+  assert.equal(patch.deliveryZip, '49000');
+});
+
+test('target detects sign-in, and a payment name that is not a plain card name is not copied', () => {
+  const win = load(
+    '<!doctype html><body><span><span data-test="breakdown-payment_sub_type_value">Pat Example 12 Oak Road</span><span>* 4321</span></span></body>',
+    'https://www.target.com/orders/1'
+  );
+  const store = win.OHE.stores.target;
+  assert.equal(store.extractDetail(win.document).payment, 'Card ending 4321');
+  assert.equal(store.detect(win.document, { hostname: 'www.target.com', pathname: '/login' }), 'login');
+  assert.equal(store.detect(win.document, { hostname: 'www.target.com', pathname: '/orders' }), null);
+});
+
+/* ---------- Costco ---------- */
+
+const COSTCO_URL = 'https://www.costco.com/myaccount/';
+const RECEIPT = '21099900100112611201230';
+
+test('costco warehouse list: receipts, warehouse, refund, next page', () => {
+  const win = load(fixture('costco-warehouse'), COSTCO_URL);
+  const store = win.OHE.stores.costco;
+  const { orders } = plain(store.extractList(win.document, { today: '2026-11-24', range: {} }));
+  assert.deepEqual(orders.map((o) => o.orderId), [RECEIPT, '21099900200222611051815', '21099900100332610021105']);
+  assert.equal(orders[0].date, '2026-11-20');
+  assert.equal(orders[0].total, 379.61);
+  assert.equal(orders[0].status, 'In-Warehouse, ANYTOWN');
+  assert.equal(orders[0].detailUrl, 'https://www.costco.com/OrderStatusCmd');
+  assert.equal(orders[2].total, -402.79);
+  assert.equal(orders[2].status, 'In-Warehouse refund, ANYTOWN');
+  assert.equal(store.nextElement(win.document).getAttribute('aria-label'), 'Go to next page');
+});
+
+test('costco receipt: quantities, money off taken out of its item, deposits, tax and card', () => {
+  const win = load(fixture('costco-warehouse'), COSTCO_URL);
+  const patch = plain(win.OHE.stores.costco.extractDetail(win.document, { orderId: RECEIPT }));
+  assert.deepEqual(patch.items, [
+    { name: 'KS TEST BACON', quantity: 1, price: 12.99, lineTotal: 12.99 },
+    { name: 'TEST WATCH 44MM', quantity: 1, price: 309.99, lineTotal: 309.99 },
+    { name: 'TEST TOTE 2PK', quantity: 2, price: 9.99, lineTotal: 19.98 },
+    { name: 'TEST ALLERGY 365', quantity: 1, price: 13.49, lineTotal: 13.49 },
+    { name: 'ST BOTTLE DEPST EE/80008', quantity: 1, price: 3, lineTotal: 3 },
+  ]);
+  const itemsTotal = patch.items.reduce((sum, item) => sum + item.lineTotal, 0);
+  assert.equal(Math.round(itemsTotal * 100) / 100, patch.subtotal);
+  assert.equal(patch.subtotal, 359.45);
+  assert.equal(patch.tax, 20.16);
+  assert.equal(patch.total, 379.61);
+  assert.equal(patch.payment, 'Visa ending 1234');
+  // Another receipt's popup is not this order's details.
+  assert.equal(win.OHE.stores.costco.extractDetail(win.document, { orderId: '21099900200222611051815' }), null);
+});
+
+test('costco refund receipt: negative amounts, and the card by its last digits only', () => {
+  const id = '21099900100332610021105';
+  const win = load(
+    `<!doctype html><body><div id="dataToPrint"><div>${id}</div><table><tbody>
+      <tr><td></td><td>90009</td><td>TEST PRINTER</td><td>379.99- Y</td></tr>
+      <tr><td colspan="2"></td><td>SUBTOTAL</td><td>379.99-</td></tr>
+      <tr><td colspan="2"></td><td>TAX</td><td>22.80-</td></tr>
+      <tr><td></td><td>****</td><td>Total</td><td>402.79-</td></tr>
+      <tr><td colspan="3">XXXXXXXXXXXXX1234</td><td>CHIP read</td></tr>
+      <tr><td colspan="3">APPROVED - REFUND</td><td></td></tr>
+      <tr><td></td><td colspan="2">RTC Whse Purchase</td><td>402.79-</td></tr>
+    </tbody></table></div></body>`,
+    COSTCO_URL
+  );
+  const patch = plain(win.OHE.stores.costco.extractDetail(win.document, { orderId: id }));
+  assert.deepEqual(patch.items, [{ name: 'TEST PRINTER', quantity: 1, price: -379.99, lineTotal: -379.99 }]);
+  assert.equal(patch.total, -402.79);
+  assert.equal(patch.tax, -22.8);
+  assert.equal(patch.payment, 'Card ending 1234');
+});
+
+test('costco fuel receipt: gallons, price a gallon and the card, though it shows no receipt number', async () => {
+  const id = '21099908100012607151826';
+  const win = load(fixture('costco-warehouse'), COSTCO_URL);
+  const doc = win.document;
+  doc.getElementById('receipt-popup').remove();
+  const card = doc.querySelector('[id^="viewRecieptBtn_"]');
+  card.id = `viewRecieptBtn_${id}`;
+  card.querySelector('[automation-id="In-Warehouse"] div').firstChild.nodeValue = 'Gas Station';
+  const { orders } = plain(win.OHE.stores.costco.extractList(doc, { today: '2026-11-24', range: {} }));
+  assert.equal(orders[0].status, 'Gas Station, ANYTOWN');
+  card.querySelector('button').addEventListener('click', () => {
+    doc.body.insertAdjacentHTML(
+      'beforeend',
+      `<div role="dialog"><h2 id="alert-dialog-title">Gas Station Receipt</h2><div id="dataToPrint"><div>
+        <div><img alt="Costco Wholesale"><div>Anytown # 999</div><div>100 TEST ST SE</div><div>ANYTOWN , MI 49000</div></div>
+        <div><div>Member</div><div>111000000000</div><div>Invoice #</div><div>10001</div><div>Date :</div><div>07/15/26</div><div>Time :</div><div>18:26</div><div>Auth #</div><div>00000A</div></div>
+        <div><div>VI Acct #</div><div>************ 1234</div></div>
+        <div><div>Pump</div><div>Gallons</div><div>Price</div><div>8</div><div>23.120</div><div>$3.829</div></div>
+        <div><div>Product</div><div>Amount</div><div>Regular</div><div>$88.53</div><div>Total Sale</div><div>$88.53</div></div>
+        <div><div>Sale - Contactless</div><div>Approved</div><div>TranID # 000000000001</div></div>
+      </div></div><button automation-id="closePopup" type="button">Close</button></div>`
+    );
+  });
+  const result = await win.OHE.run({ storeId: 'costco', mode: 'detail', order: { orderId: id, date: '2026-11-20' }, today: '2026-11-24' });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(plain(result.patch), {
+    items: [{ name: 'Regular fuel', lineTotal: 88.53, quantity: 23.12, price: 3.829 }],
+    total: 88.53,
+    currency: 'USD',
+    payment: 'Visa ending 1234',
+  });
+  // It counts for the receipt that was opened, and no other.
+  assert.equal(win.OHE.stores.costco.extractDetail(doc, { orderId: '21099900200222611051815' }), null);
+});
+
+test('costco views: each tab with the periods the range needs', () => {
+  const win = load(fixture('costco-warehouse'), COSTCO_URL);
+  const views = (range) => plain(win.OHE.stores.costco.views.list(win.document, { today: '2026-11-24', range }));
+  assert.deepEqual(views({ from: '2026-10-01', to: '2026-11-24' }), ['warehouse|recent', 'online|recent']);
+  // A period crossing the new year is named for the year it ends in.
+  assert.deepEqual(views({ from: '2025-12-15', to: '2025-12-31' }), ['warehouse|2025-12', 'online|2025-12']);
+  assert.deepEqual(views({ from: '2026-05-20', to: '2026-06-10' }), ['warehouse|2026-06', 'warehouse|2026-03', 'online|2026-06', 'online|2026-03']);
+  assert.equal(views({ from: null, to: null }).length, 10);
+  // While the page loads, the choices are briefly placeholders. The views don't depend on the wording.
+  const select = win.document.getElementById('Showing');
+  select.options[0].text = 'lastNMonths';
+  select.options[1].text = '2026 june - august';
+  assert.deepEqual(views({ from: '2026-08-01', to: '2026-11-24' }), ['warehouse|recent', 'warehouse|2026-06', 'online|recent', 'online|2026-06']);
+  assert.equal(load().OHE.stores.costco.views.list(load().document, { range: {} }), null);
+});
+
+test('costco applies a view by choosing the tab, then the period', async () => {
+  const win = load(fixture('costco-warehouse'), COSTCO_URL);
+  const select = win.document.getElementById('Showing');
+  let changes = 0;
+  select.addEventListener('change', () => changes++);
+  assert.equal(await win.OHE.stores.costco.views.apply(win.document, 'warehouse|recent'), true);
+  assert.equal(changes, 0, 'already showing the recent period');
+  // The new period's list arrives a moment after it's chosen.
+  select.addEventListener('change', () => setTimeout(() => win.document.querySelector('[id^="viewRecieptBtn_"]').remove(), 100));
+  assert.equal(await win.OHE.stores.costco.views.apply(win.document, 'warehouse|2026-03'), true);
+  assert.equal(select.value, '2026 March - May');
+  assert.equal(changes, 1);
+  assert.equal(await win.OHE.stores.costco.views.apply(win.document, 'warehouse|2019-03'), false);
+});
+
+test('costco opens a receipt in place: its tab, its period, then View Receipt', async () => {
+  const win = load(fixture('costco-warehouse'), COSTCO_URL);
+  const doc = win.document;
+  // Start from the Online tab with no receipts showing, as the page first loads.
+  const popup = doc.getElementById('receipt-popup');
+  popup.remove();
+  const panel = doc.getElementById('simple-tabpanel-1');
+  const cards = [...panel.querySelectorAll('[id^="viewRecieptBtn_"]')].map((card) => card.parentElement);
+  cards.forEach((card) => card.remove());
+  const tab = doc.querySelector('[automation-id="myWarehouseOrdersTab"]');
+  tab.setAttribute('aria-selected', 'false');
+  const steps = [];
+  tab.addEventListener('click', () => {
+    steps.push('tab');
+    tab.setAttribute('aria-selected', 'true');
+  });
+  const select = doc.getElementById('Showing');
+  select.selectedIndex = 1;
+  select.addEventListener('change', () => {
+    steps.push(`period ${select.value}`);
+    cards.forEach((card) => panel.append(card));
+  });
+  cards[0].querySelector('button').addEventListener('click', () => {
+    steps.push('receipt');
+    doc.body.append(popup);
+  });
+
+  const result = await win.OHE.run({ storeId: 'costco', mode: 'detail', order: { orderId: RECEIPT, date: '2026-11-20' }, today: '2026-11-24' });
+  assert.deepEqual(steps, ['tab', 'period Last 3 Months', 'receipt']);
+  assert.equal(result.status, 'ok');
+  assert.equal(result.patch.total, 379.61);
+  assert.equal(result.patch.items.length, 5);
+});
+
+test('costco gives up on an order the list no longer reaches', async () => {
+  const win = load(fixture('costco-warehouse'), COSTCO_URL);
+  win.document.getElementById('receipt-popup').remove();
+  const result = await win.OHE.run({ storeId: 'costco', mode: 'detail', order: { orderId: '21099900100442001011200', date: '2020-01-01' }, today: '2026-11-24', timeoutMs: 300 });
+  assert.equal(result.status, 'unparsed');
+});
+
+test('costco.com orders: list, and details with address, card and item prices', () => {
+  const list = load(fixture('costco-online'), COSTCO_URL);
+  const { orders } = plain(list.OHE.stores.costco.extractList(list.document, { today: '2026-11-24', range: {} }));
+  assert.equal(orders.length, 1);
+  assert.equal(orders[0].orderId, '1300000001');
+  assert.equal(orders[0].date, '2026-09-18');
+  assert.equal(orders[0].total, 582.98);
+  assert.equal(orders[0].status, 'Delivered on 10/02/2026');
+
+  const win = load(fixture('costco-online-detail'), COSTCO_URL);
+  const store = win.OHE.stores.costco;
+  assert.equal(store.openDetail(win.document, { orderId: '1300000001', date: '2026-09-18' }), true);
+  const patch = plain(store.extractDetail(win.document, { orderId: '1300000001' }));
+  assert.deepEqual(patch.items, [
+    { name: "7.5' Test Pre-Lit Artificial Tree", url: 'https://www.costco.com/test-pre-lit-artificial-tree.product.100000001.html', price: 274.99, quantity: 2 },
+  ]);
+  assert.equal(patch.subtotal, 549.98);
+  assert.equal(patch.shipping, 0);
+  assert.equal(patch.tax, 33);
+  assert.equal(patch.total, 582.98);
+  assert.equal(patch.payment, 'Visa ending 1234');
+  assert.equal(patch.deliveryAddress, '12 Test Orchard Dr SE Anytown, MI 49000-1234');
+  assert.equal(patch.deliveryZip, '49000-1234');
+  assert.equal(store.extractDetail(win.document, { orderId: '1300000002' }), null);
+});
+
+test('costco detects sign-in and a blocked page', () => {
+  const win = load('<!doctype html><title>Access Denied</title><body></body>', COSTCO_URL);
+  const store = win.OHE.stores.costco;
+  assert.equal(store.detect(win.document, { hostname: 'www.costco.com', pathname: '/myaccount/' }), 'challenge');
+  const ok = load(fixture('costco-online'), COSTCO_URL);
+  assert.equal(store.detect(ok.document, { hostname: 'www.costco.com', pathname: '/myaccount/' }), null);
+  assert.equal(store.detect(ok.document, { hostname: 'signin.costco.com', pathname: '/' }), 'login');
+  assert.equal(store.detect(ok.document, { hostname: 'www.costco.com', pathname: '/LogonForm' }), 'login');
 });

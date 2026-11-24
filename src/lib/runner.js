@@ -4,7 +4,7 @@
   const OHE = root.OHE;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const EMPTY_RE =
-    /\b(no orders|no purchases|have not placed|haven't placed|don't have any (orders|purchases)|no results)\b/i;
+    /\b(no orders|no purchases|no receipts|have not placed|haven't placed|don't have any (orders|purchases)|no results)\b/i;
   const EMPTY_WAIT_MS = 2500;
 
   const fingerprint = (orders) => orders.map((o) => o.orderId).join('|');
@@ -51,6 +51,12 @@
     const ctx = { today, range: range || {} };
     const started = Date.now();
     let lastFingerprint = null;
+    // Some stores show an order's details in place, such as a popup on the list page,
+    // so there is no address to go to. Their openDetail takes one step towards showing
+    // it each time it's called, and returns true once it is showing.
+    const opens = mode === 'detail' && Boolean(store.openDetail);
+    let opened = !opens;
+    if (opens) timeoutMs *= 2;
 
     for (;;) {
       const blocked = blockedStatus(store, ignoreChallenge);
@@ -59,7 +65,8 @@
 
       if (document.readyState !== 'loading') {
         if (mode === 'detail') {
-          const patch = store.extractDetail(document, order, ctx);
+          if (!opened) opened = Boolean(await store.openDetail(document, order, ctx));
+          const patch = opened ? store.extractDetail(document, order, ctx) : null;
           if (patch && (patch.total !== undefined || patch.payment || (patch.items && patch.items.length))) {
             await sleep(300); // let late-rendering rows arrive, then read once more
             return { status: 'ok', patch: store.extractDetail(document, order, ctx) || patch };

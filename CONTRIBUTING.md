@@ -59,6 +59,19 @@ OHE.registerStore({
 
   // Optional: a same-origin JSON endpoint, tried before reading pages.
   // listApi: { terms(range, today), url(term, page), parse(json, ctx) => ({ orders, more }) },
+
+  // Optional: for a list filtered by a control on the page (a tab, a date menu) rather
+  // than by its address. list returns the settings a range needs, or null until the
+  // controls exist; apply sets one and resolves true once the list shows it. Each view
+  // starts from ordersUrl and is then read like any list. See homedepot.js and costco.js.
+  // views: { list(doc, ctx) => ['2024', '2023'], async apply(doc, view) => true },
+
+  // Optional: for details that open in place, such as a popup on the list page, so an
+  // order has no page of its own. Set detailUrl to the list page. openDetail is called
+  // repeatedly after that page loads: each call takes one step towards showing the
+  // order (order.orderId, order.date) and returns true once it is showing. extractDetail
+  // then reads it, and must return null for any other order's details. See costco.js.
+  // openDetail(doc, order, ctx) { return false; },
 });
 ```
 

@@ -19,6 +19,8 @@
     "https://order.ebay.com/*",
     "https://secure.newegg.com/*",
     "https://www.homedepot.com/*",
+    "https://www.target.com/*",
+    "https://www.costco.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],

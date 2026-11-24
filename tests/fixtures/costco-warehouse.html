@@ -1,0 +1,109 @@
+<!doctype html>
+<!-- Made-up data in the structure of Costco's Orders and Purchases page, Warehouse tab, with one receipt open. Not captured from a real account. -->
+<html><head><title>Orders &amp; Purchases | Costco</title></head><body>
+<h1>Orders and Purchases</h1>
+<div role="tablist">
+  <button id="simple-tab-0" role="tab" automation-id="myOnlineOrdersTab" aria-selected="false" aria-controls="simple-tabpanel-0" type="button"><div>Online</div></button>
+  <button id="simple-tab-1" role="tab" automation-id="myWarehouseOrdersTab" aria-selected="true" aria-controls="simple-tabpanel-1" type="button"><div>Warehouse</div></button>
+  <button id="simple-tab-2" role="tab" automation-id="homeImprovementTab" aria-selected="false" aria-controls="simple-tabpanel-2" type="button"><div>Installation Services</div></button>
+</div>
+<div id="simple-tabpanel-0" role="tabpanel" hidden></div>
+<div id="simple-tabpanel-1" role="tabpanel">
+  <div>Showing 1 - 3 of 13</div>
+  <div>Your receipts will appear within 24 hours of the transaction.</div>
+  <div><label>Showing</label><div>
+    <select id="Showing" name="Showing">
+      <option>Last 3 Months</option>
+      <option>2026 June - August</option>
+      <option>2026 March - May</option>
+      <option>2026 December - February</option>
+      <option>2025 September - November</option>
+    </select>
+  </div></div>
+  <div>
+    <div><div id="viewRecieptBtn_21099900100112611201230">
+      <div>
+        <div automation-id="In-Warehouse"><div>In-Warehouse<img></div></div>
+        <div>11/20/2026 - 12:30pm</div>
+        <div>ANYTOWN</div>
+        <div automation-id="totalPrice"><div automation-id="totalText">Total</div><div>$379.61</div></div>
+      </div>
+      <div><button automation-id="ViewInWareHouseReciept" type="button">View Receipt</button></div>
+    </div></div>
+    <div><div id="viewRecieptBtn_21099900200222611051815">
+      <div>
+        <div automation-id="In-Warehouse"><div>In-Warehouse<img></div></div>
+        <div>11/05/2026 - 06:15pm</div>
+        <div>OTHERVILLE</div>
+        <div automation-id="totalPrice"><div automation-id="totalText">Total</div><div>$31.79</div></div>
+      </div>
+      <div><button automation-id="ViewInWareHouseReciept" type="button">View Receipt</button></div>
+    </div></div>
+    <div><div id="viewRecieptBtn_21099900100332610021105">
+      <div>
+        <div automation-id="In-Warehouse"><div>In-Warehouse<img></div></div>
+        <div>10/02/2026 - 11:05am</div>
+        <div>ANYTOWN</div>
+        <div automation-id="totalPrice"><div automation-id="totalText">Refunded Total</div><div>-$402.79</div></div>
+      </div>
+      <div><button automation-id="ViewInWareHouseReciept" type="button">View Return Receipt</button></div>
+    </div></div>
+  </div>
+  <hr>
+  <div><div><nav aria-label="pagination navigation"><ul>
+    <li><button aria-label="page 1" type="button">1</button></li>
+    <li><button aria-label="Go to page 2" type="button">2</button></li>
+    <li><button aria-label="Go to next page" type="button"></button></li>
+  </ul></nav></div></div>
+  <button automation-id="BackToTop" type="button">Back To Top</button>
+</div>
+
+<div role="dialog" id="receipt-popup"><div role="presentation"><div role="dialog">
+  <div><button aria-label="Close" type="button"></button></div>
+  <h2 id="alert-dialog-title" automation-id="modalTitle">In-Warehouse Receipt</h2>
+  <div><div>
+    <div id="printReceipt"><button automation-id="printReceipt" type="button"><div>Print Receipt</div></button></div>
+    <div id="dataToPrint"><div>
+      <div>
+        <img alt="Costco Wholesale">
+        <div>ANYTOWN #999</div>
+        <div>100 TEST ST SE</div>
+        <div>ANYTOWN, MI 49000</div>
+        <div><div><img alt="barcode"></div><div>21099900100112611201230</div></div>
+      </div>
+      <div><table aria-label="spanning table">
+        <thead><tr><th colspan="4">Member 111000000000</th></tr></thead>
+        <tbody>
+          <tr><td>E</td><td>10001</td><td>KS TEST BACON</td><td>12.99 N</td></tr>
+          <tr><td></td><td>20002</td><td>TEST WATCH 44MM</td><td>369.99 Y</td></tr>
+          <tr><td></td><td>30003</td><td>/ WATCH</td><td>60.00-</td></tr>
+          <tr><td colspan="2">2 @ 12.99</td></tr>
+          <tr><td></td><td>40004</td><td>TEST TOTE 2PK</td><td>25.98 Y</td></tr>
+          <tr><td>F</td><td>60006</td><td>TEST ALLERGY 365</td><td>13.49 Y</td></tr>
+          <tr><td></td><td>50005</td><td>/40004</td><td>6.00-</td></tr>
+          <tr><td></td><td>70007</td><td>ST BOTTLE DEPST EE/80008</td><td>3.00</td></tr>
+          <tr><td colspan="2"></td><td>SUBTOTAL</td><td>359.45</td></tr>
+          <tr><td colspan="2"></td><td>TAX</td><td><span>20.16</span></td></tr>
+          <tr><td></td><td>****</td><td>Total</td><td><span>379.61</span></td></tr>
+          <tr><td colspan="5"><div></div><hr></td></tr>
+          <tr><td colspan="3">XXXXXXXXXXXXX1234</td><td>CHIP read</td></tr>
+          <tr><td colspan="3">APPROVED - PURCHASE</td><td></td></tr>
+          <tr><td colspan="3">AMOUNT: $379.61</td><td></td></tr>
+          <tr><td colspan="5"><span>11/20/2026</span><span>12:30</span><span>999</span><span>1</span><span>123</span><span>1</span></td></tr>
+          <tr><td colspan="3">COSTCO VISA</td><td>379.61</td></tr>
+          <tr><td colspan="3">Change</td><td>0</td></tr>
+          <tr><td colspan="5"><div></div><hr></td></tr>
+          <tr><td></td><td colspan="2">(A)  A</td><td>20.16</td></tr>
+          <tr><td></td><td colspan="2">TOTAL TAX</td><td>20.16</td></tr>
+          <tr><td colspan="4">TOTAL NUMBER OF ITEMS SOLD = 6</td></tr>
+          <tr><td colspan="3">INSTANT SAVINGS</td><td>$66.00</td></tr>
+          <tr><td colspan="5"><span>11/20/2026</span><span>12:30</span> <span><span>999</span><span>1</span><span>123</span><span>1</span></span></td></tr>
+        </tbody>
+      </table></div>
+      <hr>
+      <div><div><div>Thank You!</div></div><div><div>Please Come Again</div></div><div><div>Whse: 999</div><div>Trm: 1</div><div>Trn: 123</div><div>OPT: 1</div></div><div><div>Items Sold: 6</div></div></div>
+    </div></div>
+    <div><button data-testid="closePopup" automation-id="closePopup" type="button">Close</button></div>
+  </div></div>
+</div></div></div>
+</body></html>

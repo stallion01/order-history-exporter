@@ -14,6 +14,8 @@ A free, open-source way to keep your business income and expenses on your own se
 | Sam's Club | Same parser as Walmart | Yes, on one account |
 | Newegg | Order list (using its year dropdown) and order detail pages | Yes, on one account |
 | Home Depot | Purchase history table and order detail pages | Yes, on one Pro Xtra account |
+| Target | Purchase history, Online and In-store tabs, and each purchase's page | Yes, on one account |
+| Costco | Orders and Purchases, Warehouse and Online tabs, and each warehouse receipt | Yes, on one account |
 
 > **Status: early version.** Each store has been run on one real account, and the automated tests use made-up sample pages. Syncing to the database, with categories and tax groups, has been tested live with Sam's Club so far. Stores change their pages often, and other accounts may see layouts this one didn't. If a store fails, the extension tells you, and you can [report it](#when-a-store-stops-working).
 
@@ -296,6 +298,9 @@ Excel drops leading zeros when it opens a CSV directly, so `02134` displays as `
 - eBay's year filter reaches back 22 years, and eBay's JSON endpoint is undocumented.
 - Home Depot's history reaches back 7 years, and has only been checked with a Pro Xtra account.
 - Newegg's details page covers a whole checkout. For a checkout with several orders, tax, shipping and item prices aren't split per order, so those stay blank and the order's total comes from the list.
+- Target's In-store tab only lists purchases Target tied to your account, by your Target Circle card or the phone number or barcode you gave at the register. Others never appear there.
+- Costco lists purchases three months at a time, back about three years, so a first run opens the page once for each period. A warehouse receipt opens in a popup on that page, so each one is found on the list again before it's read.
+- Costco receipts print short names such as `KS BACON`. Money off an item is taken out of that item's price, so a receipt's items add up to its subtotal. A fuel receipt is one item, with the gallons as its quantity and the price a gallon.
 - Orders with no readable date are left out of date-limited exports, and the results page tells you how many.
 
 ## When a store stops working

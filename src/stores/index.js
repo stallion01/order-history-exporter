@@ -8,6 +8,8 @@ globalThis.OHE.STORE_FILES = [
   'src/stores/ebay.js',
   'src/stores/newegg.js',
   'src/stores/homedepot.js',
+  'src/stores/target.js',
+  'src/stores/costco.js',
 ];
 
 // Everything a store tab needs, in load order.
