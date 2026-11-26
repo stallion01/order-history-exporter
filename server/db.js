@@ -8,13 +8,14 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 34;
+const SCHEMA_VERSION = 35;
 
 // Links from Amazon's top bar, side cart and footer (its own card ads among them), which
 // a details page read too early can mistake for the items bought.
 const PAGE_CHROME = /amazon\.com\/.*[?&/]ref_?=(?:footer|ewc|nav)_?/i;
 const isPageChrome = (url) => typeof url === 'string' && PAGE_CHROME.test(url);
-const PAGE_CHROME_SQL = "url LIKE '%amazon.com/%' AND (url GLOB '*ref_=footer*' OR url GLOB '*ref=footer*' OR url GLOB '*ref=ewc*' OR url GLOB '*ref_=ewc*' OR url GLOB '*ref_=nav*' OR url GLOB '*ref=nav*')";
+const PAGE_CHROME_SQL =
+  "url LIKE '%amazon.com/%' AND (url GLOB '*ref_=footer*' OR url GLOB '*ref=footer*' OR url GLOB '*ref=ewc*' OR url GLOB '*ref_=ewc*' OR url GLOB '*ref_=nav*' OR url GLOB '*ref=nav*')";
 
 const SCHEMA_V1 = `
   CREATE TABLE orders (
@@ -667,6 +668,12 @@ const SCHEMA_V32 = `
 
 // Guests the owner asked not to contact, and notes about them, by the key the guest
 // list matches them on (email, phone or name).
+// The spending group a family member gave one of their own payments in My money. It
+// only changes their budget, never the transaction's category in the books.
+const SCHEMA_V35 = `
+  ALTER TABLE bank_transactions ADD COLUMN personal_group TEXT;
+`;
+
 const SCHEMA_V34 = `
   CREATE TABLE guest_contacts (
     guest_key TEXT PRIMARY KEY,
@@ -896,12 +903,16 @@ const SCHEMA_V18 = `
 // "02134-1234" -> "02134". Anything that isn't a US ZIP is kept as it is.
 function zip5(value) {
   if (value === null || value === undefined || value === '') return value;
-  const match = String(value).trim().match(/^(\d{5})(?:-?\d{4})?$/);
+  const match = String(value)
+    .trim()
+    .match(/^(\d{5})(?:-?\d{4})?$/);
   return match ? match[1] : String(value).trim();
 }
 
 const STREET_WORDS = new Set(
-  'st street rd road ave avenue av blvd boulevard dr drive ln lane ct court way pl place cir circle ter terrace pkwy parkway hwy highway trl trail sq square loop row pike path aly alley xing crossing cv cove pt point walk plz plaza hts heights tpke turnpike expy expressway'.split(' ')
+  'st street rd road ave avenue av blvd boulevard dr drive ln lane ct court way pl place cir circle ter terrace pkwy parkway hwy highway trl trail sq square loop row pike path aly alley xing crossing cv cove pt point walk plz plaza hts heights tpke turnpike expy expressway'.split(
+    ' ',
+  ),
 );
 // Only short forms: a full word after the street is usually the city (North Andover).
 const DIRECTIONS = new Set('n s e w ne nw se sw'.split(' '));
@@ -1049,9 +1060,7 @@ function migrate(db, file) {
     }
     if (version < 5) {
       db.exec(SCHEMA_V5);
-      const insert = db.prepare(
-        'INSERT OR IGNORE INTO categories (name, schedule_c, schedule_e, position) VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM categories))'
-      );
+      const insert = db.prepare('INSERT OR IGNORE INTO categories (name, schedule_c, schedule_e, position) VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM categories))');
       for (const [name, c, e] of BANK_CATEGORIES) insert.run(name, c, e);
     }
     if (version < 6) db.exec(SCHEMA_V6);
@@ -1091,6 +1100,7 @@ function migrate(db, file) {
     if (version < 32) db.exec(SCHEMA_V32);
     if (version < 33) db.exec(SCHEMA_V33);
     if (version < 34) db.exec(SCHEMA_V34);
+    if (version < 35) db.exec(SCHEMA_V35);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
@@ -1119,9 +1129,7 @@ function openDatabase(file) {
   const getOrder = db.prepare('SELECT * FROM orders WHERE store = ? AND order_id = ?');
   const countItems = db.prepare('SELECT COUNT(*) AS n FROM items WHERE store = ? AND order_id = ?');
   const deleteItems = db.prepare('DELETE FROM items WHERE store = ? AND order_id = ?');
-  const insertItem = db.prepare(
-    'INSERT INTO items (store, order_id, position, name, quantity, price, line_total, seller, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
+  const insertItem = db.prepare('INSERT INTO items (store, order_id, position, name, quantity, price, line_total, seller, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
 
   function writeItems(store, orderId, items) {
     deleteItems.run(store, orderId);
@@ -1135,7 +1143,7 @@ function openDatabase(file) {
         typeof item.price === 'number' ? item.price : null,
         typeof item.lineTotal === 'number' ? item.lineTotal : null,
         item.seller ?? null,
-        item.url ?? null
+        item.url ?? null,
       );
     });
   }
@@ -1153,12 +1161,7 @@ function openDatabase(file) {
         const existing = getOrder.get(store, orderId);
         // A details page is the better source. Once it's been read, a list page saying
         // the same as last time adds nothing, and its figures may be less exact.
-        if (
-          order.fromList &&
-          existing &&
-          existing.detail_fetched_at &&
-          existing.list_fingerprint === OHE.listFingerprint(order)
-        ) {
+        if (order.fromList && existing && existing.detail_fetched_at && existing.list_fingerprint === OHE.listFingerprint(order)) {
           continue;
         }
         const stamp = now();
@@ -1174,20 +1177,16 @@ function openDatabase(file) {
           const bookkeeping = ['detail_fetched_at', 'detail_attempts'];
           const changed = Object.keys(columns).some((name) => !bookkeeping.includes(name) && existing[name] !== columns[name]);
           columns.updated_at = changed ? stamp : existing.updated_at;
-          const assignments = Object.keys(columns).map((name) => `${name} = ?`).join(', ');
-          db.prepare(`UPDATE orders SET ${assignments} WHERE store = ? AND order_id = ?`).run(
-            ...Object.values(columns),
-            store,
-            orderId
-          );
+          const assignments = Object.keys(columns)
+            .map((name) => `${name} = ?`)
+            .join(', ');
+          db.prepare(`UPDATE orders SET ${assignments} WHERE store = ? AND order_id = ?`).run(...Object.values(columns), store, orderId);
           if (changed) counts.updated++;
         } else {
           columns.first_seen_at = stamp;
           columns.updated_at = stamp;
           const names = Object.keys(columns);
-          db.prepare(
-            `INSERT INTO orders (store, order_id, ${names.join(', ')}) VALUES (?, ?, ${names.map(() => '?').join(', ')})`
-          ).run(store, orderId, ...Object.values(columns));
+          db.prepare(`INSERT INTO orders (store, order_id, ${names.join(', ')}) VALUES (?, ?, ${names.map(() => '?').join(', ')})`).run(store, orderId, ...Object.values(columns));
           counts.inserted++;
         }
 
@@ -1214,10 +1213,7 @@ function openDatabase(file) {
   }
 
   function addCoverage(store, ranges) {
-    const merged = OHE.mergeRanges([
-      ...coverage(store),
-      ...ranges.map((r) => ({ from: r.from || EARLIEST, to: r.to })),
-    ]);
+    const merged = OHE.mergeRanges([...coverage(store), ...ranges.map((r) => ({ from: r.from || EARLIEST, to: r.to }))]);
     transaction(() => {
       db.prepare('DELETE FROM sync_coverage WHERE store = ?').run(store);
       const insert = db.prepare('INSERT INTO sync_coverage (store, from_date, to_date) VALUES (?, ?, ?)');
@@ -1229,15 +1225,11 @@ function openDatabase(file) {
   // What a sync run should read for this store and date range.
   function syncPlan(store, range, { full = false, today = OHE.localToday() } = {}) {
     const bounded = { from: range.from || null, to: range.to || null };
-    const gaps = full
-      ? [{ from: bounded.from, to: bounded.to && bounded.to < today ? bounded.to : today }]
-      : OHE.planGaps(bounded, coverage(store), today, RECHECK_DAYS);
+    const gaps = full ? [{ from: bounded.from, to: bounded.to && bounded.to < today ? bounded.to : today }] : OHE.planGaps(bounded, coverage(store), today, RECHECK_DAYS);
 
     const known = {};
     if (!full) {
-      const rows = db
-        .prepare('SELECT order_id, list_fingerprint, detail_fetched_at FROM orders WHERE store = ?')
-        .all(store);
+      const rows = db.prepare('SELECT order_id, list_fingerprint, detail_fetched_at FROM orders WHERE store = ?').all(store);
       for (const row of rows) known[row.order_id] = { fingerprint: row.list_fingerprint, detailDone: Boolean(row.detail_fetched_at) };
     }
 
@@ -1247,7 +1239,7 @@ function openDatabase(file) {
         `SELECT order_id, detail_url, order_date FROM orders
          WHERE store = ? AND detail_url IS NOT NULL AND detail_attempts < ?
            AND ${full ? '1 = 1' : 'detail_fetched_at IS NULL'}
-         ORDER BY order_date DESC`
+         ORDER BY order_date DESC`,
       )
       .all(store, MAX_DETAIL_ATTEMPTS);
     const pendingDetails = rows
@@ -1260,18 +1252,8 @@ function openDatabase(file) {
   function recordRun(store, run) {
     db.prepare(
       `INSERT INTO sync_runs (store, finished_at, range_from, range_to, new_orders, updated_orders, details_read, details_missed, complete)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      store,
-      now(),
-      run.from ?? null,
-      run.to ?? null,
-      run.newOrders || 0,
-      run.updatedOrders || 0,
-      run.detailsRead || 0,
-      run.detailsMissed || 0,
-      run.complete ? 1 : 0
-    );
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(store, now(), run.from ?? null, run.to ?? null, run.newOrders || 0, run.updatedOrders || 0, run.detailsRead || 0, run.detailsMissed || 0, run.complete ? 1 : 0);
   }
 
   /* ---------- Categories and tax settings ---------- */
@@ -1294,7 +1276,12 @@ function openDatabase(file) {
   // Item names nothing places yet (or only the store guesses), one per name, that
   // Claude hasn't been asked about.
   function itemsToSort() {
-    const asked = new Set(db.prepare('SELECT name_key FROM item_sorted').all().map((r) => r.name_key));
+    const asked = new Set(
+      db
+        .prepare('SELECT name_key FROM item_sorted')
+        .all()
+        .map((r) => r.name_key),
+    );
     const seen = new Set();
     const out = [];
     for (const row of db.prepare("SELECT name, store FROM items WHERE name IS NOT NULL AND TRIM(name) != '' ORDER BY id DESC").all()) {
@@ -1310,7 +1297,7 @@ function openDatabase(file) {
 
   function saveSortedItems(rows, model) {
     const save = db.prepare(
-      'INSERT INTO item_sorted (name_key, name, category, model, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (name_key) DO UPDATE SET category = excluded.category, model = excluded.model, created_at = excluded.created_at'
+      'INSERT INTO item_sorted (name_key, name, category, model, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (name_key) DO UPDATE SET category = excluded.category, model = excluded.model, created_at = excluded.created_at',
     );
     const at = new Date().toISOString();
     for (const { name, category } of rows) {
@@ -1328,7 +1315,7 @@ function openDatabase(file) {
       db
         .prepare('SELECT s.name_key FROM item_sorted s WHERE s.category IS NULL AND NOT EXISTS (SELECT 1 FROM category_overrides o WHERE o.name_key = s.name_key)')
         .all()
-        .map((r) => r.name_key)
+        .map((r) => r.name_key),
     );
     if (!keys.size) return [];
     const out = new Set();
@@ -1364,9 +1351,7 @@ function openDatabase(file) {
     const key = nameKey(name);
     if (!key) return;
     if (category) {
-      db.prepare(
-        'INSERT INTO category_overrides (name_key, name, category) VALUES (?, ?, ?) ON CONFLICT (name_key) DO UPDATE SET category = excluded.category'
-      ).run(key, name, category);
+      db.prepare('INSERT INTO category_overrides (name_key, name, category) VALUES (?, ?, ?) ON CONFLICT (name_key) DO UPDATE SET category = excluded.category').run(key, name, category);
     } else {
       db.prepare('DELETE FROM category_overrides WHERE name_key = ?').run(key);
     }
@@ -1380,20 +1365,24 @@ function openDatabase(file) {
     db.prepare(
       `INSERT INTO categories (name, schedule_c, schedule_e, position, expense_class, form_1065, form_8825) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (name) DO UPDATE SET schedule_c = excluded.schedule_c, schedule_e = excluded.schedule_e, form_1065 = excluded.form_1065, form_8825 = excluded.form_8825,
-         expense_class = COALESCE(?, categories.expense_class)`
+         expense_class = COALESCE(?, categories.expense_class)`,
     ).run(
       name,
       scheduleC ?? null,
       scheduleE ?? null,
       position,
       expenseClass ?? 'opex',
-      form1065 === undefined ? before?.form_1065 ?? null : form1065,
-      form8825 === undefined ? before?.form_8825 ?? null : form8825,
-      expenseClass ?? null
+      form1065 === undefined ? (before?.form_1065 ?? null) : form1065,
+      form8825 === undefined ? (before?.form_8825 ?? null) : form8825,
+      expenseClass ?? null,
     );
   }
 
-  const taxRules = () => db.prepare('SELECT id, field, value, status FROM tax_rules ORDER BY field, value').all().map((row) => ({ ...row }));
+  const taxRules = () =>
+    db
+      .prepare('SELECT id, field, value, status FROM tax_rules ORDER BY field, value')
+      .all()
+      .map((row) => ({ ...row }));
 
   function saveTaxRule({ field, value, status }) {
     // Several conditions are stored in one order, so the same rule isn't saved twice.
@@ -1404,9 +1393,11 @@ function openDatabase(file) {
       const unique = [...new Map(conditions.map((c) => [JSON.stringify(c), c])).values()];
       value = JSON.stringify(unique);
     }
-    db.prepare(
-      'INSERT INTO tax_rules (field, value, status) VALUES (?, ?, ?) ON CONFLICT (field, value) DO UPDATE SET status = excluded.status'
-    ).run(field, field === 'zip' ? zip5(value) : value, status);
+    db.prepare('INSERT INTO tax_rules (field, value, status) VALUES (?, ?, ?) ON CONFLICT (field, value) DO UPDATE SET status = excluded.status').run(
+      field,
+      field === 'zip' ? zip5(value) : value,
+      status,
+    );
   }
   const deleteTaxRule = (id) => db.prepare('DELETE FROM tax_rules WHERE id = ?').run(id);
 
@@ -1415,7 +1406,7 @@ function openDatabase(file) {
       const remove = db.prepare('DELETE FROM item_marks WHERE store = ? AND order_id = ? AND name_key = ?');
       const insert = db.prepare(
         `INSERT INTO item_marks (store, order_id, name_key, status) VALUES (?, ?, ?, ?)
-         ON CONFLICT (store, order_id, name_key) DO UPDATE SET status = excluded.status`
+         ON CONFLICT (store, order_id, name_key) DO UPDATE SET status = excluded.status`,
       );
       for (const item of items) {
         const key = nameKey(item.name);
@@ -1443,7 +1434,12 @@ function openDatabase(file) {
   /* ---------- Places ---------- */
 
   function places() {
-    const names = new Map(db.prepare('SELECT zip, name FROM zip_names').all().map((r) => [r.zip, r.name]));
+    const names = new Map(
+      db
+        .prepare('SELECT zip, name FROM zip_names')
+        .all()
+        .map((r) => [r.zip, r.name]),
+    );
     const found = new Map();
     for (const row of db.prepare('SELECT delivery_zip AS zip, delivery_address AS address, COUNT(*) AS n FROM orders WHERE delivery_zip IS NOT NULL GROUP BY delivery_zip, delivery_address').all()) {
       const entry = found.get(row.zip) || { orders: 0, cities: new Map() };
@@ -1502,7 +1498,7 @@ function openDatabase(file) {
       clauses.push(
         `(o.order_id LIKE ? ESCAPE '\\' OR EXISTS (
            SELECT 1 FROM items i WHERE i.store = o.store AND i.order_id = o.order_id AND i.name LIKE ? ESCAPE '\\'
-         ))`
+         ))`,
       );
       params.push(like, like);
     }
@@ -1518,7 +1514,7 @@ function openDatabase(file) {
     const linked = new Map();
     for (const row of db
       .prepare(
-        'SELECT l.store, l.order_id, COALESCE(t.entity_id, a.entity_id) AS entity FROM order_links l JOIN bank_transactions t ON t.id = l.transaction_id JOIN bank_accounts a ON a.id = t.account_id'
+        'SELECT l.store, l.order_id, COALESCE(t.entity_id, a.entity_id) AS entity FROM order_links l JOIN bank_transactions t ON t.id = l.transaction_id JOIN bank_accounts a ON a.id = t.account_id',
       )
       .all()) {
       if (row.entity !== null) linked.set(`${row.store}\u0000${row.order_id}`, row.entity);
@@ -1528,7 +1524,12 @@ function openDatabase(file) {
       const digits = account.last4 ? String(account.last4) : (/\((\d{4})\)\s*$/.exec(account.name) || [])[1];
       if (digits && !cards.has(digits)) cards.set(digits, account.entity_id);
     }
-    const places = new Map(db.prepare('SELECT zip, entity_id FROM place_entities').all().map((r) => [r.zip, r.entity_id]));
+    const places = new Map(
+      db
+        .prepare('SELECT zip, entity_id FROM place_entities')
+        .all()
+        .map((r) => [r.zip, r.entity_id]),
+    );
     for (const order of orders) {
       const key = `${order.store}\u0000${order.order_id}`;
       let entity = linked.get(key) ?? null;
@@ -1580,9 +1581,14 @@ function openDatabase(file) {
     const cards = new Map();
     if (!stores.size) return cards;
     if (!db.prepare("SELECT 1 FROM bank_accounts WHERE owner = 'business' LIMIT 1").get()) return cards;
-    const business = new Set(db.prepare("SELECT last4 FROM bank_accounts WHERE owner = 'business' AND last4 IS NOT NULL").all().map((r) => String(r.last4)));
+    const business = new Set(
+      db
+        .prepare("SELECT last4 FROM bank_accounts WHERE owner = 'business' AND last4 IS NOT NULL")
+        .all()
+        .map((r) => String(r.last4)),
+    );
     const charged = db.prepare(
-      'SELECT DISTINCT a.owner FROM order_links l JOIN bank_transactions t ON t.id = l.transaction_id JOIN bank_accounts a ON a.id = t.account_id WHERE l.store = ? AND l.order_id = ?'
+      'SELECT DISTINCT a.owner FROM order_links l JOIN bank_transactions t ON t.id = l.transaction_id JOIN bank_accounts a ON a.id = t.account_id WHERE l.store = ? AND l.order_id = ?',
     );
     for (const order of orders) {
       if (!stores.has(order.store)) continue;
@@ -1615,7 +1621,14 @@ function openDatabase(file) {
       const shares = tax.allocate(order, rows);
       const orderMatchesSearch = search && order.order_id.toLowerCase().includes(search);
       rows.forEach((row, index) => {
-        if (search && !orderMatchesSearch && !String(row.name || '').toLowerCase().includes(search)) return;
+        if (
+          search &&
+          !orderMatchesSearch &&
+          !String(row.name || '')
+            .toLowerCase()
+            .includes(search)
+        )
+          return;
         const { category, source } = classify(row.name, order.store);
         const item = {
           store: order.store,
@@ -1666,10 +1679,7 @@ function openDatabase(file) {
     entry.orderKeys.add(orderKey);
     map.set(label, entry);
   }
-  const finish = (map) =>
-    [...map.values()]
-      .map(({ label, key, spend, orderKeys }) => ({ label, key, spend: tax.cents(spend), orders: orderKeys.size }))
-      .sort((a, b) => b.spend - a.spend);
+  const finish = (map) => [...map.values()].map(({ label, key, spend, orderKeys }) => ({ label, key, spend: tax.cents(spend), orders: orderKeys.size })).sort((a, b) => b.spend - a.spend);
 
   function report(raw = {}) {
     const filters = normalize(raw);
@@ -1772,9 +1782,7 @@ function openDatabase(file) {
     const { sql, params } = whereFor(filters);
     const column = ORDER_SORTS[sort] || ORDER_SORTS.date;
     const order = direction === 'asc' ? 'ASC' : 'DESC';
-    let rows = db
-      .prepare(`SELECT o.* FROM orders o ${sql} ORDER BY ${column} IS NULL, ${column} ${order}, o.order_date DESC, o.store, o.order_id`)
-      .all(...params);
+    let rows = db.prepare(`SELECT o.* FROM orders o ${sql} ORDER BY ${column} IS NULL, ${column} ${order}, o.order_date DESC, o.store, o.order_id`).all(...params);
     rows = forBusiness(rows, filters);
     if (filters.category) {
       const matching = new Set(enrichedItems(filters).map((item) => `${item.store}\u0000${item.orderId}`));
@@ -1785,7 +1793,7 @@ function openDatabase(file) {
     const byOrder = allItemsByOrder();
     const charges = db.prepare(
       `SELECT t.id, t.posted, l.amount, a.name AS account FROM order_links l JOIN bank_transactions t ON t.id = l.transaction_id
-       JOIN bank_accounts a ON a.id = t.account_id WHERE l.store = ? AND l.order_id = ? ORDER BY t.posted`
+       JOIN bank_accounts a ON a.id = t.account_id WHERE l.store = ? AND l.order_id = ? ORDER BY t.posted`,
     );
     return {
       total,
@@ -1831,7 +1839,7 @@ function openDatabase(file) {
         `SELECT store, COALESCE(MAX(store_name), store) AS name, COUNT(*) AS orders,
                 MIN(order_date) AS earliest, MAX(order_date) AS latest,
                 SUM(CASE WHEN detail_fetched_at IS NULL AND detail_url IS NOT NULL AND detail_attempts < ${MAX_DETAIL_ATTEMPTS} THEN 1 ELSE 0 END) AS missingDetails
-         FROM orders GROUP BY store ORDER BY name`
+         FROM orders GROUP BY store ORDER BY name`,
       )
       .all()
       .map((row) => ({
@@ -1839,12 +1847,16 @@ function openDatabase(file) {
         coverage: coverage(row.store).map((c) => ({ from: c.from === EARLIEST ? null : c.from, to: c.to })),
         lastRun: { ...(db.prepare('SELECT * FROM sync_runs WHERE store = ? ORDER BY id DESC LIMIT 1').get(row.store) || {}) },
       }));
-    const column = (sql, name) => db.prepare(sql).all().map((row) => row[name]);
+    const column = (sql, name) =>
+      db
+        .prepare(sql)
+        .all()
+        .map((row) => row[name]);
     return {
       stores,
       payments: column('SELECT DISTINCT payment FROM orders WHERE payment IS NOT NULL ORDER BY payment', 'payment'),
       zips: column('SELECT DISTINCT delivery_zip FROM orders WHERE delivery_zip IS NOT NULL ORDER BY delivery_zip', 'delivery_zip'),
-      years: column("SELECT DISTINCT substr(order_date, 1, 4) AS year FROM orders WHERE order_date IS NOT NULL ORDER BY year DESC", 'year'),
+      years: column('SELECT DISTINCT substr(order_date, 1, 4) AS year FROM orders WHERE order_date IS NOT NULL ORDER BY year DESC', 'year'),
       places: places(),
     };
   }

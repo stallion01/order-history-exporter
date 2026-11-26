@@ -78,12 +78,20 @@ export interface SummaryOptions {
   person?: number | null;
 }
 
+// A group a person chose for a payment, with which way the money went.
+function chosenGroup(group: string | null | undefined): { flow: Flow; group: Group; guessed: boolean } | null {
+  if (!group) return null;
+  if ((SPENDING_GROUPS as readonly string[]).includes(group)) return { flow: 'out', group: group as Group, guessed: false };
+  if ((INCOME_GROUPS as readonly string[]).includes(group)) return { flow: 'in', group: group as Group, guessed: false };
+  return null;
+}
+
 export function personalService({ db, today = () => new Date().toISOString().slice(0, 10) }: { db: DatabaseSync; today?: () => string }) {
   function load(accountIds: number[]): Tx[] {
     if (!accountIds.length) return [];
     // Transfers to the owner's business accounts are money moved, not spent.
     const business = businessPattern(
-      (db.prepare("SELECT last4 FROM bank_accounts WHERE last4 IS NOT NULL AND (owner != 'personal' OR entity_id IS NOT NULL)").all() as Row[]).map((r) => String(r.last4))
+      (db.prepare("SELECT last4 FROM bank_accounts WHERE last4 IS NOT NULL AND (owner != 'personal' OR entity_id IS NOT NULL)").all() as Row[]).map((r) => String(r.last4)),
     );
     const income = new Set((db.prepare("SELECT name FROM categories WHERE expense_class = 'income'").all() as Row[]).map((r) => String(r.name)));
     const rows = db
@@ -92,7 +100,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
         // sent another. Between one person's own accounts they're still left out.
         `SELECT t.id, t.posted, t.amount, t.description, t.payee, t.category, t.account_id, a.name AS account, t.kind,
                 p.id AS pair_id, pa.name AS other_account, pp.name AS other_person, pa.person_id AS other_person_id,
-                t.family_label_id, l.name AS label, l.group_key AS label_group
+                t.family_label_id, l.name AS label, l.group_key AS label_group, t.personal_group
          FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
          LEFT JOIN bank_transactions p ON p.id = t.transfer_id
          LEFT JOIN bank_accounts pa ON pa.id = p.account_id
@@ -100,7 +108,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
          LEFT JOIN personal_labels l ON l.id = t.family_label_id
          WHERE t.status = 'personal' AND t.amount != 0 AND t.account_id IN (${accountIds.map(Number).join(',')})
            AND (t.kind = 'normal' OR (t.kind = 'transfer' AND p.id IS NOT NULL AND pa.owner != 'business' AND pa.person_id IS NOT a.person_id))
-         ORDER BY t.posted, t.id`
+         ORDER BY t.posted, t.id`,
       )
       .all() as Row[];
     return rows.map((r) => {
@@ -118,7 +126,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
         ? r.amount < 0
           ? { flow: 'out' as const, group: ((SPENDING_GROUPS as readonly string[]).includes(r.label_group) ? r.label_group : 'family') as Group, guessed: false }
           : { flow: 'in' as const, group: 'family_in' as Group, guessed: false }
-        : classify({ amount: r.amount, description: r.description, payee: r.payee, category: r.category }, business, income);
+        : (chosenGroup(r.personal_group) ?? classify({ amount: r.amount, description: r.description, payee: r.payee, category: r.category }, business, income));
       return {
         id: r.id,
         posted: r.posted,
@@ -149,7 +157,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     if (monthly === null || monthly <= 0) db.prepare('DELETE FROM personal_budgets WHERE person_id = ? AND group_key = ?').run(person ?? 0, group);
     else
       db.prepare(
-        'INSERT INTO personal_budgets (person_id, group_key, monthly, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (person_id, group_key) DO UPDATE SET monthly = excluded.monthly, updated_at = excluded.updated_at'
+        'INSERT INTO personal_budgets (person_id, group_key, monthly, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (person_id, group_key) DO UPDATE SET monthly = excluded.monthly, updated_at = excluded.updated_at',
       ).run(person ?? 0, group, cents(monthly), new Date().toISOString());
     return budgets(person);
   }
@@ -163,6 +171,19 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     if (db.prepare('SELECT 1 FROM personal_labels WHERE name = ?').get(name)) throw new Error('There is already a category with that name.');
     const result = db.prepare('INSERT INTO personal_labels (name, group_key, created_at) VALUES (?, ?, ?)').run(name, group, new Date().toISOString());
     return Number(result.lastInsertRowid);
+  }
+
+  // A person sorting one of their own payments for their budget: a kind of spending or
+  // of money in, or null to go back to the bank's description and the category. Only
+  // their own accounts' payments, and never a transfer between family.
+  function setGroup(person: number | null, transactionId: number, group: string | null) {
+    if (group !== null && !chosenGroup(group)) throw new Error('That is not a kind of spending or income.');
+    const row = db
+      .prepare("SELECT t.id, t.kind FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id WHERE t.id = ? AND t.status = 'personal' AND a.person_id IS ?")
+      .get(transactionId, person) as Row | undefined;
+    if (!row) throw new Error('That payment is not one of yours.');
+    if (row.kind !== 'normal') throw new Error('Money moved between accounts is sorted on its own.');
+    db.prepare('UPDATE bank_transactions SET personal_group = ? WHERE id = ?').run(group, transactionId);
   }
 
   // A category on money sent between family goes on both sides of the transfer.
@@ -184,12 +205,20 @@ export function personalService({ db, today = () => new Date().toISOString().sli
         .prepare(
           `SELECT a.id, a.name, a.institution, a.kind, a.owner, a.balance, a.balance_date, a.person_id,
                   (SELECT COUNT(*) FROM bank_transactions t WHERE t.account_id = a.id AND t.status = 'personal') AS personal
-           FROM bank_accounts a WHERE a.owner != 'business' AND a.kind != 'investment' AND a.person_id IS ? ORDER BY a.name COLLATE NOCASE`
+           FROM bank_accounts a WHERE a.owner != 'business' AND a.kind != 'investment' AND a.person_id IS ? ORDER BY a.name COLLATE NOCASE`,
         )
         .all(person) as Row[]
     )
       .filter((a) => a.owner === 'personal' || a.personal > 0)
-      .map((a) => ({ id: Number(a.id), name: String(a.name), institution: a.institution ?? null, kind: a.kind, balance: a.balance ?? null, balanceDate: a.balance_date ?? null, transactions: a.personal }));
+      .map((a) => ({
+        id: Number(a.id),
+        name: String(a.name),
+        institution: a.institution ?? null,
+        kind: a.kind,
+        balance: a.balance ?? null,
+        balanceDate: a.balance_date ?? null,
+        transactions: a.personal,
+      }));
   }
 
   function summary(options: SummaryOptions = {}) {
@@ -344,7 +373,10 @@ export function personalService({ db, today = () => new Date().toISOString().sli
         typical: cents(typical[g] * n),
         typicalSoFar,
         count: list.length,
-        merchants: [...merchants.values()].sort((a, b) => b.amount - a.amount).slice(0, 6).map((x) => ({ ...x, amount: cents(x.amount) })),
+        merchants: [...merchants.values()]
+          .sort((a, b) => b.amount - a.amount)
+          .slice(0, 6)
+          .map((x) => ({ ...x, amount: cents(x.amount) })),
         transactions: list
           .sort((a, b) => a.amount - b.amount)
           .slice(0, 60)
@@ -362,7 +394,15 @@ export function personalService({ db, today = () => new Date().toISOString().sli
         payers.set(name.toLowerCase(), found);
       }
       const amount = future ? n * recurringIncome.filter((r) => r.group === g).reduce((s, r) => s + r.amount, 0) : list.reduce((s, t) => s + t.amount, 0);
-      return { key: g, amount: cents(amount), count: list.length, payers: [...payers.values()].sort((a, b) => b.amount - a.amount).slice(0, 5).map((x) => ({ ...x, amount: cents(x.amount) })) };
+      return {
+        key: g,
+        amount: cents(amount),
+        count: list.length,
+        payers: [...payers.values()]
+          .sort((a, b) => b.amount - a.amount)
+          .slice(0, 5)
+          .map((x) => ({ ...x, amount: cents(x.amount) })),
+      };
     }).filter((s) => s.amount !== 0);
     const moveRows = MOVE_GROUPS.map((g) => ({ key: g, amount: cents(inSpan.filter((t) => t.group === g).reduce((s, t) => s + t.amount, 0)) })).filter((m) => m.amount !== 0);
 
@@ -480,7 +520,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     };
   }
 
-  return { summary, budgets, setBudget, accounts, people, labels, addLabel, setFamilyLabel };
+  return { summary, budgets, setBudget, accounts, people, labels, addLabel, setFamilyLabel, setGroup };
 }
 
 export type PersonalService = ReturnType<typeof personalService>;

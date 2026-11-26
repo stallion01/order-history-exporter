@@ -115,8 +115,9 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
-// All a family member's login can reach besides signing in: their own money.
-const MEMBER_ROUTES = new Set(['GET /api/personal']);
+// All a family member's login can reach besides signing in: their own money, their own
+// budgets, and sorting their own payments (each checked against their own accounts).
+const MEMBER_ROUTES = new Set(['GET /api/personal', 'POST /api/personal/budgets', 'POST /api/personal/group']);
 
 const isLoopback = (address: string) => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 

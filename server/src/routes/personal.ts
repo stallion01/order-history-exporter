@@ -37,15 +37,30 @@ export function personalRoutes(app: FastifyInstance, personal: PersonalService) 
   });
 
   app.post('/api/personal/budgets', async (request) => {
-    const result = z
-      .object({ group: z.string().min(1).max(40), monthly: z.number().min(0).max(1e8).nullable(), person: z.number().int().positive().nullable().optional() })
-      .safeParse(request.body);
+    const result = z.object({ group: z.string().min(1).max(40), monthly: z.number().min(0).max(1e8).nullable(), person: z.number().int().positive().nullable().optional() }).safeParse(request.body);
     if (!result.success) throw new HttpError(400, 'A budget is a kind of spending and an amount.');
     const person = personFor(request, result.data.person);
     try {
       const budgets = personal.setBudget(person, result.data.group, result.data.monthly);
       (request as unknown as AuthedRequest).audit('personal.budget', { ...result.data, person });
       return { budgets };
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+  });
+
+  // Sorting one of their own payments into a kind of spending or income, for My money
+  // only. A family login may do this for their own payments.
+  app.post('/api/personal/group', async (request) => {
+    const result = z
+      .object({ transactionId: z.number().int().positive(), group: z.string().min(1).max(40).nullable(), person: z.number().int().positive().nullable().optional() })
+      .safeParse(request.body);
+    if (!result.success) throw new HttpError(400, 'Which payment, and which kind of spending?');
+    const person = personFor(request, result.data.person);
+    try {
+      personal.setGroup(person, result.data.transactionId, result.data.group);
+      (request as unknown as AuthedRequest).audit('personal.group', { ...result.data, person });
+      return { ok: true };
     } catch (err) {
       throw new HttpError(400, (err as Error).message);
     }

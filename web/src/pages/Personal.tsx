@@ -175,7 +175,7 @@ const dayLabel = (date: string) => {
 const spanName = (data: PersonalData, short = false) => (data.period === 'year' ? data.year : monthName(data.month, short));
 
 // Who is looking: the owner can see anyone's money and change budgets; a family
-// member's login sees only their own, read-only.
+// member's login sees only their own, and can set its budgets and sort its payments.
 export function Personal({ member = false }: { member?: boolean }) {
   const [params, setParams] = useSearchParams();
   const query = new URLSearchParams();
@@ -224,7 +224,7 @@ export function Personal({ member = false }: { member?: boolean }) {
         <Banner tone="info">
           {plural(d.unsorted, 'payment')} in {spanName(data)} couldn't be sorted from the bank's description.{' '}
           {member ? (
-            'Ask for a category to be given to them and they will land in the right group.'
+            <>Open Not sorted yet under Where it went and pick a group for each.</>
           ) : (
             <>
               <Link className="font-medium underline" to={`/transactions?preset=all&kind=all&${d.unsortedIds.map((id) => `id=${id}`).join('&')}`}>
@@ -237,14 +237,14 @@ export function Personal({ member = false }: { member?: boolean }) {
       )}
       <Timeline months={data.months} span={data.span} today={data.today} onPick={pick} />
       <div className="mb-5 grid gap-5 lg:grid-cols-[1.25fr_1fr]">
-        <WhereItWent data={data} open={open} onOpen={setOpen} member={member} />
+        <WhereItWent data={data} open={open} onOpen={setOpen} member={member} onChange={reload} />
         <div className="grid content-start gap-5">
           <WhereItCame data={data} />
           <Moved data={data} />
         </div>
       </div>
       {data.family.length > 0 && <BetweenFamily data={data} onChange={reload} readOnly={member} />}
-      <Budgets data={data} onChange={reload} readOnly={member} />
+      <Budgets data={data} onChange={reload} readOnly={false} />
       <div className="mb-5 grid gap-5 lg:grid-cols-2">
         <Pace data={data} />
         <ComingUp data={data} />
@@ -312,10 +312,20 @@ function Hero({
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-sm font-medium tracking-wide text-emerald-100 uppercase">{whose}</p>
             <div className="inline-flex rounded-full bg-white/10 p-0.5 text-xs font-medium" role="group" aria-label="Month or year">
-              <button type="button" aria-pressed={!yearly} onClick={() => !yearly || onPick(current ? data.thisMonth : `${data.year}-${data.thisMonth.slice(5)}`)} className={cx('rounded-full px-3 py-1', !yearly ? 'bg-white text-teal-800 shadow' : 'hover:bg-white/15')}>
+              <button
+                type="button"
+                aria-pressed={!yearly}
+                onClick={() => !yearly || onPick(current ? data.thisMonth : `${data.year}-${data.thisMonth.slice(5)}`)}
+                className={cx('rounded-full px-3 py-1', !yearly ? 'bg-white text-teal-800 shadow' : 'hover:bg-white/15')}
+              >
                 Month
               </button>
-              <button type="button" aria-pressed={yearly} onClick={() => yearly || onPickYear(data.month.slice(0, 4))} className={cx('rounded-full px-3 py-1', yearly ? 'bg-white text-teal-800 shadow' : 'hover:bg-white/15')}>
+              <button
+                type="button"
+                aria-pressed={yearly}
+                onClick={() => yearly || onPickYear(data.month.slice(0, 4))}
+                className={cx('rounded-full px-3 py-1', yearly ? 'bg-white text-teal-800 shadow' : 'hover:bg-white/15')}
+              >
                 Year
               </button>
             </div>
@@ -453,7 +463,7 @@ function Timeline({ months, span, today, onPick }: { months: MonthRow[]; span: {
   const H = 210;
   const top = 18;
   const bottom = 34;
-  const values = months.flatMap((m) => [m.future ? m.projectedEarned ?? 0 : m.earned, m.future ? m.projectedSpent ?? 0 : Math.max(m.spent, m.projectedSpent ?? 0)]);
+  const values = months.flatMap((m) => [m.future ? (m.projectedEarned ?? 0) : m.earned, m.future ? (m.projectedSpent ?? 0) : Math.max(m.spent, m.projectedSpent ?? 0)]);
   const max = Math.max(1, ...values);
   const y = (v: number) => top + (H - top - bottom) * (1 - Math.max(0, v) / max);
   const base = y(0);
@@ -483,7 +493,13 @@ function Timeline({ months, span, today, onPick }: { months: MonthRow[]; span: {
       }
     >
       <div className="-mx-1 overflow-x-auto pb-1">
-        <svg viewBox={`0 0 ${width} ${H}`} style={{ minWidth: Math.max(width * 0.62, 320) }} className="block h-56 w-full" role="img" aria-label="Money in and out for each month, with the months ahead forecast">
+        <svg
+          viewBox={`0 0 ${width} ${H}`}
+          style={{ minWidth: Math.max(width * 0.62, 320) }}
+          className="block h-56 w-full"
+          role="img"
+          aria-label="Money in and out for each month, with the months ahead forecast"
+        >
           <defs>
             <pattern id="hatch-in" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
               <rect width="5" height="5" fill="#10b981" opacity="0.18" />
@@ -498,22 +514,26 @@ function Timeline({ months, span, today, onPick }: { months: MonthRow[]; span: {
               <stop offset="1" stopColor="#6366f1" stopOpacity="0" />
             </linearGradient>
           </defs>
-          {todayIndex >= 0 && (
-            <rect x={(todayIndex + 1) * W} y={0} width={width - (todayIndex + 1) * W} height={H - bottom + 4} className="fill-slate-100 dark:fill-slate-800/60" />
-          )}
+          {todayIndex >= 0 && <rect x={(todayIndex + 1) * W} y={0} width={width - (todayIndex + 1) * W} height={H - bottom + 4} className="fill-slate-100 dark:fill-slate-800/60" />}
           <line x1={0} x2={width} y1={base} y2={base} className="stroke-slate-300 dark:stroke-slate-700" />
           {months.map((m, i) => {
             const x = i * W;
             const isSel = inSpan(m.month);
-            const earned = m.future ? m.projectedEarned ?? 0 : m.earned;
-            const spent = m.future ? m.projectedSpent ?? 0 : m.spent;
+            const earned = m.future ? (m.projectedEarned ?? 0) : m.earned;
+            const spent = m.future ? (m.projectedSpent ?? 0) : m.spent;
             const bw = 17;
             return (
               <g key={m.month} className="cursor-pointer" onClick={() => onPick(m.month)}>
-                <title>
-                  {`${monthName(m.month)}${m.future ? ' (forecast)' : m.current ? ' (so far)' : ''}: in ${money(earned)}, out ${money(spent)}`}
-                </title>
-                <rect x={x + 2} y={4} width={W - 4} height={H - 8} rx={8} className={isSel ? 'fill-teal-500/15 stroke-teal-500' : 'fill-transparent hover:fill-slate-400/10'} strokeWidth={isSel ? 1.5 : 0} />
+                <title>{`${monthName(m.month)}${m.future ? ' (forecast)' : m.current ? ' (so far)' : ''}: in ${money(earned)}, out ${money(spent)}`}</title>
+                <rect
+                  x={x + 2}
+                  y={4}
+                  width={W - 4}
+                  height={H - 8}
+                  rx={8}
+                  className={isSel ? 'fill-teal-500/15 stroke-teal-500' : 'fill-transparent hover:fill-slate-400/10'}
+                  strokeWidth={isSel ? 1.5 : 0}
+                />
                 {!m.noData && (
                   <>
                     <rect x={x + W / 2 - bw - 1.5} y={y(earned)} width={bw} height={Math.max(0, base - y(earned))} rx={3} fill={m.future ? 'url(#hatch-in)' : '#10b981'} />
@@ -526,7 +546,12 @@ function Timeline({ months, span, today, onPick }: { months: MonthRow[]; span: {
                     )}
                   </>
                 )}
-                <text x={x + W / 2} y={H - bottom + 17} textAnchor="middle" className={cx('text-[11px]', isSel ? 'fill-teal-700 font-semibold dark:fill-teal-300' : 'fill-slate-500 dark:fill-slate-400')}>
+                <text
+                  x={x + W / 2}
+                  y={H - bottom + 17}
+                  textAnchor="middle"
+                  className={cx('text-[11px]', isSel ? 'fill-teal-700 font-semibold dark:fill-teal-300' : 'fill-slate-500 dark:fill-slate-400')}
+                >
                   {monthName(m.month, true)}
                 </text>
                 {(m.month.endsWith('-01') || i === 0) && (
@@ -537,14 +562,19 @@ function Timeline({ months, span, today, onPick }: { months: MonthRow[]; span: {
               </g>
             );
           })}
-          <path
-            d={`M${keptPoints.map((p) => p.join(',')).join(' L')} L${keptPoints[keptPoints.length - 1][0]},${base} L${keptPoints[0][0]},${base} Z`}
-            fill="url(#kept-fill)"
-            pointerEvents="none"
-          />
+          <path d={`M${keptPoints.map((p) => p.join(',')).join(' L')} L${keptPoints[keptPoints.length - 1][0]},${base} L${keptPoints[0][0]},${base} Z`} fill="url(#kept-fill)" pointerEvents="none" />
           <polyline points={keptPoints.map((p) => p.join(',')).join(' ')} fill="none" stroke="#6366f1" strokeWidth="2.5" strokeLinejoin="round" pointerEvents="none" />
           {keptPoints.map(([px, py], i) => (
-            <circle key={i} cx={px} cy={py} r={inSpan(months[i].month) ? 4.5 : 3} fill={months[i].future || months[i].current ? 'white' : '#6366f1'} stroke="#6366f1" strokeWidth="2" pointerEvents="none" />
+            <circle
+              key={i}
+              cx={px}
+              cy={py}
+              r={inSpan(months[i].month) ? 4.5 : 3}
+              fill={months[i].future || months[i].current ? 'white' : '#6366f1'}
+              stroke="#6366f1"
+              strokeWidth="2"
+              pointerEvents="none"
+            />
           ))}
           {todayIndex >= 0 && (
             <text x={(todayIndex + 1) * W + 6} y={14} className="fill-slate-500 text-[10px] font-medium dark:fill-slate-400">
@@ -571,7 +601,7 @@ function Legend({ colour, line, children }: { colour: string; line?: boolean; ch
 
 /* ---------- Where it went ---------- */
 
-function WhereItWent({ data, open, onOpen, member }: { data: PersonalData; open: string | null; onOpen: (g: string | null) => void; member: boolean }) {
+function WhereItWent({ data, open, onOpen, member, onChange }: { data: PersonalData; open: string | null; onOpen: (g: string | null) => void; member: boolean; onChange: () => void }) {
   const groups = data.detail.groups.filter((g) => g.amount > 0.5).sort((a, b) => b.amount - a.amount);
   const total = groups.reduce((s, g) => s + g.amount, 0);
   const selected = groups.find((g) => g.key === open) ?? null;
@@ -613,7 +643,7 @@ function WhereItWent({ data, open, onOpen, member }: { data: PersonalData; open:
           </ul>
         </div>
       )}
-      {selected && <GroupDetail group={selected} future={data.future} member={member} onClose={() => onOpen(null)} />}
+      {selected && <GroupDetail group={selected} future={data.future} member={member} onChange={onChange} onClose={() => onOpen(null)} />}
     </Card>
   );
 }
@@ -659,8 +689,26 @@ function Donut({ slices, total, active, onPick, label }: { slices: { key: string
   );
 }
 
-function GroupDetail({ group, future, member, onClose }: { group: GroupRow; future: boolean; member: boolean; onClose: () => void }) {
+// The kinds of spending a payment can be moved to. Sent to family is only for transfers.
+const MOVE_TO = SPENDING_KEYS.filter((k) => k !== 'family');
+
+function GroupDetail({ group, future, member, onChange, onClose }: { group: GroupRow; future: boolean; member: boolean; onChange: () => void; onClose: () => void }) {
   const gi = info(group.key);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // A family login sorts its own payments here; the owner gives a category in Transactions.
+  const move = async (id: number, to: string) => {
+    setBusy(id);
+    setError(null);
+    try {
+      await post('/api/personal/group', { transactionId: id, group: to });
+      onChange();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
     <div className="mt-5 rounded-xl border p-4" style={{ borderColor: `${gi.colour}66`, background: `${gi.colour}0d` }}>
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -670,9 +718,7 @@ function GroupDetail({ group, future, member, onClose }: { group: GroupRow; futu
         </button>
       </div>
       {future ? (
-        <p className="text-sm text-slate-600 dark:text-slate-300">
-          {group.budget !== null ? `The budget: ${wholeMoney(group.budget)}.` : `Typical: ${wholeMoney(group.typical)}.`}
-        </p>
+        <p className="text-sm text-slate-600 dark:text-slate-300">{group.budget !== null ? `The budget: ${wholeMoney(group.budget)}.` : `Typical: ${wholeMoney(group.typical)}.`}</p>
       ) : (
         <>
           {group.merchants.length > 0 && (
@@ -686,7 +732,10 @@ function GroupDetail({ group, future, member, onClose }: { group: GroupRow; futu
                 );
                 const chipClass = 'rounded-full bg-white px-2.5 py-1 text-xs shadow-sm dark:bg-slate-900';
                 // For the owner, a payee opens its payments here in Transactions, to give them a category.
-                const ids = group.transactions.filter((t) => t.name.toLowerCase() === m.name.toLowerCase()).map((t) => t.id).slice(0, 100);
+                const ids = group.transactions
+                  .filter((t) => t.name.toLowerCase() === m.name.toLowerCase())
+                  .map((t) => t.id)
+                  .slice(0, 100);
                 return member || !ids.length ? (
                   <span key={m.name} className={chipClass}>
                     {chip}
@@ -699,7 +748,8 @@ function GroupDetail({ group, future, member, onClose }: { group: GroupRow; futu
               })}
             </div>
           )}
-          <ul className="max-h-72 divide-y divide-slate-200/70 overflow-y-auto text-sm dark:divide-slate-700/70">
+          {error && <Banner>{error}</Banner>}
+          <ul className="max-h-96 divide-y divide-slate-200/70 overflow-y-auto text-sm dark:divide-slate-700/70">
             {group.transactions.map((t) => (
               <li key={t.id} className="flex items-center gap-3 py-1.5">
                 <span className="w-12 shrink-0 text-xs text-slate-500">{dayLabel(t.posted)}</span>
@@ -708,10 +758,28 @@ function GroupDetail({ group, future, member, onClose }: { group: GroupRow; futu
                   <span className="ml-1.5 text-xs text-slate-400">{t.account}</span>
                 </TxName>
                 <span className={cx('tabular-nums', t.amount > 0 && 'text-emerald-600')}>{money(-t.amount)}</span>
+                {member && (
+                  <select
+                    aria-label={`Move ${t.name} to`}
+                    value={group.key}
+                    disabled={busy === t.id}
+                    onChange={(e) => move(t.id, e.target.value)}
+                    className="w-28 shrink-0 rounded-md border border-slate-300 bg-white px-1.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-900"
+                  >
+                    {!MOVE_TO.includes(group.key) && <option value={group.key}>{gi.label}</option>}
+                    {MOVE_TO.map((k) => (
+                      <option key={k} value={k}>
+                        {info(k).label}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </li>
             ))}
           </ul>
-          {!member && <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Something in the wrong group? Open it and give it a category; the group follows the category.</p>}
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            {member ? 'Something in the wrong group? Pick the right one beside it.' : 'Something in the wrong group? Open it and give it a category; the group follows the category.'}
+          </p>
         </>
       )}
     </div>
@@ -935,8 +1003,8 @@ function BetweenFamily({ data, onChange, readOnly }: { data: PersonalData; onCha
         })}
       </ul>
       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-        Money moved between two people's accounts counts as money out for one and in for the other. A category decides what kind of spending it is for whoever sent it, such as Education
-        for university fees, and shows on both sides.
+        Money moved between two people's accounts counts as money out for one and in for the other. A category decides what kind of spending it is for whoever sent it, such as Education for university
+        fees, and shows on both sides.
       </p>
     </Card>
   );
@@ -1010,11 +1078,25 @@ function Budgets({ data, onChange, readOnly }: { data: PersonalData; onChange: (
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {rows.map((g) => (
-            <Envelope key={g.key} group={g} monthly={data.budgets[g.key] ?? null} typicalMonth={data.typical[g.key] ?? 0} yearly={yearly} readOnly={readOnly} dayShare={dayShare} future={data.future} busy={busy} onSave={(n) => save(g.key, n)} />
+            <Envelope
+              key={g.key}
+              group={g}
+              monthly={data.budgets[g.key] ?? null}
+              typicalMonth={data.typical[g.key] ?? 0}
+              yearly={yearly}
+              readOnly={readOnly}
+              dayShare={dayShare}
+              future={data.future}
+              busy={busy}
+              onSave={(n) => save(g.key, n)}
+            />
           ))}
         </div>
       )}
-      <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">{yearly ? 'Budgets are set by the month; the year adds up twelve. ' : ''}The tick on each bar is where you'd usually be by today, counting bills that land on set days. A typical month is the middle of your last six.</p>
+      <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+        {yearly ? 'Budgets are set by the month; the year adds up twelve. ' : ''}The tick on each bar is where you'd usually be by today, counting bills that land on set days. A typical month is the
+        middle of your last six.
+      </p>
     </Card>
   );
 }
@@ -1084,7 +1166,14 @@ function Envelope({
           }}
         >
           <span className="text-sm text-slate-500">$</span>
-          <Input inputMode="decimal" autoFocus value={value} onChange={(e) => setValue(e.target.value.replace(/[^\d.]/g, ''))} placeholder={String(Math.ceil(typicalMonth / 10) * 10 || '')} aria-label="Monthly budget" />
+          <Input
+            inputMode="decimal"
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value.replace(/[^\d.]/g, ''))}
+            placeholder={String(Math.ceil(typicalMonth / 10) * 10 || '')}
+            aria-label="Monthly budget"
+          />
           <span className="shrink-0 text-xs text-slate-500">a month</span>
           <Button type="submit" disabled={busy} aria-label="Save">
             <Check className="size-4" aria-hidden />
@@ -1101,7 +1190,9 @@ function Envelope({
           </div>
           <div className="relative mt-1.5 h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
             {budget !== null && !future && <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, (share ?? 0) * 100)}%`, background: bar }} />}
-            {budget !== null && !future && dayShare > 0 && dayShare < 1 && paceShare < 1 && <div className="absolute top-0 h-full w-0.5 bg-slate-500/70" style={{ left: `${paceShare * 100}%` }} aria-hidden />}
+            {budget !== null && !future && dayShare > 0 && dayShare < 1 && paceShare < 1 && (
+              <div className="absolute top-0 h-full w-0.5 bg-slate-500/70" style={{ left: `${paceShare * 100}%` }} aria-hidden />
+            )}
           </div>
           {left !== null && !future && (
             <div className={cx('mt-1 text-xs', state === 'over' ? 'text-red-600 dark:text-red-400' : state === 'ahead' ? 'text-amber-700 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400')}>
@@ -1109,7 +1200,9 @@ function Envelope({
             </div>
           )}
           {yearly && !future && dayShare < 1 && budget !== null && (
-            <div className={cx('text-xs', group.projected > budget ? 'text-amber-700 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400')}>On track for {wholeMoney(group.projected)} by December</div>
+            <div className={cx('text-xs', group.projected > budget ? 'text-amber-700 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400')}>
+              On track for {wholeMoney(group.projected)} by December
+            </div>
           )}
         </>
       )}
@@ -1127,7 +1220,9 @@ function Pace({ data }: { data: PersonalData }) {
   if (data.future) {
     return (
       <Card title={title}>
-        <p className="py-6 text-center text-sm text-slate-500">This {what} hasn't started yet. A typical {what} ends near {wholeMoney(p.typical[p.typical.length - 1] ?? 0)}.</p>
+        <p className="py-6 text-center text-sm text-slate-500">
+          This {what} hasn't started yet. A typical {what} ends near {wholeMoney(p.typical[p.typical.length - 1] ?? 0)}.
+        </p>
       </Card>
     );
   }

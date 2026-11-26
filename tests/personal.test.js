@@ -292,11 +292,31 @@ test('family members have their own accounts and budgets, and a login that sees 
     assert.deepEqual(data.people, []);
     assert.equal(data.detail.spent, 100);
   }
-  // Nothing else: not the books, the settings, other people, or budgets.
+  // Nothing else: not the books, the settings, or other people.
   for (const route of ['/api/bank/accounts', '/api/bank/transactions', '/api/settings/token', '/api/people', '/api/entities', '/api/status']) {
     assert.equal((await asKid(route)).status, 403, route);
   }
-  assert.equal((await asKid('/api/personal/budgets', { method: 'POST', body: JSON.stringify({ group: 'food', monthly: 1 }) })).status, 403);
+  assert.equal((await asKid('/api/personal/labels', { method: 'POST', body: JSON.stringify({ name: 'X', group: 'food' }) })).status, 403);
+  assert.equal((await asKid('/api/bank/transactions/update', { method: 'POST', body: JSON.stringify({ ids: [1], category: 'Meals' }) })).status, 403);
+
+  // Their own budgets: always theirs, whoever they ask for.
+  const budgetSet = await asKid('/api/personal/budgets', { method: 'POST', body: JSON.stringify({ group: 'food', monthly: 80, person: other.id }) });
+  assert.equal(budgetSet.status, 200);
+  assert.deepEqual((await budgetSet.json()).budgets, { shopping: 150, food: 80 });
+  assert.deepEqual((await get(`/api/personal?person=${other.id}`)).budgets, {});
+
+  // Sorting their own payments for their budget, without touching the category in the books.
+  const kidTx = theirs.detail.groups.flatMap((g) => g.transactions ?? [])[0];
+  const before = (await get(`/api/bank/transactions?preset=all&kind=all&id=${kidTx.id}`)).transactions[0].category;
+  const sort = (transactionId, group) => asKid('/api/personal/group', { method: 'POST', body: JSON.stringify({ transactionId, group }) });
+  assert.equal((await sort(kidTx.id, 'education')).status, 200);
+  const sorted = await (await asKid(`/api/personal?month=${lastMonth}`)).json();
+  assert.equal(sorted.detail.groups.find((g) => g.key === 'education').amount, 100);
+  assert.equal((await get(`/api/bank/transactions?preset=all&kind=all&id=${kidTx.id}`)).transactions[0].category, before);
+  assert.equal((await sort(kidTx.id, 'not-a-group')).status, 400);
+  const ownerTx = mine.detail.groups.flatMap((g) => g.transactions ?? [])[0];
+  assert.equal((await sort(ownerTx.id, 'food')).status, 400);
+  assert.equal((await sort(kidTx.id, null)).status, 200);
   assert.equal((await asKid(`/api/people/${kid}/delete`, { method: 'POST', body: '{}' })).status, 403);
   assert.equal((await asKid('/api/auth/state')).status, 200);
 
