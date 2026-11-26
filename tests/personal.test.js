@@ -346,6 +346,35 @@ test('family members have their own accounts and budgets, and a login that sees 
   assert.ok(byAmount.results.some((r) => r.id === kidTx.id));
   const notTheirs = await (await asKid(`/api/personal/search?q=${encodeURIComponent(ownerTx.name)}`)).json();
   assert.ok(!notTheirs.results.some((r) => r.id === ownerTx.id));
+
+  // Between dates, and in one group.
+  const inMonth = await (await asKid(`/api/personal/search?q=${encodeURIComponent(word)}&from=${lastMonth}-01&to=${lastMonth}-31`)).json();
+  assert.ok(inMonth.results.some((r) => r.id === kidTx.id));
+  const before2000 = await (await asKid(`/api/personal/search?q=${encodeURIComponent(word)}&to=1999-12-31`)).json();
+  assert.equal(before2000.total, 0);
+  const inGroup = await (await asKid(`/api/personal/search?group=${kidTx.group ?? 'shopping'}`)).json();
+  assert.ok(inGroup.results.every((r) => r.group === inGroup.results[0].group));
+  assert.equal((await asKid('/api/personal/search?from=26-1-1')).status, 400);
+
+  // A group of their own: payments moved into it in bulk, a budget for it, and gone again.
+  const made = await (await asKid('/api/personal/groups', { method: 'POST', body: JSON.stringify({ name: 'Gym' }) })).json();
+  assert.match(made.key, /^c\d+$/);
+  assert.equal((await asKid('/api/personal/groups', { method: 'POST', body: JSON.stringify({ name: 'gym' }) })).status, 400);
+  const bulk = await asKid('/api/personal/group/bulk', { method: 'POST', body: JSON.stringify({ transactionIds: [kidTx.id], group: made.key }) });
+  assert.deepEqual(await bulk.json(), { moved: 1 });
+  assert.equal((await asKid('/api/personal/group/bulk', { method: 'POST', body: JSON.stringify({ transactionIds: [kidTx.id, ownerTx.id], group: 'food' }) })).status, 400);
+  await asKid('/api/personal/budgets', { method: 'POST', body: JSON.stringify({ group: made.key, monthly: 60 }) });
+  const withGym = await (await asKid(`/api/personal?month=${lastMonth}`)).json();
+  assert.equal(withGym.detail.groups.find((g) => g.key === made.key).amount, 100, 'the bulk move kept the payment in Gym, not food');
+  assert.equal(withGym.groupNames[made.key], 'Gym');
+  assert.equal(withGym.budgets[made.key], 60);
+  assert.deepEqual(withGym.customGroups, [{ key: made.key, name: 'Gym' }]);
+  assert.equal((await get(`/api/personal?month=${lastMonth}`)).customGroups.length, 0);
+  assert.equal((await asKid(`/api/personal/groups/${made.key}/delete`, { method: 'POST', body: '{}' })).status, 200);
+  const gone = await (await asKid(`/api/personal?month=${lastMonth}`)).json();
+  assert.ok(!gone.detail.groups.some((g) => g.key === made.key));
+  assert.equal(gone.budgets[made.key], undefined);
+  assert.equal(gone.detail.spent, 100);
   assert.equal((await asKid(`/api/people/${kid}/delete`, { method: 'POST', body: '{}' })).status, 403);
   assert.equal((await asKid('/api/auth/state')).status, 200);
 

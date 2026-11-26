@@ -123,6 +123,9 @@ const MEMBER_ROUTES = new Set([
   'GET /api/personal/search',
   'POST /api/personal/budgets',
   'POST /api/personal/group',
+  'POST /api/personal/group/bulk',
+  'POST /api/personal/groups',
+  'POST /api/personal/groups/:key/delete',
   'POST /api/personal/names',
   'POST /api/personal/rules/:id/delete',
 ]);

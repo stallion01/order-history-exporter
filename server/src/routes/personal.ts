@@ -71,6 +71,53 @@ export function personalRoutes(app: FastifyInstance, personal: PersonalService) 
     }
   });
 
+  // Many of their own payments into one group at once.
+  app.post('/api/personal/group/bulk', async (request) => {
+    const result = z
+      .object({
+        transactionIds: z.array(z.number().int().positive()).min(1).max(1000),
+        group: z.string().min(1).max(40).nullable(),
+        person: z.number().int().positive().nullable().optional(),
+      })
+      .safeParse(request.body);
+    if (!result.success) throw new HttpError(400, 'Which payments, and which group?');
+    const person = personFor(request, result.data.person);
+    try {
+      const moved = personal.setGroups(person, result.data.transactionIds, result.data.group);
+      (request as unknown as AuthedRequest).audit('personal.group.bulk', { count: moved, group: result.data.group, person });
+      return { moved };
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+  });
+
+  // A group of one's own, made or removed.
+  app.post('/api/personal/groups', async (request) => {
+    const result = z.object({ name: z.string().trim().min(1).max(40), person: z.number().int().positive().nullable().optional() }).safeParse(request.body);
+    if (!result.success) throw new HttpError(400, 'A group needs a name of up to 40 letters.');
+    const person = personFor(request, result.data.person);
+    try {
+      const key = personal.addCustomGroup(person, result.data.name);
+      (request as unknown as AuthedRequest).audit('personal.groups.add', { key, name: result.data.name, person });
+      return { key, groups: personal.customGroups(person) };
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+  });
+  app.post('/api/personal/groups/:key/delete', async (request) => {
+    const key = String((request.params as { key: string }).key);
+    if (!/^c\d+$/.test(key)) throw new HttpError(400, 'Which group?');
+    const body = z.object({ person: z.number().int().positive().nullable().optional() }).safeParse(request.body ?? {});
+    const person = personFor(request, body.success ? body.data.person : null);
+    try {
+      personal.removeCustomGroup(person, key);
+      (request as unknown as AuthedRequest).audit('personal.groups.delete', { key, person });
+      return { groups: personal.customGroups(person) };
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+  });
+
   // A place that always goes in one group, no longer.
   app.post('/api/personal/rules/:id/delete', async (request) => {
     const id = Number((request.params as { id: string }).id);
@@ -104,9 +151,16 @@ export function personalRoutes(app: FastifyInstance, personal: PersonalService) 
   app.get('/api/personal/search', async (request) => {
     const query = queryOf(request.query);
     const text = (query.get('q') || '').slice(0, 80);
+    const day = (key: string) => {
+      const value = query.get(key);
+      if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new HttpError(400, 'A date looks like 2026-11-26.');
+      return value || null;
+    };
+    const group = (query.get('group') || '').slice(0, 40) || null;
     const person = personFor(request, query.get('person'));
     if (person !== null && !personal.people().some((p) => p.id === person)) throw new HttpError(404, 'That person is not here.');
-    return { results: personal.search(person, text), names: personal.groupNames(person) };
+    const found = personal.search(person, { text, from: day('from'), to: day('to'), group });
+    return { ...found, names: personal.groupNames(person), customGroups: personal.customGroups(person) };
   });
 
   // Categories for money sent between family, and choosing one for a transfer. The

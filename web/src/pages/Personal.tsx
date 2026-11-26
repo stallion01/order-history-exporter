@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
+  Tag,
   Search,
   ArrowLeftRight,
   Banknote,
@@ -79,13 +80,22 @@ const GROUPS: Record<string, GroupInfo> = {
 };
 // The kinds of spending, in order, for choosing what a family category counts as.
 const SPENDING_KEYS = ['home', 'bills', 'food', 'car', 'shopping', 'health', 'education', 'travel', 'subscriptions', 'people', 'family', 'taxes', 'cash', 'other'];
-// The person's own names for the groups, from what's on screen.
+// The person's own names for the groups, and the groups they made, from what's on screen.
 let NAMES: Record<string, string> = {};
-export const setGroupNames = (names: Record<string, string> | undefined) => {
+let CUSTOM: string[] = [];
+export const setGroupNames = (names: Record<string, string> | undefined, custom?: { key: string }[]) => {
   NAMES = names ?? {};
+  if (custom) CUSTOM = custom.map((g) => g.key);
 };
-const usual = (key: string): GroupInfo => GROUPS[key] ?? { label: key, colour: '#94a3b8', icon: Shapes };
+export const isCustom = (key: string) => /^c\d+$/.test(key);
+// Colours for groups a person makes, in turn.
+const CUSTOM_COLOURS = ['#0891b2', '#7c3aed', '#db2777', '#65a30d', '#ea580c', '#2563eb', '#c026d3', '#059669'];
+const usual = (key: string): GroupInfo =>
+  GROUPS[key] ?? (isCustom(key) ? { label: key, colour: CUSTOM_COLOURS[Number(key.slice(1)) % CUSTOM_COLOURS.length], icon: Tag } : { label: key, colour: '#94a3b8', icon: Shapes });
 export const info = (key: string): GroupInfo => (NAMES[key] ? { ...usual(key), label: NAMES[key] } : usual(key));
+// The groups a payment can be moved to: the usual kinds of spending (Sent to family is
+// only for transfers) and the person's own.
+export const moveTo = () => [...SPENDING_KEYS.filter((k) => k !== 'family'), ...CUSTOM];
 
 interface MonthRow {
   month: string;
@@ -139,6 +149,7 @@ interface PersonalData {
   budgets: Record<string, number>;
   groupNames: Record<string, string>;
   groupRules: { id: number; name: string; group: string }[];
+  customGroups: { key: string; name: string }[];
   typical: Record<string, number>;
   months: MonthRow[];
   detail: {
@@ -216,7 +227,7 @@ export function Personal({ member = false }: { member?: boolean }) {
   if (error) return <Banner>{error.message}</Banner>;
   if (!data) return loading ? <Loading /> : null;
   const d = data.detail;
-  setGroupNames(data.groupNames);
+  setGroupNames(data.groupNames, data.customGroups);
 
   return (
     <>
@@ -706,9 +717,6 @@ function Donut({ slices, total, active, onPick, label }: { slices: { key: string
   );
 }
 
-// The kinds of spending a payment can be moved to. Sent to family is only for transfers.
-const MOVE_TO = SPENDING_KEYS.filter((k) => k !== 'family');
-
 function GroupDetail({ group, future, member, onChange, onClose }: { group: GroupRow; future: boolean; member: boolean; onChange: () => void; onClose: () => void }) {
   const gi = info(group.key);
   const [busy, setBusy] = useState<number | null>(null);
@@ -790,8 +798,8 @@ function GroupDetail({ group, future, member, onChange, onClose }: { group: Grou
                     onChange={(e) => move(t.id, e.target.value)}
                     className="w-28 shrink-0 rounded-md border border-slate-300 bg-white px-1.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-900"
                   >
-                    {!MOVE_TO.includes(group.key) && <option value={group.key}>{gi.label}</option>}
-                    {MOVE_TO.map((k) => (
+                    {!moveTo().includes(group.key) && <option value={group.key}>{gi.label}</option>}
+                    {moveTo().map((k) => (
                       <option key={k} value={k}>
                         {info(k).label}
                       </option>
@@ -833,6 +841,7 @@ function YourGroups({ data, onChange }: { data: PersonalData; onChange: () => vo
   const person = data.person?.id ?? null;
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [fresh, setFresh] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const run = async (action: () => Promise<unknown>) => {
@@ -852,10 +861,10 @@ function YourGroups({ data, onChange }: { data: PersonalData; onChange: () => vo
     run(() => post('/api/personal/names', { group, name: value && value.trim() && value.trim() !== usual(group).label ? value.trim() : null, person }));
   return (
     <Card title="Your groups" className="mb-5">
-      <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">Rename any group to suit you. Places you've put in a group for good are listed below it.</p>
+      <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">Rename any group, or make your own. Places you've put in a group for good are listed below it.</p>
       {error && <Banner>{error}</Banner>}
       <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-800">
-        {MOVE_TO.map((key) => {
+        {moveTo().map((key) => {
           const gi = info(key);
           const I = gi.icon;
           const places = data.groupRules.filter((r) => r.group === key);
@@ -885,9 +894,21 @@ function YourGroups({ data, onChange }: { data: PersonalData; onChange: () => vo
                   <>
                     <span className="flex-1 font-medium">
                       {gi.label}
-                      {data.groupNames[key] && <span className="ml-1.5 text-xs font-normal text-slate-400">was {usual(key).label}</span>}
+                      {data.groupNames[key] && !isCustom(key) && <span className="ml-1.5 text-xs font-normal text-slate-400">was {usual(key).label}</span>}
                     </span>
-                    {data.groupNames[key] && (
+                    {isCustom(key) && (
+                      <button
+                        type="button"
+                        className="text-xs text-rose-600 hover:underline dark:text-rose-400"
+                        disabled={busy}
+                        onClick={() => {
+                          if (window.confirm(`Remove ${gi.label}? Its payments go back to the groups they were in before.`)) run(() => post(`/api/personal/groups/${key}/delete`, { person }));
+                        }}
+                      >
+                        Remove
+                      </button>
+                    )}
+                    {data.groupNames[key] && !isCustom(key) && (
                       <button type="button" className="text-xs text-slate-500 hover:underline" disabled={busy} onClick={() => save(key, null)}>
                         Undo
                       </button>
@@ -927,6 +948,18 @@ function YourGroups({ data, onChange }: { data: PersonalData; onChange: () => vo
           );
         })}
       </ul>
+      <form
+        className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3 dark:border-slate-800"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (fresh.trim()) run(() => post('/api/personal/groups', { name: fresh.trim(), person }).then(() => setFresh('')));
+        }}
+      >
+        <Input value={fresh} maxLength={40} placeholder="A new group, such as Gym" aria-label="Name of a new group" onChange={(e) => setFresh(e.target.value)} className="min-w-0 flex-1" />
+        <Button type="submit" disabled={busy || !fresh.trim()}>
+          Add group
+        </Button>
+      </form>
     </Card>
   );
 }

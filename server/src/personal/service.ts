@@ -78,17 +78,21 @@ export interface SummaryOptions {
   person?: number | null;
 }
 
-// A group a person chose for a payment, with which way the money went.
-function chosenGroup(group: string | null | undefined): { flow: Flow; group: Group; guessed: boolean } | null {
+// A group a person chose for a payment, with which way the money went: one of the usual
+// ones, or one of their own (spending).
+function chosenGroup(group: string | null | undefined, custom: readonly string[] = []): { flow: Flow; group: Group; guessed: boolean } | null {
   if (!group) return null;
-  if ((SPENDING_GROUPS as readonly string[]).includes(group)) return { flow: 'out', group: group as Group, guessed: false };
+  if ((SPENDING_GROUPS as readonly string[]).includes(group) || custom.includes(group)) return { flow: 'out', group: group as Group, guessed: false };
   if ((INCOME_GROUPS as readonly string[]).includes(group)) return { flow: 'in', group: group as Group, guessed: false };
   return null;
 }
+// The most groups of their own a person can make.
+const MAX_CUSTOM = 20;
 
 export function personalService({ db, today = () => new Date().toISOString().slice(0, 10) }: { db: DatabaseSync; today?: () => string }) {
   function load(accountIds: number[], person: number | null = null): Tx[] {
     if (!accountIds.length) return [];
+    const custom = customKeys(person);
     // The places this person always puts in one group.
     const rules = new Map((db.prepare('SELECT match, group_key FROM personal_group_rules WHERE person_id = ?').all(person ?? 0) as Row[]).map((r) => [String(r.match), String(r.group_key)]));
     // Transfers to the owner's business accounts are money moved, not spent.
@@ -128,8 +132,8 @@ export function personalService({ db, today = () => new Date().toISOString().sli
         ? r.amount < 0
           ? { flow: 'out' as const, group: ((SPENDING_GROUPS as readonly string[]).includes(r.label_group) ? r.label_group : 'family') as Group, guessed: false }
           : { flow: 'in' as const, group: 'family_in' as Group, guessed: false }
-        : (chosenGroup(r.personal_group) ??
-          chosenGroup(rules.get(seriesKey(r.description, r.payee))) ??
+        : (chosenGroup(r.personal_group, custom) ??
+          chosenGroup(rules.get(seriesKey(r.description, r.payee)), custom) ??
           classify({ amount: r.amount, description: r.description, payee: r.payee, category: r.category }, business, income));
       return {
         id: r.id,
@@ -156,7 +160,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     Object.fromEntries((db.prepare('SELECT group_key, monthly FROM personal_budgets WHERE person_id = ?').all(person ?? 0) as Row[]).map((r) => [r.group_key, r.monthly]));
 
   function setBudget(person: number | null, group: string, monthly: number | null) {
-    if (!(SPENDING_GROUPS as readonly string[]).includes(group)) throw new Error('That is not a kind of spending.');
+    if (!(SPENDING_GROUPS as readonly string[]).includes(group) && !customKeys(person).includes(group)) throw new Error('That is not a kind of spending.');
     if (person !== null && !db.prepare('SELECT 1 FROM personal_people WHERE id = ?').get(person)) throw new Error('That person is not here.');
     if (monthly === null || monthly <= 0) db.prepare('DELETE FROM personal_budgets WHERE person_id = ? AND group_key = ?').run(person ?? 0, group);
     else
@@ -182,7 +186,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
   // their own accounts' payments, and never a transfer between family.
   // With everyTime, the group goes on every payment from the same place, now and later.
   function setGroup(person: number | null, transactionId: number, group: string | null, everyTime = false) {
-    if (group !== null && !chosenGroup(group)) throw new Error('That is not a kind of spending or income.');
+    if (group !== null && !chosenGroup(group, customKeys(person))) throw new Error('That is not a kind of spending or income.');
     const row = db
       .prepare("SELECT t.id, t.kind, t.description, t.payee FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id WHERE t.id = ? AND t.status = 'personal' AND a.person_id IS ?")
       .get(transactionId, person) as Row | undefined;
@@ -203,6 +207,51 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     db.prepare('UPDATE bank_transactions SET personal_group = NULL WHERE id = ?').run(transactionId);
   }
 
+  // Many of a person's own payments into one group at once: all of them or, if any
+  // isn't theirs, none.
+  function setGroups(person: number | null, transactionIds: number[], group: string | null) {
+    db.exec('BEGIN');
+    try {
+      for (const id of transactionIds) setGroup(person, id, group);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    return transactionIds.length;
+  }
+
+  // A person's own groups, made beside the usual ones.
+  const customGroups = (person: number | null) =>
+    (db.prepare('SELECT id, name FROM personal_custom_groups WHERE person_id = ? ORDER BY id').all(person ?? 0) as Row[]).map((r) => ({ key: `c${r.id}`, name: String(r.name) }));
+  function customKeys(person: number | null) {
+    return customGroups(person).map((g) => g.key);
+  }
+  function addCustomGroup(person: number | null, name: string) {
+    const mine = customGroups(person);
+    if (mine.length >= MAX_CUSTOM) throw new Error(`Up to ${MAX_CUSTOM} groups of your own.`);
+    if (mine.some((g) => g.name.toLowerCase() === name.toLowerCase())) throw new Error('You already have a group with that name.');
+    const result = db.prepare('INSERT INTO personal_custom_groups (person_id, name, created_at) VALUES (?, ?, ?)').run(person ?? 0, name, new Date().toISOString());
+    return `c${result.lastInsertRowid}`;
+  }
+  // A group of their own goes: its payments go back to where they'd otherwise be, and
+  // its places, budget and name go with it.
+  function removeCustomGroup(person: number | null, key: string) {
+    if (!customKeys(person).includes(key)) throw new Error('That is not one of your groups.');
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE bank_transactions SET personal_group = NULL WHERE personal_group = ?').run(key);
+      db.prepare('DELETE FROM personal_group_rules WHERE person_id = ? AND group_key = ?').run(person ?? 0, key);
+      db.prepare('DELETE FROM personal_budgets WHERE person_id = ? AND group_key = ?').run(person ?? 0, key);
+      db.prepare('DELETE FROM personal_group_names WHERE person_id = ? AND group_key = ?').run(person ?? 0, key);
+      db.prepare('DELETE FROM personal_custom_groups WHERE id = ? AND person_id = ?').run(Number(key.slice(1)), person ?? 0);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // A person's places that always go in one group.
   const groupRules = (person: number | null) =>
     (db.prepare('SELECT id, label, group_key FROM personal_group_rules WHERE person_id = ? ORDER BY label COLLATE NOCASE').all(person ?? 0) as Row[]).map((r) => ({
@@ -216,9 +265,16 @@ export function personalService({ db, today = () => new Date().toISOString().sli
   }
 
   // A person's own names for the kinds of money; null puts the usual name back.
-  const groupNames = (person: number | null): Record<string, string> =>
-    Object.fromEntries((db.prepare('SELECT group_key, name FROM personal_group_names WHERE person_id = ?').all(person ?? 0) as Row[]).map((r) => [String(r.group_key), String(r.name)]));
+  const groupNames = (person: number | null): Record<string, string> => ({
+    ...Object.fromEntries((db.prepare('SELECT group_key, name FROM personal_group_names WHERE person_id = ?').all(person ?? 0) as Row[]).map((r) => [String(r.group_key), String(r.name)])),
+    ...Object.fromEntries(customGroups(person).map((g) => [g.key, g.name])),
+  });
   function renameGroup(person: number | null, group: string, name: string | null) {
+    if (customKeys(person).includes(group)) {
+      if (name === null) throw new Error('A group of your own needs a name.');
+      db.prepare('UPDATE personal_custom_groups SET name = ? WHERE id = ? AND person_id = ?').run(name, Number(group.slice(1)), person ?? 0);
+      return groupNames(person);
+    }
     if (!chosenGroup(group)) throw new Error('That is not a kind of spending or income.');
     if (name === null) db.prepare('DELETE FROM personal_group_names WHERE person_id = ? AND group_key = ?').run(person ?? 0, group);
     else
@@ -227,24 +283,34 @@ export function personalService({ db, today = () => new Date().toISOString().sli
   }
 
   // A person's own payments whose name or description has every word searched for, or
-  // whose amount is the one searched for, newest first, with the group each is in.
-  function search(person: number | null, text: string, limit = 100) {
-    const query = text.trim();
+  // whose amount is the one searched for, between two dates and in one group if asked,
+  // newest first, with the group each is in.
+  function search(person: number | null, options: { text?: string | null; from?: string | null; to?: string | null; group?: string | null }, limit = 500) {
+    const query = (options.text ?? '').trim();
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (!words.length) return [];
+    const { from, to, group } = options;
+    if (!words.length && !group && !from && !to) return { results: [], total: 0 };
     const amount = /^\$?[\d,]+(\.\d{1,2})?$/.test(query) ? Number(query.replace(/[$,]/g, '')) : null;
-    return load(
+    const found = load(
       accounts(person).map((a) => a.id),
       person,
     )
       .filter((t) => {
+        if (from && t.posted < from) return false;
+        if (to && t.posted > to) return false;
+        if (group && t.group !== group) return false;
+        if (!words.length) return true;
         if (amount !== null && Math.abs(Math.abs(t.amount) - amount) < 0.005) return true;
         const hay = `${t.description} ${t.payee ?? ''} ${nameOf(t)}`.toLowerCase();
         return words.every((w) => hay.includes(w));
       })
-      .reverse()
-      .slice(0, limit)
-      .map((t) => ({ id: t.id, posted: t.posted, amount: t.amount, name: nameOf(t), description: t.description, account: t.account, flow: t.flow, group: t.group, family: Boolean(t.family) }));
+      .reverse();
+    return {
+      total: found.length,
+      results: found
+        .slice(0, limit)
+        .map((t) => ({ id: t.id, posted: t.posted, amount: t.amount, name: nameOf(t), description: t.description, account: t.account, flow: t.flow, group: t.group, family: Boolean(t.family) })),
+    };
   }
 
   // A category on money sent between family goes on both sides of the transfer.
@@ -308,6 +374,8 @@ export function personalService({ db, today = () => new Date().toISOString().sli
       person,
     );
     const plan = budgets(person);
+    // Spending groups: the usual ones and the person's own.
+    const SPENDING: string[] = [...SPENDING_GROUPS, ...customKeys(person)];
 
     // Totals for each month and group.
     const byMonth = new Map<string, Map<string, number>>();
@@ -318,15 +386,15 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     };
     for (const t of all) add(t.month, t.group, t.amount);
     const groupTotal = (m: string, g: string) => byMonth.get(m)?.get(g) || 0;
-    const spentIn = (m: string) => -SPENDING_GROUPS.reduce((s, g) => s + groupTotal(m, g), 0);
+    const spentIn = (m: string) => -SPENDING.reduce((s, g) => s + groupTotal(m, g), 0);
     const earnedIn = (m: string) => INCOME_GROUPS.reduce((s, g) => s + groupTotal(m, g), 0);
     const sum = (list: string[], f: (m: string) => number) => list.reduce((s, m) => s + f(m), 0);
 
     // Typical months: the median of the last six complete ones, so one tuition bill
     // or holiday doesn't set the pace.
     const recent = range(addMonths(thisMonth, -6), addMonths(thisMonth, -1));
-    const typical = Object.fromEntries(SPENDING_GROUPS.map((g) => [g, cents(Math.max(0, -median(recent.map((m) => groupTotal(m, g)))))])) as Record<SpendingGroup, number>;
-    const expected = (g: SpendingGroup) => plan[g] ?? typical[g];
+    const typical = Object.fromEntries(SPENDING.map((g) => [g, cents(Math.max(0, -median(recent.map((m) => groupTotal(m, g)))))])) as Record<string, number>;
+    const expected = (g: string) => plan[g] ?? typical[g];
 
     // Regular payments: the same payee in most of the last six months.
     const seriesMonths = new Map<string, { months: Map<string, number>; days: number[]; group: Group; flow: Flow; name: string }>();
@@ -367,7 +435,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     // and for each kind of spending the larger of what's gone out and what's expected.
     const projectedEarned = (m: string) =>
       m === thisMonth ? earnedIn(m) + recurringIncome.filter((r) => !r.paidThisMonth).reduce((s, r) => s + r.amount, 0) : recurringIncome.reduce((s, r) => s + r.amount, 0);
-    const projectedSpent = (m: string) => SPENDING_GROUPS.reduce((s, g) => s + (m === thisMonth ? Math.max(-groupTotal(m, g), expected(g)) : expected(g)), 0);
+    const projectedSpent = (m: string) => SPENDING.reduce((s, g) => s + (m === thisMonth ? Math.max(-groupTotal(m, g), expected(g)) : expected(g)), 0);
 
     // The months shown: a year back and six months ahead, or around what was picked.
     let first = addMonths(thisMonth, -12);
@@ -411,7 +479,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     const current = span.includes(thisMonth);
     const n = span.length;
     const inSpan = all.filter((t) => span.includes(t.month));
-    const groupRows = SPENDING_GROUPS.map((g) => {
+    const groupRows = SPENDING.map((g) => {
       const list = inSpan.filter((t) => t.group === g);
       const merchants = new Map<string, { name: string; amount: number; count: number }>();
       for (const t of list) {
@@ -472,12 +540,12 @@ export function personalService({ db, today = () => new Date().toISOString().sli
 
     // How the spending built up: day by day through a month, or month by month through
     // a year, beside a typical one.
-    const expectedTotal = SPENDING_GROUPS.reduce((s, g) => s + expected(g), 0);
+    const expectedTotal = SPENDING.reduce((s, g) => s + expected(g), 0);
     const hasPlan = Object.keys(plan).length > 0;
     let pace: { unit: 'day' | 'month'; days: number; actual: number[]; typical: number[]; budget: number | null };
     if (period === 'year') {
       let run = 0;
-      const typicalTotal = SPENDING_GROUPS.reduce((s, g) => s + typical[g], 0);
+      const typicalTotal = SPENDING.reduce((s, g) => s + typical[g], 0);
       pace = {
         unit: 'month',
         days: 12,
@@ -530,7 +598,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
 
     // The last twelve complete months together.
     const lastYear = range(addMonths(thisMonth, -12), addMonths(thisMonth, -1));
-    const yearSpent = SPENDING_GROUPS.map((g) => ({ key: g, amount: cents(-lastYear.reduce((s, m) => s + groupTotal(m, g), 0)) })).filter((g) => g.amount > 0);
+    const yearSpent = SPENDING.map((g) => ({ key: g, amount: cents(-lastYear.reduce((s, m) => s + groupTotal(m, g), 0)) })).filter((g) => g.amount > 0);
     const yearEarned = INCOME_GROUPS.map((g) => ({ key: g, amount: cents(lastYear.reduce((s, m) => s + groupTotal(m, g), 0)) })).filter((g) => g.amount > 0);
 
     const who = person === null ? null : (people().find((p) => p.id === person) ?? null);
@@ -551,6 +619,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
       selectedAccounts: picked.map((a) => a.id),
       budgets: plan,
       groupNames: groupNames(person),
+      customGroups: customGroups(person),
       groupRules: groupRules(person),
       typical,
       months,
@@ -586,7 +655,26 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     };
   }
 
-  return { summary, budgets, setBudget, accounts, people, labels, addLabel, setFamilyLabel, setGroup, groupRules, removeGroupRule, groupNames, renameGroup, search };
+  return {
+    summary,
+    budgets,
+    setBudget,
+    accounts,
+    people,
+    labels,
+    addLabel,
+    setFamilyLabel,
+    setGroup,
+    setGroups,
+    groupRules,
+    removeGroupRule,
+    groupNames,
+    renameGroup,
+    customGroups,
+    addCustomGroup,
+    removeCustomGroup,
+    search,
+  };
 }
 
 export type PersonalService = ReturnType<typeof personalService>;

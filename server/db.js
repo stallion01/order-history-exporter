@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 36;
+const SCHEMA_VERSION = 37;
 
 // Links from Amazon's top bar, side cart and footer (its own card ads among them), which
 // a details page read too early can mistake for the items bought.
@@ -672,6 +672,17 @@ const SCHEMA_V32 = `
 // only changes their budget, never the transaction's category in the books.
 // Each person's own names for the kinds of money in My money, and the places whose
 // payments they always put in one group. The owner is person 0.
+// Groups a person made for themselves in My money, beside the usual ones. A group's
+// key is "c" and its id.
+const SCHEMA_V37 = `
+  CREATE TABLE personal_custom_groups (
+    id INTEGER PRIMARY KEY,
+    person_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+`;
+
 const SCHEMA_V36 = `
   CREATE TABLE personal_group_names (
     person_id INTEGER NOT NULL,
@@ -1122,6 +1133,7 @@ function migrate(db, file) {
     if (version < 34) db.exec(SCHEMA_V34);
     if (version < 35) db.exec(SCHEMA_V35);
     if (version < 36) db.exec(SCHEMA_V36);
+    if (version < 37) db.exec(SCHEMA_V37);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {
