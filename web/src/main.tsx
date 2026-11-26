@@ -8,6 +8,7 @@ import { Layout } from './Layout';
 import { BusinessProvider } from './business';
 import { Accounts } from './pages/Accounts';
 import { Personal } from './pages/Personal';
+import { PersonalSearch } from './pages/PersonalSearch';
 import { Wealth } from './pages/Wealth';
 import { Retirement } from './pages/Retirement';
 import { Dashboard } from './pages/Dashboard';
@@ -60,7 +61,15 @@ function App() {
         get<{ categories: Meta['categories']; forms: Forms }>('/api/categories'),
         get<{ entities: Meta['entities'] }>('/api/entities'),
       ]);
-      setMeta({ stores: status.stores, payments: status.payments, zips: status.zips, places: status.places || [], years: status.years, categories: categories.categories, entities: entities.entities });
+      setMeta({
+        stores: status.stores,
+        payments: status.payments,
+        zips: status.zips,
+        places: status.places || [],
+        years: status.years,
+        categories: categories.categories,
+        entities: entities.entities,
+      });
       setForms(categories.forms);
     } catch (e) {
       setError((e as Error).message);
@@ -88,7 +97,11 @@ function App() {
     return (
       <>
         {error && <Banner>{error}</Banner>}
-        {auth.setupNeeded ? <SetupScreen onDone={(user) => setAuth({ loading: false, setupNeeded: false, user })} /> : <SignIn onDone={(user) => setAuth({ loading: false, setupNeeded: false, user })} />}
+        {auth.setupNeeded ? (
+          <SetupScreen onDone={(user) => setAuth({ loading: false, setupNeeded: false, user })} />
+        ) : (
+          <SignIn onDone={(user) => setAuth({ loading: false, setupNeeded: false, user })} />
+        )}
       </>
     );
   }
@@ -101,6 +114,7 @@ function App() {
           {error && <Banner>{error}</Banner>}
           <Routes>
             <Route path="/personal" element={<Personal member />} />
+            <Route path="/personal/search" element={<PersonalSearch />} />
             <Route path="/settings" element={settings} />
             <Route path="*" element={<Navigate to="/personal" replace />} />
           </Routes>
@@ -111,38 +125,39 @@ function App() {
 
   return (
     <BusinessProvider entities={meta?.entities ?? []}>
-    <Layout username={auth.user.username} onSignOut={signOut}>
-      {error && <Banner>{error}</Banner>}
-      <Routes>
-        <Route path="/" element={<Dashboard meta={meta} />} />
-        <Route path="/transactions" element={<Transactions meta={meta} />} />
-        <Route path="/review" element={<Review meta={meta} />} />
-        <Route path="/accounts" element={<Accounts meta={meta} />} />
-        <Route path="/personal" element={<Personal />} />
-        <Route path="/wealth" element={<Wealth />} />
-        <Route path="/retirement" element={<Retirement />} />
-        <Route path="/import" element={<Import />} />
-        <Route path="/import/:id" element={<ImportDetail />} />
-        <Route path="/more" element={<More />} />
-        <Route path="/receipts" element={<Receipts />} />
-        <Route path="/receipts/:id" element={<ReceiptDetail meta={meta} />} />
-        <Route path="/checks" element={<Receipts kind="check" />} />
-        <Route path="/checks/:id" element={<ReceiptDetail meta={meta} kind="check" />} />
-        <Route path="/stays" element={<Stays />} />
-        <Route path="/stays/:id" element={<StayDetail />} />
-        <Route path="/leases" element={<Leases />} />
-        <Route path="/hours" element={<Hours />} />
-        <Route path="/guests" element={<Guests />} />
-        <Route path="/profit-loss" element={<ProfitLoss />} />
-        <Route path="/leases/:id" element={<LeaseDetail />} />
-        <Route path="/orders" element={<Orders meta={meta} />} />
-        <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
-        <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />
-        <Route path="/year-end" element={<YearEnd meta={meta} forms={forms} />} />
-        <Route path="/settings" element={settings} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Layout>
+      <Layout username={auth.user.username} onSignOut={signOut}>
+        {error && <Banner>{error}</Banner>}
+        <Routes>
+          <Route path="/" element={<Dashboard meta={meta} />} />
+          <Route path="/transactions" element={<Transactions meta={meta} />} />
+          <Route path="/review" element={<Review meta={meta} />} />
+          <Route path="/accounts" element={<Accounts meta={meta} />} />
+          <Route path="/personal" element={<Personal />} />
+          <Route path="/personal/search" element={<PersonalSearch />} />
+          <Route path="/wealth" element={<Wealth />} />
+          <Route path="/retirement" element={<Retirement />} />
+          <Route path="/import" element={<Import />} />
+          <Route path="/import/:id" element={<ImportDetail />} />
+          <Route path="/more" element={<More />} />
+          <Route path="/receipts" element={<Receipts />} />
+          <Route path="/receipts/:id" element={<ReceiptDetail meta={meta} />} />
+          <Route path="/checks" element={<Receipts kind="check" />} />
+          <Route path="/checks/:id" element={<ReceiptDetail meta={meta} kind="check" />} />
+          <Route path="/stays" element={<Stays />} />
+          <Route path="/stays/:id" element={<StayDetail />} />
+          <Route path="/leases" element={<Leases />} />
+          <Route path="/hours" element={<Hours />} />
+          <Route path="/guests" element={<Guests />} />
+          <Route path="/profit-loss" element={<ProfitLoss />} />
+          <Route path="/leases/:id" element={<LeaseDetail />} />
+          <Route path="/orders" element={<Orders meta={meta} />} />
+          <Route path="/items" element={<Items meta={meta} onMetaChange={loadMeta} />} />
+          <Route path="/tax" element={<Tax meta={meta} forms={forms} onMetaChange={loadMeta} />} />
+          <Route path="/year-end" element={<YearEnd meta={meta} forms={forms} />} />
+          <Route path="/settings" element={settings} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
     </BusinessProvider>
   );
 }
@@ -152,5 +167,5 @@ createRoot(document.getElementById('root') as HTMLElement).render(
     <BrowserRouter>
       <App />
     </BrowserRouter>
-  </StrictMode>
+  </StrictMode>,
 );

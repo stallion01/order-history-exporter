@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
+  Search,
   ArrowLeftRight,
   Banknote,
   Briefcase,
@@ -78,7 +79,13 @@ const GROUPS: Record<string, GroupInfo> = {
 };
 // The kinds of spending, in order, for choosing what a family category counts as.
 const SPENDING_KEYS = ['home', 'bills', 'food', 'car', 'shopping', 'health', 'education', 'travel', 'subscriptions', 'people', 'family', 'taxes', 'cash', 'other'];
-const info = (key: string): GroupInfo => GROUPS[key] ?? { label: key, colour: '#94a3b8', icon: Shapes };
+// The person's own names for the groups, from what's on screen.
+let NAMES: Record<string, string> = {};
+export const setGroupNames = (names: Record<string, string> | undefined) => {
+  NAMES = names ?? {};
+};
+const usual = (key: string): GroupInfo => GROUPS[key] ?? { label: key, colour: '#94a3b8', icon: Shapes };
+export const info = (key: string): GroupInfo => (NAMES[key] ? { ...usual(key), label: NAMES[key] } : usual(key));
 
 interface MonthRow {
   month: string;
@@ -130,6 +137,8 @@ interface PersonalData {
   accounts: { id: number; name: string; institution: string | null; kind: string; balance: number | null; balanceDate: string | null; transactions: number }[];
   selectedAccounts: number[];
   budgets: Record<string, number>;
+  groupNames: Record<string, string>;
+  groupRules: { id: number; name: string; group: string }[];
   typical: Record<string, number>;
   months: MonthRow[];
   detail: {
@@ -207,6 +216,7 @@ export function Personal({ member = false }: { member?: boolean }) {
   if (error) return <Banner>{error.message}</Banner>;
   if (!data) return loading ? <Loading /> : null;
   const d = data.detail;
+  setGroupNames(data.groupNames);
 
   return (
     <>
@@ -224,7 +234,7 @@ export function Personal({ member = false }: { member?: boolean }) {
         <Banner tone="info">
           {plural(d.unsorted, 'payment')} in {spanName(data)} couldn't be sorted from the bank's description.{' '}
           {member ? (
-            <>Open Not sorted yet under Where it went and pick a group for each.</>
+            <>Open Not sorted yet under Where it went and pick a group for each; it can go for every payment from the same place.</>
           ) : (
             <>
               <Link className="font-medium underline" to={`/transactions?preset=all&kind=all&${d.unsortedIds.map((id) => `id=${id}`).join('&')}`}>
@@ -245,6 +255,7 @@ export function Personal({ member = false }: { member?: boolean }) {
       </div>
       {data.family.length > 0 && <BetweenFamily data={data} onChange={reload} readOnly={member} />}
       <Budgets data={data} onChange={reload} readOnly={false} />
+      <YourGroups data={data} onChange={reload} />
       <div className="mb-5 grid gap-5 lg:grid-cols-2">
         <Pace data={data} />
         <ComingUp data={data} />
@@ -311,6 +322,12 @@ function Hero({
         <div>
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-sm font-medium tracking-wide text-emerald-100 uppercase">{whose}</p>
+            <Link
+              to={`/personal/search${!member && data.person ? `?person=${data.person.id}` : ''}`}
+              className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-xs font-medium text-white hover:bg-white/25"
+            >
+              <Search className="size-3.5" aria-hidden /> Search
+            </Link>
             <div className="inline-flex rounded-full bg-white/10 p-0.5 text-xs font-medium" role="group" aria-label="Month or year">
               <button
                 type="button"
@@ -696,12 +713,13 @@ function GroupDetail({ group, future, member, onChange, onClose }: { group: Grou
   const gi = info(group.key);
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [everyTime, setEveryTime] = useState(true);
   // A family login sorts its own payments here; the owner gives a category in Transactions.
   const move = async (id: number, to: string) => {
     setBusy(id);
     setError(null);
     try {
-      await post('/api/personal/group', { transactionId: id, group: to });
+      await post('/api/personal/group', { transactionId: id, group: to, everyTime });
       onChange();
     } catch (err) {
       setError((err as Error).message);
@@ -749,6 +767,12 @@ function GroupDetail({ group, future, member, onChange, onClose }: { group: Grou
             </div>
           )}
           {error && <Banner>{error}</Banner>}
+          {member && (
+            <label className="mb-2 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+              <input type="checkbox" checked={everyTime} onChange={(e) => setEveryTime(e.target.checked)} className="size-4" />
+              Moving one moves every payment from the same place, now and later
+            </label>
+          )}
           <ul className="max-h-96 divide-y divide-slate-200/70 overflow-y-auto text-sm dark:divide-slate-700/70">
             {group.transactions.map((t) => (
               <li key={t.id} className="flex items-center gap-3 py-1.5">
@@ -798,6 +822,112 @@ function TxName({ id, member, className, title, children }: { id: number; member
     <Link to={`/transactions?id=${id}&preset=all&kind=all`} className={cx(className, 'hover:underline')} title={title}>
       {children}
     </Link>
+  );
+}
+
+/* ---------- Your groups ---------- */
+
+// Each person's own names for the kinds of spending, and the places they've put in one
+// group for good.
+function YourGroups({ data, onChange }: { data: PersonalData; onChange: () => void }) {
+  const person = data.person?.id ?? null;
+  const [editing, setEditing] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      setEditing(null);
+      onChange();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = (group: string, value: string | null) =>
+    run(() => post('/api/personal/names', { group, name: value && value.trim() && value.trim() !== usual(group).label ? value.trim() : null, person }));
+  return (
+    <Card title="Your groups" className="mb-5">
+      <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">Rename any group to suit you. Places you've put in a group for good are listed below it.</p>
+      {error && <Banner>{error}</Banner>}
+      <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-800">
+        {MOVE_TO.map((key) => {
+          const gi = info(key);
+          const I = gi.icon;
+          const places = data.groupRules.filter((r) => r.group === key);
+          return (
+            <li key={key} className="py-2">
+              <div className="flex items-center gap-2">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md" style={{ background: `${gi.colour}22`, color: gi.colour }}>
+                  <I className="size-4" aria-hidden />
+                </span>
+                {editing === key ? (
+                  <form
+                    className="flex flex-1 items-center gap-2"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      save(key, name);
+                    }}
+                  >
+                    <Input value={name} maxLength={40} autoFocus aria-label={`New name for ${gi.label}`} onChange={(e) => setName(e.target.value)} className="min-w-0 flex-1" />
+                    <Button type="submit" disabled={busy}>
+                      Save
+                    </Button>
+                    <button type="button" className="text-xs text-slate-500" onClick={() => setEditing(null)}>
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <span className="flex-1 font-medium">
+                      {gi.label}
+                      {data.groupNames[key] && <span className="ml-1.5 text-xs font-normal text-slate-400">was {usual(key).label}</span>}
+                    </span>
+                    {data.groupNames[key] && (
+                      <button type="button" className="text-xs text-slate-500 hover:underline" disabled={busy} onClick={() => save(key, null)}>
+                        Undo
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="rounded-md px-2 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950"
+                      onClick={() => {
+                        setEditing(key);
+                        setName(gi.label);
+                      }}
+                    >
+                      Rename
+                    </button>
+                  </>
+                )}
+              </div>
+              {places.length > 0 && (
+                <div className="mt-1.5 ml-9 flex flex-wrap gap-1.5">
+                  {places.map((p) => (
+                    <span key={p.id} className="inline-flex items-center gap-1 rounded-full bg-slate-100 py-0.5 pr-1 pl-2.5 text-xs dark:bg-slate-800">
+                      {p.name}
+                      <button
+                        type="button"
+                        aria-label={`Stop putting ${p.name} in ${gi.label}`}
+                        disabled={busy}
+                        onClick={() => run(() => post(`/api/personal/rules/${p.id}/delete`, { person }))}
+                        className="rounded-full p-0.5 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700"
+                      >
+                        <X className="size-3" aria-hidden />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
   );
 }
 

@@ -87,8 +87,10 @@ function chosenGroup(group: string | null | undefined): { flow: Flow; group: Gro
 }
 
 export function personalService({ db, today = () => new Date().toISOString().slice(0, 10) }: { db: DatabaseSync; today?: () => string }) {
-  function load(accountIds: number[]): Tx[] {
+  function load(accountIds: number[], person: number | null = null): Tx[] {
     if (!accountIds.length) return [];
+    // The places this person always puts in one group.
+    const rules = new Map((db.prepare('SELECT match, group_key FROM personal_group_rules WHERE person_id = ?').all(person ?? 0) as Row[]).map((r) => [String(r.match), String(r.group_key)]));
     // Transfers to the owner's business accounts are money moved, not spent.
     const business = businessPattern(
       (db.prepare("SELECT last4 FROM bank_accounts WHERE last4 IS NOT NULL AND (owner != 'personal' OR entity_id IS NOT NULL)").all() as Row[]).map((r) => String(r.last4)),
@@ -126,7 +128,9 @@ export function personalService({ db, today = () => new Date().toISOString().sli
         ? r.amount < 0
           ? { flow: 'out' as const, group: ((SPENDING_GROUPS as readonly string[]).includes(r.label_group) ? r.label_group : 'family') as Group, guessed: false }
           : { flow: 'in' as const, group: 'family_in' as Group, guessed: false }
-        : (chosenGroup(r.personal_group) ?? classify({ amount: r.amount, description: r.description, payee: r.payee, category: r.category }, business, income));
+        : (chosenGroup(r.personal_group) ??
+          chosenGroup(rules.get(seriesKey(r.description, r.payee))) ??
+          classify({ amount: r.amount, description: r.description, payee: r.payee, category: r.category }, business, income));
       return {
         id: r.id,
         posted: r.posted,
@@ -176,14 +180,71 @@ export function personalService({ db, today = () => new Date().toISOString().sli
   // A person sorting one of their own payments for their budget: a kind of spending or
   // of money in, or null to go back to the bank's description and the category. Only
   // their own accounts' payments, and never a transfer between family.
-  function setGroup(person: number | null, transactionId: number, group: string | null) {
+  // With everyTime, the group goes on every payment from the same place, now and later.
+  function setGroup(person: number | null, transactionId: number, group: string | null, everyTime = false) {
     if (group !== null && !chosenGroup(group)) throw new Error('That is not a kind of spending or income.');
     const row = db
-      .prepare("SELECT t.id, t.kind FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id WHERE t.id = ? AND t.status = 'personal' AND a.person_id IS ?")
+      .prepare("SELECT t.id, t.kind, t.description, t.payee FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id WHERE t.id = ? AND t.status = 'personal' AND a.person_id IS ?")
       .get(transactionId, person) as Row | undefined;
     if (!row) throw new Error('That payment is not one of yours.');
     if (row.kind !== 'normal') throw new Error('Money moved between accounts is sorted on its own.');
-    db.prepare('UPDATE bank_transactions SET personal_group = ? WHERE id = ?').run(group, transactionId);
+    if (!everyTime) {
+      db.prepare('UPDATE bank_transactions SET personal_group = ? WHERE id = ?').run(group, transactionId);
+      return;
+    }
+    const match = seriesKey(String(row.description), row.payee ?? null);
+    const label = nameOf({ payee: row.payee ?? null, description: String(row.description) });
+    if (group === null) db.prepare('DELETE FROM personal_group_rules WHERE person_id = ? AND match = ?').run(person ?? 0, match);
+    else
+      db.prepare(
+        'INSERT INTO personal_group_rules (person_id, match, label, group_key, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (person_id, match) DO UPDATE SET group_key = excluded.group_key, label = excluded.label',
+      ).run(person ?? 0, match, label, group, new Date().toISOString());
+    // The rule decides from now on, so this payment's own choice goes.
+    db.prepare('UPDATE bank_transactions SET personal_group = NULL WHERE id = ?').run(transactionId);
+  }
+
+  // A person's places that always go in one group.
+  const groupRules = (person: number | null) =>
+    (db.prepare('SELECT id, label, group_key FROM personal_group_rules WHERE person_id = ? ORDER BY label COLLATE NOCASE').all(person ?? 0) as Row[]).map((r) => ({
+      id: Number(r.id),
+      name: String(r.label),
+      group: String(r.group_key),
+    }));
+  function removeGroupRule(person: number | null, id: number) {
+    const result = db.prepare('DELETE FROM personal_group_rules WHERE id = ? AND person_id = ?').run(id, person ?? 0);
+    if (!result.changes) throw new Error('That is not one of yours.');
+  }
+
+  // A person's own names for the kinds of money; null puts the usual name back.
+  const groupNames = (person: number | null): Record<string, string> =>
+    Object.fromEntries((db.prepare('SELECT group_key, name FROM personal_group_names WHERE person_id = ?').all(person ?? 0) as Row[]).map((r) => [String(r.group_key), String(r.name)]));
+  function renameGroup(person: number | null, group: string, name: string | null) {
+    if (!chosenGroup(group)) throw new Error('That is not a kind of spending or income.');
+    if (name === null) db.prepare('DELETE FROM personal_group_names WHERE person_id = ? AND group_key = ?').run(person ?? 0, group);
+    else
+      db.prepare('INSERT INTO personal_group_names (person_id, group_key, name) VALUES (?, ?, ?) ON CONFLICT (person_id, group_key) DO UPDATE SET name = excluded.name').run(person ?? 0, group, name);
+    return groupNames(person);
+  }
+
+  // A person's own payments whose name or description has every word searched for, or
+  // whose amount is the one searched for, newest first, with the group each is in.
+  function search(person: number | null, text: string, limit = 100) {
+    const query = text.trim();
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return [];
+    const amount = /^\$?[\d,]+(\.\d{1,2})?$/.test(query) ? Number(query.replace(/[$,]/g, '')) : null;
+    return load(
+      accounts(person).map((a) => a.id),
+      person,
+    )
+      .filter((t) => {
+        if (amount !== null && Math.abs(Math.abs(t.amount) - amount) < 0.005) return true;
+        const hay = `${t.description} ${t.payee ?? ''} ${nameOf(t)}`.toLowerCase();
+        return words.every((w) => hay.includes(w));
+      })
+      .reverse()
+      .slice(0, limit)
+      .map((t) => ({ id: t.id, posted: t.posted, amount: t.amount, name: nameOf(t), description: t.description, account: t.account, flow: t.flow, group: t.group, family: Boolean(t.family) }));
   }
 
   // A category on money sent between family goes on both sides of the transfer.
@@ -242,7 +303,10 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     // Accounts picked that aren't this person's are ignored; none left means all of theirs.
     const picked = options.accounts?.length ? mine.filter((a) => options.accounts!.includes(a.id)) : [];
     const chosen = picked.length ? picked : mine;
-    const all = load(chosen.map((a) => a.id));
+    const all = load(
+      chosen.map((a) => a.id),
+      person,
+    );
     const plan = budgets(person);
 
     // Totals for each month and group.
@@ -486,6 +550,8 @@ export function personalService({ db, today = () => new Date().toISOString().sli
       accounts: mine,
       selectedAccounts: picked.map((a) => a.id),
       budgets: plan,
+      groupNames: groupNames(person),
+      groupRules: groupRules(person),
       typical,
       months,
       detail: {
@@ -520,7 +586,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
     };
   }
 
-  return { summary, budgets, setBudget, accounts, people, labels, addLabel, setFamilyLabel, setGroup };
+  return { summary, budgets, setBudget, accounts, people, labels, addLabel, setFamilyLabel, setGroup, groupRules, removeGroupRule, groupNames, renameGroup, search };
 }
 
 export type PersonalService = ReturnType<typeof personalService>;

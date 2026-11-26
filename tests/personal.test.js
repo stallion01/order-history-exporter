@@ -317,6 +317,35 @@ test('family members have their own accounts and budgets, and a login that sees 
   const ownerTx = mine.detail.groups.flatMap((g) => g.transactions ?? [])[0];
   assert.equal((await sort(ownerTx.id, 'food')).status, 400);
   assert.equal((await sort(kidTx.id, null)).status, 200);
+
+  // Their own names for the groups; the owner's stay as they were.
+  const rename = await asKid('/api/personal/names', { method: 'POST', body: JSON.stringify({ group: 'travel', name: 'Transportation' }) });
+  assert.deepEqual((await rename.json()).names, { travel: 'Transportation' });
+  assert.deepEqual((await (await asKid(`/api/personal?month=${lastMonth}`)).json()).groupNames, { travel: 'Transportation' });
+  assert.deepEqual((await get(`/api/personal?month=${lastMonth}`)).groupNames, {});
+  assert.equal((await asKid('/api/personal/names', { method: 'POST', body: JSON.stringify({ group: 'nope', name: 'X' }) })).status, 400);
+
+  // Every payment from one place in one group, now and later, until the rule goes.
+  const always = await asKid('/api/personal/group', { method: 'POST', body: JSON.stringify({ transactionId: kidTx.id, group: 'travel', everyTime: true }) });
+  assert.equal(always.status, 200);
+  const ruled = await (await asKid(`/api/personal?month=${lastMonth}`)).json();
+  assert.equal(ruled.detail.groups.find((g) => g.key === 'travel').amount, 100);
+  assert.equal(ruled.groupRules.length, 1);
+  assert.equal(ruled.groupRules[0].group, 'travel');
+  assert.deepEqual((await get(`/api/personal?month=${lastMonth}`)).groupRules, []);
+  const removed = await asKid(`/api/personal/rules/${ruled.groupRules[0].id}/delete`, { method: 'POST', body: '{}' });
+  assert.deepEqual((await removed.json()).rules, []);
+  assert.equal((await get(`/api/personal?month=${lastMonth}&person=${kid}`)).detail.groups.find((g) => g.key === 'travel')?.amount ?? 0, 0);
+
+  // Searching their own payments only.
+  const word = kidTx.name.split(/\s+/)[0];
+  const found = await (await asKid(`/api/personal/search?q=${encodeURIComponent(word)}`)).json();
+  assert.ok(found.results.some((r) => r.id === kidTx.id));
+  assert.deepEqual(found.names, { travel: 'Transportation' });
+  const byAmount = await (await asKid('/api/personal/search?q=100')).json();
+  assert.ok(byAmount.results.some((r) => r.id === kidTx.id));
+  const notTheirs = await (await asKid(`/api/personal/search?q=${encodeURIComponent(ownerTx.name)}`)).json();
+  assert.ok(!notTheirs.results.some((r) => r.id === ownerTx.id));
   assert.equal((await asKid(`/api/people/${kid}/delete`, { method: 'POST', body: '{}' })).status, 403);
   assert.equal((await asKid('/api/auth/state')).status, 200);
 

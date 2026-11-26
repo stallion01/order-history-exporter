@@ -60,14 +60,12 @@ test('planGaps reads only what was never read, plus a recent re-check', () => {
   const today = '2026-11-07';
   assert.deepEqual(OHE.planGaps({ from: '2024-01-01', to: '2024-12-31' }, [], today), [{ from: '2024-01-01', to: '2024-12-31' }]);
   assert.deepEqual(OHE.planGaps({ from: '2024-01-01', to: '2024-12-31' }, [{ from: '2024-01-01', to: '2024-12-31' }], today), []);
-  assert.deepEqual(
-    OHE.planGaps({ from: '2023-01-01', to: '2025-12-31' }, [{ from: '2024-01-01', to: '2024-12-31' }], today),
-    [{ from: '2025-01-01', to: '2025-12-31' }, { from: '2023-01-01', to: '2023-12-31' }]
-  );
-  assert.deepEqual(OHE.planGaps({ from: '2026-01-01', to: today }, [{ from: '2026-01-01', to: today }], today), [{ from: '2026-09-08', to: today }]);
-  assert.deepEqual(OHE.planGaps({ from: null, to: null }, [{ from: '0001-01-01', to: '2026-01-01' }], today), [
-    { from: '2026-01-02', to: today },
+  assert.deepEqual(OHE.planGaps({ from: '2023-01-01', to: '2025-12-31' }, [{ from: '2024-01-01', to: '2024-12-31' }], today), [
+    { from: '2025-01-01', to: '2025-12-31' },
+    { from: '2023-01-01', to: '2023-12-31' },
   ]);
+  assert.deepEqual(OHE.planGaps({ from: '2026-01-01', to: today }, [{ from: '2026-01-01', to: today }], today), [{ from: '2026-09-08', to: today }]);
+  assert.deepEqual(OHE.planGaps({ from: null, to: null }, [{ from: '0001-01-01', to: '2026-01-01' }], today), [{ from: '2026-01-02', to: today }]);
   assert.deepEqual(OHE.planGaps({ from: null, to: null }, [], today), [{ from: null, to: today }]);
 });
 
@@ -85,7 +83,10 @@ test('mergeRanges joins overlapping and touching ranges only', () => {
       { from: '2024-01-01', to: '2024-02-29' },
       { from: '2024-06-01', to: '2024-07-01' },
     ]),
-    [{ from: '2024-01-01', to: '2024-04-01' }, { from: '2024-06-01', to: '2024-07-01' }]
+    [
+      { from: '2024-01-01', to: '2024-04-01' },
+      { from: '2024-06-01', to: '2024-07-01' },
+    ],
   );
 });
 
@@ -136,9 +137,7 @@ test('rejects bad input, and search text cannot alter the query', async () => {
 test('saving keeps known values, and list pages do not thin out detailed items', async () => {
   const first = await post('/api/orders', {
     store: 'amazon',
-    orders: [
-      { orderId: 'A1', storeName: 'Amazon', date: '2024-03-01', total: 30, status: 'Shipped', fromList: true, detailUrl: 'https://www.amazon.com/d/A1', items: [{ name: 'Kettle' }] },
-    ],
+    orders: [{ orderId: 'A1', storeName: 'Amazon', date: '2024-03-01', total: 30, status: 'Shipped', fromList: true, detailUrl: 'https://www.amazon.com/d/A1', items: [{ name: 'Kettle' }] }],
   });
   assert.deepEqual(first, { inserted: 1, updated: 0 });
 
@@ -192,7 +191,11 @@ test('sync plan skips fully read ranges and lists only missing details', async (
   const range = '&from=2024-01-01&to=2024-12-31';
   const plan = await get(`/api/sync/plan?store=walmart${range}`);
   assert.deepEqual(plan.gaps, [], 'nothing to list again');
-  assert.deepEqual(plan.pendingDetails.map((o) => o.orderId), ['W2'], 'only the in-range order missing details');
+  assert.deepEqual(
+    plan.pendingDetails.map((o) => o.orderId),
+    ['W2'],
+    'only the in-range order missing details',
+  );
   assert.equal(plan.known.W1.detailDone, true);
   assert.equal(plan.known.W2.detailDone, false);
 
@@ -231,7 +234,10 @@ test('report totals, filters, and CSV come from the database', async () => {
   assert.equal((await get('/api/orders?store=homedepot&payment=none')).total, 1);
   assert.equal(report.totals.tax, 7);
   assert.equal(report.totals.items, 4);
-  assert.deepEqual(report.byMonth.map((m) => m.label), ['2025-01', '2025-03']);
+  assert.deepEqual(
+    report.byMonth.map((m) => m.label),
+    ['2025-01', '2025-03'],
+  );
   assert.equal(report.byPayment[0].label, 'Visa ending 1234');
   assert.equal(report.byZip[0].label, '02134');
 
@@ -279,10 +285,13 @@ test('ZIP+4 is kept as five digits, and spending is shown by city', async () => 
   assert.equal((await get('/api/orders?store=placemart&zip=01845-9999')).total, 2, 'a ZIP+4 filter matches its ZIP');
 
   const report = await get('/api/report?store=placemart');
-  assert.deepEqual(report.byCity.map((c) => [c.label, c.spend, c.keys]), [
-    ['North Andover, MA', 30, ['01845']],
-    ['Andover, MA', 12, ['01810']],
-  ]);
+  assert.deepEqual(
+    report.byCity.map((c) => [c.label, c.spend, c.keys]),
+    [
+      ['North Andover, MA', 30, ['01845']],
+      ['Andover, MA', 12, ['01810']],
+    ],
+  );
   const meta = await get('/api/status');
   assert.equal(meta.places.find((p) => p.zip === '01845').label, 'North Andover, MA');
 
@@ -290,7 +299,10 @@ test('ZIP+4 is kept as five digits, and spending is shown by city', async () => 
   await post('/api/places', { zip: '01845', name: 'Elm St rental' });
   await post('/api/places', { zip: '01810', name: 'Elm St rental' });
   const named = await get('/api/report?store=placemart');
-  assert.deepEqual(named.byCity.map((c) => [c.label, c.spend, c.keys]), [['Elm St rental', 42, ['01810', '01845']]]);
+  assert.deepEqual(
+    named.byCity.map((c) => [c.label, c.spend, c.keys]),
+    [['Elm St rental', 42, ['01810', '01845']]],
+  );
   await post('/api/places', { zip: '01845', name: '' });
   await post('/api/places', { zip: '01810', name: '' });
   assert.equal((await get('/api/places')).places.find((p) => p.zip === '01845').label, 'North Andover, MA');
@@ -367,23 +379,46 @@ test('categories: corrections apply exactly, then teach similar names', () => {
 
 test('allocate shares the total across items, including tax and shipping', () => {
   const sum = (shares) => Math.round(shares.reduce((acc, s) => acc + s.amount, 0) * 100) / 100;
-  const priced = allocate({ total: 110 }, [{ price: 10, quantity: 2 }, { price: 80, quantity: 1 }]);
-  assert.deepEqual(priced.map((s) => s.amount), [22, 88]);
+  const priced = allocate({ total: 110 }, [
+    { price: 10, quantity: 2 },
+    { price: 80, quantity: 1 },
+  ]);
+  assert.deepEqual(
+    priced.map((s) => s.amount),
+    [22, 88],
+  );
   assert.equal(priced[0].estimated, false);
 
-  const lineTotals = allocate({ total: 54 }, [{ price: 10.5, quantity: 2, line_total: 21 }, { price: 3.12, quantity: 10.5, line_total: 33 }]);
-  assert.deepEqual(lineTotals.map((s) => s.amount), [21, 33], 'a line total beats price times quantity');
+  const lineTotals = allocate({ total: 54 }, [
+    { price: 10.5, quantity: 2, line_total: 21 },
+    { price: 3.12, quantity: 10.5, line_total: 33 },
+  ]);
+  assert.deepEqual(
+    lineTotals.map((s) => s.amount),
+    [21, 33],
+    'a line total beats price times quantity',
+  );
 
   const thirds = allocate({ total: 10 }, [{ price: 1 }, { price: 1 }, { price: 1 }]);
   assert.equal(sum(thirds), 10, 'rounding never loses a cent');
 
   const even = allocate({ total: 30 }, [{ name: 'a' }, { name: 'b' }, { name: 'c', price: 5 }]);
-  assert.deepEqual(even.map((s) => s.amount), [10, 10, 10]);
+  assert.deepEqual(
+    even.map((s) => s.amount),
+    [10, 10, 10],
+  );
   assert.equal(even[0].estimated, true);
 
   assert.deepEqual(allocate({ total: 9 }, [{ name: 'a' }]), [{ amount: 9, estimated: false }], 'one item is the whole order');
-  assert.deepEqual(allocate({ total: -40 }, [{ price: 40 }, { price: 40 }]).map((s) => s.amount), [-20, -20], 'returns stay negative');
-  assert.deepEqual(allocate({ total: null }, [{ price: 4, quantity: 2 }, { name: 'x' }]).map((s) => s.amount), [8, null]);
+  assert.deepEqual(
+    allocate({ total: -40 }, [{ price: 40 }, { price: 40 }]).map((s) => s.amount),
+    [-20, -20],
+    'returns stay negative',
+  );
+  assert.deepEqual(
+    allocate({ total: null }, [{ price: 4, quantity: 2 }, { name: 'x' }]).map((s) => s.amount),
+    [8, null],
+  );
   assert.deepEqual(allocate({ total: 5 }, []), []);
 });
 
@@ -397,7 +432,9 @@ test('private address check lets in local networks only', () => {
 });
 
 test('network mode: reachable by LAN address, and public clients refused', async () => {
-  const lan = Object.values(os.networkInterfaces()).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
+  const lan = Object.values(os.networkInterfaces())
+    .flat()
+    .find((n) => n && n.family === 'IPv4' && !n.internal);
   const netDb = openDatabase(path.join(dir, 'net.db'));
   const net = buildApp({ db: netDb, tokens: { get: () => TOKEN, rotate: () => TOKEN }, allowedHosts: () => true });
   await net.listen({ port: 0, host: '0.0.0.0' });
@@ -428,9 +465,21 @@ test('category correction and marks survive re-reads, and rules decide status', 
   await post('/api/orders', {
     store: 'taxstore',
     orders: [
-      body('R1', '11111', 'Visa ending 1111', [{ name: 'Bleach Cleaner', price: 60 }, { name: 'Bath Towels', price: 40 }]),
+      body('R1', '11111', 'Visa ending 1111', [
+        { name: 'Bleach Cleaner', price: 60 },
+        { name: 'Bath Towels', price: 40 },
+      ]),
       body('R2', '22222', 'Visa ending 2222', [{ name: 'Whole Milk', price: 100 }]),
-      body('R3', '11111', 'Visa ending 2222', [{ name: 'Whole Milk', price: 50 }, { name: 'New Sofa', price: 3000 }], 3050),
+      body(
+        'R3',
+        '11111',
+        'Visa ending 2222',
+        [
+          { name: 'Whole Milk', price: 50 },
+          { name: 'New Sofa', price: 3000 },
+        ],
+        3050,
+      ),
     ],
   });
   const items = async (query = '') => (await get(`/api/items?store=taxstore&limit=200${query}`)).items;
@@ -451,7 +500,19 @@ test('category correction and marks survive re-reads, and rules decide status', 
 
   // An item's own mark beats the rules, and survives its order being re-read.
   await post('/api/items/status', { status: 'personal', items: [{ store: 'taxstore', orderId: 'R1', name: 'Bath Towels' }] });
-  await post('/api/orders', { store: 'taxstore', orders: [{ orderId: 'R1', detailRead: true, items: [{ name: 'Bleach Cleaner', price: 60 }, { name: 'Bath Towels', price: 40 }] }] });
+  await post('/api/orders', {
+    store: 'taxstore',
+    orders: [
+      {
+        orderId: 'R1',
+        detailRead: true,
+        items: [
+          { name: 'Bleach Cleaner', price: 60 },
+          { name: 'Bath Towels', price: 40 },
+        ],
+      },
+    ],
+  });
   rows = await items();
   assert.equal(find(rows, 'R1', 'Bath Towels').status, 'personal');
   assert.equal(find(rows, 'R1', 'Bath Towels').statusSource, 'you');
@@ -488,20 +549,35 @@ test('category correction and marks survive re-reads, and rules decide status', 
 
   // The tax report only contains business items, on the right form's lines.
   const c = await get('/api/tax/report?form=schedule-c&year=2024');
-  assert.deepEqual(c.lines.map((l) => [l.line, l.amount]), [['22', 60], ['27b', 3000]]);
+  assert.deepEqual(
+    c.lines.map((l) => [l.line, l.amount]),
+    [
+      ['22', 60],
+      ['27b', 3000],
+    ],
+  );
   assert.equal(c.totals.business, 3060);
   assert.equal(c.totals.personal, 190);
   assert.equal(c.review.length, 1, 'a large item is flagged');
   assert.equal(c.review[0].name, 'New Sofa');
   const e = await get('/api/tax/report?form=schedule-e&year=2024');
-  assert.deepEqual(e.lines.map((l) => [l.line, l.amount]), [['7', 60], ['19', 3000]]);
+  assert.deepEqual(
+    e.lines.map((l) => [l.line, l.amount]),
+    [
+      ['7', 60],
+      ['19', 3000],
+    ],
+  );
   assert.equal((await get('/api/tax/report?form=schedule-c&year=2019')).totals.businessItems, 0);
   assert.equal((await call('/api/tax/report?form=form-999')).status, 400);
 
   // A category with no line is reported, not silently dropped.
   await post('/api/items/status', { status: 'business', items: [{ store: 'taxstore', orderId: 'R2', name: 'Whole Milk' }] });
   const withGrocery = await get('/api/tax/report?form=schedule-c&year=2024');
-  assert.deepEqual(withGrocery.unassigned.map((u) => [u.category, u.amount]), [['Grocery', 100]]);
+  assert.deepEqual(
+    withGrocery.unassigned.map((u) => [u.category, u.amount]),
+    [['Grocery', 100]],
+  );
   await post('/api/categories', { name: 'Grocery', scheduleC: '24b', scheduleE: null });
   const mapped = await get('/api/tax/report?form=schedule-c&year=2024');
   assert.deepEqual(mapped.unassigned, []);
@@ -537,7 +613,9 @@ test('upgrading an older database keeps its orders, backs it up, and queues miss
   const file = path.join(dir, 'old.db');
   const old = new DatabaseSync(file);
   old.exec(`${SCHEMA_V1} PRAGMA user_version = 1;`);
-  const add = old.prepare("INSERT INTO orders (store, order_id, order_date, total, detail_url, detail_fetched_at, first_seen_at, updated_at) VALUES (?, ?, '2024-01-01', 5, 'https://x/y', '2024-02-02', 'a', 'a')");
+  const add = old.prepare(
+    "INSERT INTO orders (store, order_id, order_date, total, detail_url, detail_fetched_at, first_seen_at, updated_at) VALUES (?, ?, '2024-01-01', 5, 'https://x/y', '2024-02-02', 'a', 'a')",
+  );
   add.run('samsclub', 'NOPRICE');
   add.run('samsclub', 'PRICED');
   add.run('ebay', 'OTHER');
@@ -547,14 +625,14 @@ test('upgrading an older database keeps its orders, backs it up, and queues miss
 
   const upgraded = openDatabase(file);
   assert.equal(upgraded.listOrders({}).total, 3);
-  assert.ok(fs.existsSync(`${file}.before-v35.bak`), 'a backup was made first');
+  assert.ok(fs.existsSync(`${file}.before-v36.bak`), 'a backup was made first');
   const pending = upgraded.syncPlan('samsclub', { from: null, to: null }).pendingDetails.map((o) => o.orderId);
   assert.deepEqual(pending, ['NOPRICE'], 'only orders missing prices are read again');
   assert.equal(upgraded.syncPlan('ebay', { from: null, to: null }).pendingDetails.length, 0);
   assert.ok(upgraded.categoryList().some((c) => c.name === 'Cleaning Supplies'));
   upgraded.close();
 
-  const backup = new DatabaseSync(`${file}.before-v35.bak`, { readOnly: true });
+  const backup = new DatabaseSync(`${file}.before-v36.bak`, { readOnly: true });
   assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 3);
   backup.close();
 });
@@ -567,7 +645,9 @@ test('upgrading to v8 trims ZIP+4 in orders and rules', () => {
   const raw = new DatabaseSync(file);
   raw.exec("UPDATE orders SET delivery_zip = '02134-1234'");
   raw.exec("INSERT INTO tax_rules (field, value, status) VALUES ('zip', '02134-1234', 'business')");
-  raw.exec('ALTER TABLE bank_transactions DROP COLUMN personal_group; DROP TABLE guest_contacts; DROP TABLE hour_purchases; DROP TABLE hour_help; DROP TABLE hour_entries; DROP TABLE hour_recurring; DROP TABLE hour_tasks; DROP TABLE hour_people; DROP TABLE hour_logs; DROP INDEX receipts_kind; ALTER TABLE receipts DROP COLUMN account_id; ALTER TABLE receipts DROP COLUMN entity_source; ALTER TABLE receipts DROP COLUMN entity_id; ALTER TABLE receipts DROP COLUMN check_memo; ALTER TABLE receipts DROP COLUMN check_payer; ALTER TABLE receipts DROP COLUMN check_number; ALTER TABLE receipts DROP COLUMN kind; DROP TABLE security_classes; DROP TABLE holdings; DROP TABLE item_sorted; DROP TABLE account_balances; ALTER TABLE bank_accounts DROP COLUMN holder; ALTER TABLE bank_accounts DROP COLUMN invest_type; ALTER TABLE bank_transactions DROP COLUMN family_label_id; DROP TABLE personal_labels; ALTER TABLE users DROP COLUMN person_id; ALTER TABLE users DROP COLUMN role; ALTER TABLE bank_accounts DROP COLUMN person_id; DROP TABLE personal_people; DROP TABLE personal_budgets; DROP TABLE tax_return_lines; ALTER TABLE entities DROP COLUMN closed_on; DROP TABLE loan_payments; ALTER TABLE bank_accounts DROP COLUMN split_account_id; ALTER TABLE bank_accounts DROP COLUMN tracked_from; ALTER TABLE bank_accounts DROP COLUMN balance_manual; ALTER TABLE bank_transactions DROP COLUMN no_order; ALTER TABLE categories DROP COLUMN form_8825; ALTER TABLE categories DROP COLUMN form_1065; ALTER TABLE entities DROP COLUMN invested_on; ALTER TABLE entities DROP COLUMN invested; ALTER TABLE entities DROP COLUMN tax_form; ALTER TABLE entities DROP COLUMN activity; DROP TABLE lease_link_rejections; DROP TABLE lease_payments; DROP TABLE lease_months; DROP TABLE leases; DROP TABLE bank_import_lines; ALTER TABLE bank_imports DROP COLUMN layout; ALTER TABLE bank_imports DROP COLUMN file_key; ALTER TABLE stays DROP COLUMN expected_override; DROP TABLE stay_conflicts; DROP TABLE stay_link_rejections; DROP TABLE stay_deposits; DROP TABLE stay_payout_lines; DROP TABLE stay_payouts; DROP TABLE stays; DROP TABLE stay_properties; ALTER TABLE receipts DROP COLUMN checked_by; DROP TABLE capital_reviews; DROP TABLE assets; ALTER TABLE categories DROP COLUMN expense_class; DROP TABLE order_link_rejections; DROP TABLE order_links; DROP TABLE place_entities; DROP TABLE tx_entity_shares; ALTER TABLE bank_transactions DROP COLUMN entity_source; ALTER TABLE bank_transactions DROP COLUMN entity_id; ALTER TABLE bank_rules DROP COLUMN shared_entities; ALTER TABLE bank_rules DROP COLUMN entity_id; ALTER TABLE bank_accounts DROP COLUMN entity_id; DROP TABLE entities; DROP TABLE zip_names; PRAGMA user_version = 7');
+  raw.exec(
+    'DROP TABLE personal_group_rules; DROP TABLE personal_group_names; ALTER TABLE bank_transactions DROP COLUMN personal_group; DROP TABLE guest_contacts; DROP TABLE hour_purchases; DROP TABLE hour_help; DROP TABLE hour_entries; DROP TABLE hour_recurring; DROP TABLE hour_tasks; DROP TABLE hour_people; DROP TABLE hour_logs; DROP INDEX receipts_kind; ALTER TABLE receipts DROP COLUMN account_id; ALTER TABLE receipts DROP COLUMN entity_source; ALTER TABLE receipts DROP COLUMN entity_id; ALTER TABLE receipts DROP COLUMN check_memo; ALTER TABLE receipts DROP COLUMN check_payer; ALTER TABLE receipts DROP COLUMN check_number; ALTER TABLE receipts DROP COLUMN kind; DROP TABLE security_classes; DROP TABLE holdings; DROP TABLE item_sorted; DROP TABLE account_balances; ALTER TABLE bank_accounts DROP COLUMN holder; ALTER TABLE bank_accounts DROP COLUMN invest_type; ALTER TABLE bank_transactions DROP COLUMN family_label_id; DROP TABLE personal_labels; ALTER TABLE users DROP COLUMN person_id; ALTER TABLE users DROP COLUMN role; ALTER TABLE bank_accounts DROP COLUMN person_id; DROP TABLE personal_people; DROP TABLE personal_budgets; DROP TABLE tax_return_lines; ALTER TABLE entities DROP COLUMN closed_on; DROP TABLE loan_payments; ALTER TABLE bank_accounts DROP COLUMN split_account_id; ALTER TABLE bank_accounts DROP COLUMN tracked_from; ALTER TABLE bank_accounts DROP COLUMN balance_manual; ALTER TABLE bank_transactions DROP COLUMN no_order; ALTER TABLE categories DROP COLUMN form_8825; ALTER TABLE categories DROP COLUMN form_1065; ALTER TABLE entities DROP COLUMN invested_on; ALTER TABLE entities DROP COLUMN invested; ALTER TABLE entities DROP COLUMN tax_form; ALTER TABLE entities DROP COLUMN activity; DROP TABLE lease_link_rejections; DROP TABLE lease_payments; DROP TABLE lease_months; DROP TABLE leases; DROP TABLE bank_import_lines; ALTER TABLE bank_imports DROP COLUMN layout; ALTER TABLE bank_imports DROP COLUMN file_key; ALTER TABLE stays DROP COLUMN expected_override; DROP TABLE stay_conflicts; DROP TABLE stay_link_rejections; DROP TABLE stay_deposits; DROP TABLE stay_payout_lines; DROP TABLE stay_payouts; DROP TABLE stays; DROP TABLE stay_properties; ALTER TABLE receipts DROP COLUMN checked_by; DROP TABLE capital_reviews; DROP TABLE assets; ALTER TABLE categories DROP COLUMN expense_class; DROP TABLE order_link_rejections; DROP TABLE order_links; DROP TABLE place_entities; DROP TABLE tx_entity_shares; ALTER TABLE bank_transactions DROP COLUMN entity_source; ALTER TABLE bank_transactions DROP COLUMN entity_id; ALTER TABLE bank_rules DROP COLUMN shared_entities; ALTER TABLE bank_rules DROP COLUMN entity_id; ALTER TABLE bank_accounts DROP COLUMN entity_id; DROP TABLE entities; DROP TABLE zip_names; PRAGMA user_version = 7',
+  );
   raw.close();
   const second = openDatabase(file);
   assert.equal(second.raw.prepare('SELECT delivery_zip FROM orders').get().delivery_zip, '02134');
@@ -583,7 +663,9 @@ test('upgrading to v4 queues Amazon details to be read again', () => {
   first.close();
   const raw = new DatabaseSync(file);
   // Back to how a version 3 database looked, without the later bank tables.
-  raw.exec('ALTER TABLE bank_transactions DROP COLUMN personal_group; DROP TABLE guest_contacts; DROP TABLE hour_purchases; DROP TABLE hour_help; DROP TABLE hour_entries; DROP TABLE hour_recurring; DROP TABLE hour_tasks; DROP TABLE hour_people; DROP TABLE hour_logs; DROP INDEX receipts_kind; ALTER TABLE receipts DROP COLUMN account_id; ALTER TABLE receipts DROP COLUMN entity_source; ALTER TABLE receipts DROP COLUMN entity_id; ALTER TABLE receipts DROP COLUMN check_memo; ALTER TABLE receipts DROP COLUMN check_payer; ALTER TABLE receipts DROP COLUMN check_number; ALTER TABLE receipts DROP COLUMN kind; DROP TABLE security_classes; DROP TABLE holdings; DROP TABLE item_sorted; DROP TABLE account_balances; ALTER TABLE bank_accounts DROP COLUMN holder; ALTER TABLE bank_accounts DROP COLUMN invest_type; ALTER TABLE bank_transactions DROP COLUMN family_label_id; DROP TABLE personal_labels; ALTER TABLE users DROP COLUMN person_id; ALTER TABLE users DROP COLUMN role; ALTER TABLE bank_accounts DROP COLUMN person_id; DROP TABLE personal_people; DROP TABLE personal_budgets; DROP TABLE tax_return_lines; ALTER TABLE entities DROP COLUMN closed_on; DROP TABLE loan_payments; ALTER TABLE bank_accounts DROP COLUMN split_account_id; ALTER TABLE bank_accounts DROP COLUMN tracked_from; ALTER TABLE bank_accounts DROP COLUMN balance_manual; ALTER TABLE bank_transactions DROP COLUMN no_order; ALTER TABLE categories DROP COLUMN form_8825; ALTER TABLE categories DROP COLUMN form_1065; ALTER TABLE entities DROP COLUMN invested_on; ALTER TABLE entities DROP COLUMN invested; ALTER TABLE entities DROP COLUMN tax_form; ALTER TABLE entities DROP COLUMN activity; DROP TABLE lease_link_rejections; DROP TABLE lease_payments; DROP TABLE lease_months; DROP TABLE leases; DROP TABLE bank_import_lines; ALTER TABLE bank_imports DROP COLUMN layout; ALTER TABLE bank_imports DROP COLUMN file_key; ALTER TABLE stays DROP COLUMN expected_override; DROP TABLE stay_conflicts; DROP TABLE stay_link_rejections; DROP TABLE stay_deposits; DROP TABLE stay_payout_lines; DROP TABLE stay_payouts; DROP TABLE stays; DROP TABLE stay_properties; ALTER TABLE receipts DROP COLUMN checked_by; DROP TABLE capital_reviews; DROP TABLE assets; ALTER TABLE categories DROP COLUMN expense_class; DROP TABLE order_link_rejections; DROP TABLE order_links; DROP TABLE place_entities; DROP TABLE tx_entity_shares; ALTER TABLE bank_transactions DROP COLUMN entity_source; ALTER TABLE bank_transactions DROP COLUMN entity_id; ALTER TABLE bank_rules DROP COLUMN shared_entities; ALTER TABLE bank_rules DROP COLUMN entity_id; ALTER TABLE bank_accounts DROP COLUMN entity_id; DROP TABLE entities; DROP TABLE zip_names; DROP TABLE receipts; DROP TABLE bank_import_rows; DROP TABLE bank_tx_sources; DROP TABLE bank_rules; DROP TABLE bank_imports; DROP TABLE bank_transactions; DROP TABLE bank_accounts; DROP TABLE csv_layouts; DROP TABLE app_settings;');
+  raw.exec(
+    'DROP TABLE personal_group_rules; DROP TABLE personal_group_names; ALTER TABLE bank_transactions DROP COLUMN personal_group; DROP TABLE guest_contacts; DROP TABLE hour_purchases; DROP TABLE hour_help; DROP TABLE hour_entries; DROP TABLE hour_recurring; DROP TABLE hour_tasks; DROP TABLE hour_people; DROP TABLE hour_logs; DROP INDEX receipts_kind; ALTER TABLE receipts DROP COLUMN account_id; ALTER TABLE receipts DROP COLUMN entity_source; ALTER TABLE receipts DROP COLUMN entity_id; ALTER TABLE receipts DROP COLUMN check_memo; ALTER TABLE receipts DROP COLUMN check_payer; ALTER TABLE receipts DROP COLUMN check_number; ALTER TABLE receipts DROP COLUMN kind; DROP TABLE security_classes; DROP TABLE holdings; DROP TABLE item_sorted; DROP TABLE account_balances; ALTER TABLE bank_accounts DROP COLUMN holder; ALTER TABLE bank_accounts DROP COLUMN invest_type; ALTER TABLE bank_transactions DROP COLUMN family_label_id; DROP TABLE personal_labels; ALTER TABLE users DROP COLUMN person_id; ALTER TABLE users DROP COLUMN role; ALTER TABLE bank_accounts DROP COLUMN person_id; DROP TABLE personal_people; DROP TABLE personal_budgets; DROP TABLE tax_return_lines; ALTER TABLE entities DROP COLUMN closed_on; DROP TABLE loan_payments; ALTER TABLE bank_accounts DROP COLUMN split_account_id; ALTER TABLE bank_accounts DROP COLUMN tracked_from; ALTER TABLE bank_accounts DROP COLUMN balance_manual; ALTER TABLE bank_transactions DROP COLUMN no_order; ALTER TABLE categories DROP COLUMN form_8825; ALTER TABLE categories DROP COLUMN form_1065; ALTER TABLE entities DROP COLUMN invested_on; ALTER TABLE entities DROP COLUMN invested; ALTER TABLE entities DROP COLUMN tax_form; ALTER TABLE entities DROP COLUMN activity; DROP TABLE lease_link_rejections; DROP TABLE lease_payments; DROP TABLE lease_months; DROP TABLE leases; DROP TABLE bank_import_lines; ALTER TABLE bank_imports DROP COLUMN layout; ALTER TABLE bank_imports DROP COLUMN file_key; ALTER TABLE stays DROP COLUMN expected_override; DROP TABLE stay_conflicts; DROP TABLE stay_link_rejections; DROP TABLE stay_deposits; DROP TABLE stay_payout_lines; DROP TABLE stay_payouts; DROP TABLE stays; DROP TABLE stay_properties; ALTER TABLE receipts DROP COLUMN checked_by; DROP TABLE capital_reviews; DROP TABLE assets; ALTER TABLE categories DROP COLUMN expense_class; DROP TABLE order_link_rejections; DROP TABLE order_links; DROP TABLE place_entities; DROP TABLE tx_entity_shares; ALTER TABLE bank_transactions DROP COLUMN entity_source; ALTER TABLE bank_transactions DROP COLUMN entity_id; ALTER TABLE bank_rules DROP COLUMN shared_entities; ALTER TABLE bank_rules DROP COLUMN entity_id; ALTER TABLE bank_accounts DROP COLUMN entity_id; DROP TABLE entities; DROP TABLE zip_names; DROP TABLE receipts; DROP TABLE bank_import_rows; DROP TABLE bank_tx_sources; DROP TABLE bank_rules; DROP TABLE bank_imports; DROP TABLE bank_transactions; DROP TABLE bank_accounts; DROP TABLE csv_layouts; DROP TABLE app_settings;',
+  );
   raw.exec('PRAGMA user_version = 3');
   raw.close();
   const second = openDatabase(file);
@@ -601,7 +683,14 @@ test('upgrading to v30 drops Amazon page links saved as items and reads those or
   const first = openDatabase(file);
   first.saveOrders('amazon', [
     { orderId: 'BAD', date: '2025-05-01', total: 84.74, subtotal: 30, detailUrl: 'https://www.amazon.com/gp/your-account/order-details?orderID=BAD', detailRead: true },
-    { orderId: 'GOOD', date: '2025-05-02', total: 12, subtotal: 11, detailRead: true, items: [{ name: 'Kettle', price: 11, url: 'https://www.amazon.com/gp/product/B000000001/ref=ppx_yo_dt_b_asin_title' }] },
+    {
+      orderId: 'GOOD',
+      date: '2025-05-02',
+      total: 12,
+      subtotal: 11,
+      detailRead: true,
+      items: [{ name: 'Kettle', price: 11, url: 'https://www.amazon.com/gp/product/B000000001/ref=ppx_yo_dt_b_asin_title' }],
+    },
   ]);
   first.close();
   const raw = new DatabaseSync(file);
@@ -610,23 +699,38 @@ test('upgrading to v30 drops Amazon page links saved as items and reads those or
   add.run(0, 'Example Crew Socks', 30, 'https://www.amazon.com/gp/product/B000000002/ref=ewc_title_delete1?smid=X&psc=1');
   add.run(1, 'Amazon Secured Card', null, 'https://www.amazon.com/dp/product/B000000003?plattr=SCFOOT&ref_=footer_ACB');
   add.run(2, 'Amazon Business Card', null, 'https://www.amazon.com/dp/B000000004?plattr=ACOMFO&ie=UTF-8&ref_=footer_pay_sbcc');
-  raw.exec('ALTER TABLE bank_transactions DROP COLUMN personal_group; DROP TABLE guest_contacts; DROP TABLE hour_purchases; DROP TABLE hour_help; DROP TABLE hour_entries; DROP TABLE hour_recurring; DROP TABLE hour_tasks; DROP TABLE hour_people; DROP TABLE hour_logs; DROP INDEX receipts_kind; ALTER TABLE receipts DROP COLUMN account_id; ALTER TABLE receipts DROP COLUMN entity_source; ALTER TABLE receipts DROP COLUMN entity_id; ALTER TABLE receipts DROP COLUMN check_memo; ALTER TABLE receipts DROP COLUMN check_payer; ALTER TABLE receipts DROP COLUMN check_number; ALTER TABLE receipts DROP COLUMN kind; DROP TABLE security_classes; DROP TABLE holdings; PRAGMA user_version = 29');
+  raw.exec(
+    'DROP TABLE personal_group_rules; DROP TABLE personal_group_names; ALTER TABLE bank_transactions DROP COLUMN personal_group; DROP TABLE guest_contacts; DROP TABLE hour_purchases; DROP TABLE hour_help; DROP TABLE hour_entries; DROP TABLE hour_recurring; DROP TABLE hour_tasks; DROP TABLE hour_people; DROP TABLE hour_logs; DROP INDEX receipts_kind; ALTER TABLE receipts DROP COLUMN account_id; ALTER TABLE receipts DROP COLUMN entity_source; ALTER TABLE receipts DROP COLUMN entity_id; ALTER TABLE receipts DROP COLUMN check_memo; ALTER TABLE receipts DROP COLUMN check_payer; ALTER TABLE receipts DROP COLUMN check_number; ALTER TABLE receipts DROP COLUMN kind; DROP TABLE security_classes; DROP TABLE holdings; PRAGMA user_version = 29',
+  );
   raw.close();
 
   const second = openDatabase(file);
   const order = (id) => second.raw.prepare("SELECT detail_fetched_at, subtotal, total FROM orders WHERE store = 'amazon' AND order_id = ?").get(id);
-  const names = (id) => second.raw.prepare("SELECT name FROM items WHERE store = 'amazon' AND order_id = ? ORDER BY position").all(id).map((r) => r.name);
+  const names = (id) =>
+    second.raw
+      .prepare("SELECT name FROM items WHERE store = 'amazon' AND order_id = ? ORDER BY position")
+      .all(id)
+      .map((r) => r.name);
   assert.deepEqual(names('BAD'), []);
   assert.deepEqual([order('BAD').detail_fetched_at, order('BAD').subtotal, order('BAD').total], [null, null, 84.74], "the side cart's subtotal goes, the order total stays");
   assert.deepEqual(names('GOOD'), ['Kettle']);
   assert.ok(order('GOOD').detail_fetched_at, 'orders read properly are left alone');
-  assert.deepEqual(second.syncPlan('amazon', { from: '2025-01-01', to: '2025-12-31' }).pendingDetails.map((o) => o.orderId), ['BAD']);
+  assert.deepEqual(
+    second.syncPlan('amazon', { from: '2025-01-01', to: '2025-12-31' }).pendingDetails.map((o) => o.orderId),
+    ['BAD'],
+  );
 
   // An extension that still sends them can't put them back.
-  second.saveOrders('amazon', [{ orderId: 'BAD', detailRead: true, items: [
-    { name: 'Amazon Secured Card', url: 'https://www.amazon.com/dp/product/B000000003?plattr=SCFOOT&ref_=footer_ACB' },
-    { name: 'Desk Lamp', price: 84.74, url: 'https://www.amazon.com/gp/product/B000000005/ref=ppx_yo_dt_b_asin_title' },
-  ] }]);
+  second.saveOrders('amazon', [
+    {
+      orderId: 'BAD',
+      detailRead: true,
+      items: [
+        { name: 'Amazon Secured Card', url: 'https://www.amazon.com/dp/product/B000000003?plattr=SCFOOT&ref_=footer_ACB' },
+        { name: 'Desk Lamp', price: 84.74, url: 'https://www.amazon.com/gp/product/B000000005/ref=ppx_yo_dt_b_asin_title' },
+      ],
+    },
+  ]);
   assert.deepEqual(names('BAD'), ['Desk Lamp']);
   second.close();
 });

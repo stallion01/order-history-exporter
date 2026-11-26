@@ -53,17 +53,60 @@ export function personalRoutes(app: FastifyInstance, personal: PersonalService) 
   // only. A family login may do this for their own payments.
   app.post('/api/personal/group', async (request) => {
     const result = z
-      .object({ transactionId: z.number().int().positive(), group: z.string().min(1).max(40).nullable(), person: z.number().int().positive().nullable().optional() })
+      .object({
+        transactionId: z.number().int().positive(),
+        group: z.string().min(1).max(40).nullable(),
+        everyTime: z.boolean().optional(),
+        person: z.number().int().positive().nullable().optional(),
+      })
       .safeParse(request.body);
     if (!result.success) throw new HttpError(400, 'Which payment, and which kind of spending?');
     const person = personFor(request, result.data.person);
     try {
-      personal.setGroup(person, result.data.transactionId, result.data.group);
+      personal.setGroup(person, result.data.transactionId, result.data.group, result.data.everyTime ?? false);
       (request as unknown as AuthedRequest).audit('personal.group', { ...result.data, person });
       return { ok: true };
     } catch (err) {
       throw new HttpError(400, (err as Error).message);
     }
+  });
+
+  // A place that always goes in one group, no longer.
+  app.post('/api/personal/rules/:id/delete', async (request) => {
+    const id = Number((request.params as { id: string }).id);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Which one?');
+    const body = z.object({ person: z.number().int().positive().nullable().optional() }).safeParse(request.body ?? {});
+    const person = personFor(request, body.success ? body.data.person : null);
+    try {
+      personal.removeGroupRule(person, id);
+      (request as unknown as AuthedRequest).audit('personal.rule.delete', { id, person });
+      return { rules: personal.groupRules(person) };
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+  });
+
+  // A person's own name for a kind of money, or null for the usual one.
+  app.post('/api/personal/names', async (request) => {
+    const result = z.object({ group: z.string().min(1).max(40), name: z.string().trim().min(1).max(40).nullable(), person: z.number().int().positive().nullable().optional() }).safeParse(request.body);
+    if (!result.success) throw new HttpError(400, 'A name is up to 40 letters.');
+    const person = personFor(request, result.data.person);
+    try {
+      const names = personal.renameGroup(person, result.data.group, result.data.name);
+      (request as unknown as AuthedRequest).audit('personal.name', { ...result.data, person });
+      return { names };
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+  });
+
+  // Searching a person's own payments.
+  app.get('/api/personal/search', async (request) => {
+    const query = queryOf(request.query);
+    const text = (query.get('q') || '').slice(0, 80);
+    const person = personFor(request, query.get('person'));
+    if (person !== null && !personal.people().some((p) => p.id === person)) throw new HttpError(404, 'That person is not here.');
+    return { results: personal.search(person, text), names: personal.groupNames(person) };
   });
 
   // Categories for money sent between family, and choosing one for a transfer. The

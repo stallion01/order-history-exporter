@@ -18,6 +18,7 @@ import {
   Package,
   Receipt,
   ScrollText,
+  Search,
   Settings,
   Sunset,
   Tags,
@@ -93,7 +94,8 @@ const PHONE_NAV = [...NAV.filter((n) => n.phone), { to: '/more', label: 'More', 
 
 // A family member's login: their own money and their sign-in settings, nothing else.
 const MEMBER_NAV: NavEntry[] = [
-  { to: '/personal', label: 'My money', icon: Wallet, phone: true },
+  { to: '/personal', label: 'My money', icon: Wallet, phone: true, end: true },
+  { to: '/personal/search', label: 'Search', icon: Search, phone: true },
   { to: '/settings', label: 'Settings', icon: Settings, phone: true },
 ];
 
