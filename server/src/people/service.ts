@@ -7,7 +7,9 @@ import { HttpError } from '../params';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>;
 
-export function peopleService({ db, auth }: { db: DatabaseSync; auth: AuthStore }) {
+// makePersonal: sets an account's owner to personal and re-files its transactions, so
+// a shared account given to someone counts in their budget.
+export function peopleService({ db, auth, makePersonal = () => {} }: { db: DatabaseSync; auth: AuthStore; makePersonal?: (accountId: number) => void }) {
   const exists = (id: number) => {
     if (!db.prepare('SELECT 1 FROM personal_people WHERE id = ?').get(id)) throw new HttpError(404, 'That person is not here.');
   };
@@ -60,6 +62,9 @@ export function peopleService({ db, auth }: { db: DatabaseSync; auth: AuthStore 
       db.prepare('UPDATE bank_accounts SET person_id = NULL WHERE person_id = ?').run(id);
       const set = db.prepare('UPDATE bank_accounts SET person_id = ? WHERE id = ?');
       for (const account of change.accounts) set.run(id, account);
+      // A family member's account is their own money: a shared one becomes personal.
+      const owners = new Map(accounts().map((a) => [a.id, a.owner]));
+      for (const account of change.accounts) if (owners.get(account) === 'mixed') makePersonal(account);
     }
   }
 

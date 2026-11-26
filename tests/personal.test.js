@@ -18,8 +18,7 @@ let base;
 let cookie;
 let checkingId;
 
-const call = (route, options = {}) =>
-  fetch(`${base}${route}`, { ...options, headers: { cookie, 'x-requested-with': 'expense-hub', ...(options.body ? { 'content-type': 'application/json' } : {}) } });
+const call = (route, options = {}) => fetch(`${base}${route}`, { ...options, headers: { cookie, 'x-requested-with': 'expense-hub', ...(options.body ? { 'content-type': 'application/json' } : {}) } });
 const post = async (route, body = {}) => {
   const response = await call(route, { method: 'POST', body: JSON.stringify(body) });
   const data = await response.json();
@@ -155,7 +154,13 @@ test('typical months, regular payments and the year come from the history', asyn
   assert.ok(data.recurring.some((r) => r.group === 'home' && r.amount === -2000 && r.paidThisMonth));
   // A side gig paid on the 3rd and the 25th is two regular payments, not one of double.
   const gig = data.recurring.filter((r) => r.name === 'Side Gig LLC');
-  assert.deepEqual(gig.map((r) => [r.day, r.amount]), [[3, 250], [25, 250]]);
+  assert.deepEqual(
+    gig.map((r) => [r.day, r.amount]),
+    [
+      [3, 250],
+      [25, 250],
+    ],
+  );
   // A brokerage move is never a regular bill.
   assert.ok(!data.recurring.some((r) => r.group === 'invested'));
   assert.equal(data.last12.to, lastMonth);
@@ -245,7 +250,10 @@ test('family members have their own accounts and budgets, and a login that sees 
   assert.deepEqual(mine.people, [{ id: kid, name: 'Kid Example' }]);
   const theirs = await get(`/api/personal?month=${lastMonth}&person=${kid}`);
   assert.deepEqual(theirs.person, { id: kid, name: 'Kid Example' });
-  assert.deepEqual(theirs.accounts.map((a) => a.id), [cardId]);
+  assert.deepEqual(
+    theirs.accounts.map((a) => a.id),
+    [cardId],
+  );
   assert.equal(theirs.detail.spent, 100);
   assert.equal((await call('/api/personal?person=999')).status, 404);
 
@@ -276,7 +284,11 @@ test('family members have their own accounts and budgets, and a login that sees 
   // Their own money only: asking for the owner's, or someone else's account, still gets theirs.
   for (const route of [`/api/personal?month=${lastMonth}`, `/api/personal?month=${lastMonth}&person=me`, `/api/personal?month=${lastMonth}&accounts=${checkingId}`]) {
     const data = await (await asKid(route)).json();
-    assert.deepEqual(data.accounts.map((a) => a.id), [cardId], route);
+    assert.deepEqual(
+      data.accounts.map((a) => a.id),
+      [cardId],
+      route,
+    );
     assert.deepEqual(data.people, []);
     assert.equal(data.detail.spent, 100);
   }
@@ -301,6 +313,30 @@ test('family members have their own accounts and budgets, and a login that sees 
   assert.equal((await signIn('a new kid password')).response.status, 401);
 });
 
+test('a shared account given to a family member becomes theirs, and counts in their budget', async () => {
+  await post('/api/bank/import', {
+    content: ['Date,Description,Amount', `${usDate(lastMonth, 9)},CORNER BOOKSHOP,-42.00`, ''].join('\n'),
+    fileName: 'shared.csv',
+    newAccount: { name: 'Shared card', kind: 'credit', owner: 'mixed' },
+  });
+  let { accounts } = await get('/api/bank/accounts');
+  const shared = accounts.find((a) => a.name === 'Shared card');
+  const { id: kid } = await post('/api/people', { name: 'Card Example' });
+  assert.equal((await get(`/api/personal?month=${lastMonth}&person=${kid}`)).accounts.length, 0);
+
+  await post(`/api/people/${kid}`, { accounts: [shared.id] });
+  ({ accounts } = await get('/api/bank/accounts'));
+  assert.equal(accounts.find((a) => a.id === shared.id).owner, 'personal');
+  const theirs = await get(`/api/personal?month=${lastMonth}&person=${kid}`);
+  assert.deepEqual(
+    theirs.accounts.map((a) => a.id),
+    [shared.id],
+  );
+  assert.equal(theirs.detail.spent, 42);
+  await post(`/api/people/${kid}/delete`);
+  await post(`/api/bank/accounts/${shared.id}`, { owner: 'mixed' });
+});
+
 test('money sent between family counts for both, and takes a category on both sides', async () => {
   // The owner's checking sends 500 to a second checking account, matched as a transfer.
   await post('/api/bank/import', {
@@ -315,7 +351,10 @@ test('money sent between family counts for both, and takes a category on both si
   });
   const { transactions } = await get('/api/bank/transactions?preset=all&kind=all&q=ONLINE%20TRANSFER');
   assert.equal(transactions.length, 2);
-  assert.ok(transactions.every((t) => t.kind === 'transfer' && t.transferId), 'the two sides are paired as a transfer');
+  assert.ok(
+    transactions.every((t) => t.kind === 'transfer' && t.transferId),
+    'the two sides are paired as a transfer',
+  );
   const sent = transactions.find((t) => t.amount < 0);
 
   // While both accounts are the owner's, it's money moved between their own accounts.
@@ -332,12 +371,15 @@ test('money sent between family counts for both, and takes a category on both si
   assert.equal(mine.detail.groups.find((g) => g.key === 'family').amount, 500);
   assert.deepEqual(
     mine.family.map((r) => [r.name, r.amount, r.label]),
-    [['To Sib Example', -500, null]]
+    [['To Sib Example', -500, null]],
   );
   let theirs = await get(`/api/personal?month=${lastMonth}&person=${sib}`);
   assert.equal(theirs.detail.earned, 500);
   assert.equal(theirs.detail.sources[0].key, 'family_in');
-  assert.deepEqual(theirs.family.map((r) => r.name), ['From Everyday checking']);
+  assert.deepEqual(
+    theirs.family.map((r) => r.name),
+    ['From Everyday checking'],
+  );
 
   // A category counts it as that kind of spending for the sender, and shows on both sides.
   const fees = mine.familyLabels.find((l) => l.name === 'University fees');

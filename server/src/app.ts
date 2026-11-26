@@ -113,8 +113,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
-  'Content-Security-Policy':
-    "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
 // All a family member's login can reach besides signing in: their own money.
 const MEMBER_ROUTES = new Set(['GET /api/personal']);
@@ -123,19 +122,14 @@ const isLoopback = (address: string) => address === '127.0.0.1' || address === '
 
 export function buildApp(options: AppOptions): FastifyInstance {
   const { db, tokens, allowAnyClient = false } = options;
-  const hostAllowed =
-    typeof options.allowedHosts === 'function'
-      ? options.allowedHosts
-      : (host: string) => (options.allowedHosts as string[]).includes(host);
+  const hostAllowed = typeof options.allowedHosts === 'function' ? options.allowedHosts : (host: string) => (options.allowedHosts as string[]).includes(host);
   const store = createAuthStore(db.raw);
   const access = accessService(db.raw, options.access ?? { tailnetHost: null, lanReady: false, lanUrls: [] });
 
   // Only a proxy on this same machine (such as Tailscale's) is trusted to say who the client is.
-  const app = (
-    options.tls
-      ? Fastify({ https: options.tls, bodyLimit: MAX_BODY_BYTES, trustProxy: isLoopback, logger: false })
-      : Fastify({ bodyLimit: MAX_BODY_BYTES, trustProxy: isLoopback, logger: false })
-  ) as unknown as FastifyInstance;
+  const app = (options.tls
+    ? Fastify({ https: options.tls, bodyLimit: MAX_BODY_BYTES, trustProxy: isLoopback, logger: false })
+    : Fastify({ bodyLimit: MAX_BODY_BYTES, trustProxy: isLoopback, logger: false })) as unknown as FastifyInstance;
   app.register(fastifyCookie);
   app.decorateRequest('user', null);
   app.decorateRequest('audit', function (this: FastifyRequest, action: string, detail?: unknown) {
@@ -256,7 +250,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   plRoutes(app, pl);
   const personal = personalService({ db: db.raw });
   personalRoutes(app, personal);
-  peopleRoutes(app, peopleService({ db: db.raw, auth: store }));
+  peopleRoutes(app, peopleService({ db: db.raw, auth: store, makePersonal: (id) => bank.updateAccount(id, { owner: 'personal' }) }));
   hoursRoutes(app, hoursService({ db: db.raw }));
   guestRoutes(app, guestService({ db: db.raw }));
   foundationRoutes(app, foundationService({ db: db.raw }), (id) => Boolean(db.raw.prepare('SELECT 1 FROM entities WHERE id = ?').get(id)));
