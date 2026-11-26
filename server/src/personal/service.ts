@@ -638,7 +638,7 @@ export function personalService({ db, today = () => new Date().toISOString().sli
           .filter((t) => t.flow === 'out')
           .sort((a, b) => a.amount - b.amount)
           .slice(0, 6)
-          .map((t) => ({ id: t.id, posted: t.posted, amount: t.amount, name: nameOf(t), group: t.group, account: t.account })),
+          .map((t) => ({ id: t.id, posted: t.posted, amount: t.amount, name: nameOf(t), description: t.description, group: t.group, account: t.account })),
         unsorted: unsorted.length,
         // The ones to give a category, for a link straight to them (Transactions takes up to 100).
         unsortedIds: unsorted.slice(0, 100).map((t) => t.id),

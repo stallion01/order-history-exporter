@@ -114,7 +114,7 @@ function App() {
           {error && <Banner>{error}</Banner>}
           <Routes>
             <Route path="/personal" element={<Personal member />} />
-            <Route path="/personal/search" element={<PersonalSearch />} />
+            <Route path="/personal/search" element={<PersonalSearch member />} />
             <Route path="/settings" element={settings} />
             <Route path="*" element={<Navigate to="/personal" replace />} />
           </Routes>

@@ -7,7 +7,8 @@ import { ArrowLeft, Search } from 'lucide-react';
 import { post, useApi } from '../api';
 import { money } from '../format';
 import { Banner, Button, Card, Input, Loading, cx } from '../ui';
-import { info, moveTo, setGroupNames } from './Personal';
+import { PaymentSheet, info, moveTo, setGroupNames } from './Personal';
+import type { SheetTx } from './Personal';
 
 interface Result {
   id: number;
@@ -78,7 +79,8 @@ const FRAMES: { key: string; label: string; range?: () => [string, string] }[] =
 
 const selectClass = 'h-10 rounded-md border border-slate-300 bg-white px-2 text-sm dark:border-slate-600 dark:bg-slate-900';
 
-export function PersonalSearch() {
+export function PersonalSearch({ member = false }: { member?: boolean }) {
+  const [open, setOpen] = useState<SheetTx | null>(null);
   const [params, setParams] = useSearchParams();
   const person = params.get('person');
   const [text, setText] = useState(params.get('q') ?? '');
@@ -227,34 +229,37 @@ export function PersonalSearch() {
               const gi = info(r.group);
               return (
                 <li key={r.id}>
-                  <label className={cx('flex items-center gap-3 px-4 py-2.5', !r.family && 'cursor-pointer', selected.has(r.id) && 'bg-emerald-50 dark:bg-emerald-950/40')}>
-                    <input
-                      type="checkbox"
-                      className="size-5 shrink-0"
-                      checked={selected.has(r.id)}
-                      disabled={r.family}
-                      onChange={() => toggle(r.id)}
-                      aria-label={`Choose ${r.name} on ${dateLabel(r.posted)}`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium" title={r.description}>
-                        {r.name}
+                  <div className={cx('flex items-center gap-3 px-4 py-1', selected.has(r.id) && 'bg-emerald-50 dark:bg-emerald-950/40')}>
+                    <label className="-my-1 -ml-2 flex shrink-0 cursor-pointer items-center self-stretch py-3 pl-2">
+                      <input
+                        type="checkbox"
+                        className="size-5"
+                        checked={selected.has(r.id)}
+                        disabled={r.family}
+                        onChange={() => toggle(r.id)}
+                        aria-label={`Choose ${r.name} on ${dateLabel(r.posted)}`}
+                      />
+                    </label>
+                    <button type="button" onClick={() => setOpen(r)} className="flex min-w-0 flex-1 items-center gap-3 py-1.5 text-left">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-medium">{r.name}</div>
+                        <div className="flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
+                          <span className="size-2 shrink-0 rounded-full" style={{ background: gi.colour }} aria-hidden />
+                          <span className="truncate">
+                            {dateLabel(r.posted)} · {gi.label} · {r.account}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
-                        <span className="size-2 shrink-0 rounded-full" style={{ background: gi.colour }} aria-hidden />
-                        <span className="truncate">
-                          {dateLabel(r.posted)} · {gi.label} · {r.account}
-                        </span>
-                      </div>
-                    </div>
-                    <span className={cx('shrink-0 tabular-nums', r.amount > 0 && 'text-emerald-600')}>{money(-r.amount)}</span>
-                  </label>
+                      <span className={cx('shrink-0 tabular-nums', r.amount > 0 && 'text-emerald-600')}>{money(-r.amount)}</span>
+                    </button>
+                  </div>
                 </li>
               );
             })}
           </ul>
         </Card>
       )}
+      {open && <PaymentSheet tx={open} member={member} person={person ? Number(person) : null} onClose={() => setOpen(null)} onMoved={reload} />}
       {selected.size > 0 && (
         <div className="fixed inset-x-0 bottom-16 z-30 border-t border-slate-200 bg-white px-4 py-3 shadow-lg md:bottom-0 md:left-60 dark:border-slate-700 dark:bg-slate-900">
           <div className="mx-auto flex max-w-3xl items-center gap-2">

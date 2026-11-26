@@ -1,6 +1,6 @@
 // The owner's own money: what came in, where it went, budgets for each kind of
 // spending, and a look back over the past year and ahead over the next six months.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
@@ -163,7 +163,7 @@ interface PersonalData {
     sources: { key: string; amount: number; count: number; payers: { name: string; amount: number; count: number }[] }[];
     moves: { key: string; amount: number }[];
     pace: { unit: 'day' | 'month'; days: number; actual: number[]; typical: number[]; budget: number | null };
-    biggest: { id: number; posted: string; amount: number; name: string; group: string; account: string }[];
+    biggest: { id: number; posted: string; amount: number; name: string; description: string; group: string; account: string }[];
     unsorted: number;
     unsortedIds: number[];
   };
@@ -272,7 +272,7 @@ export function Personal({ member = false }: { member?: boolean }) {
         <ComingUp data={data} />
       </div>
       <div className="mb-5 grid gap-5 lg:grid-cols-2">
-        <Biggest data={data} member={member} />
+        <Biggest data={data} member={member} onChange={reload} />
         <YourYear data={data} />
       </div>
     </>
@@ -671,7 +671,7 @@ function WhereItWent({ data, open, onOpen, member, onChange }: { data: PersonalD
           </ul>
         </div>
       )}
-      {selected && <GroupDetail group={selected} future={data.future} member={member} onChange={onChange} onClose={() => onOpen(null)} />}
+      {selected && <GroupDetail group={selected} future={data.future} member={member} person={data.person?.id ?? null} onChange={onChange} onClose={() => onOpen(null)} />}
     </Card>
   );
 }
@@ -717,24 +717,9 @@ function Donut({ slices, total, active, onPick, label }: { slices: { key: string
   );
 }
 
-function GroupDetail({ group, future, member, onChange, onClose }: { group: GroupRow; future: boolean; member: boolean; onChange: () => void; onClose: () => void }) {
+function GroupDetail({ group, future, member, person, onChange, onClose }: { group: GroupRow; future: boolean; member: boolean; person: number | null; onChange: () => void; onClose: () => void }) {
   const gi = info(group.key);
-  const [busy, setBusy] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [everyTime, setEveryTime] = useState(true);
-  // A family login sorts its own payments here; the owner gives a category in Transactions.
-  const move = async (id: number, to: string) => {
-    setBusy(id);
-    setError(null);
-    try {
-      await post('/api/personal/group', { transactionId: id, group: to, everyTime });
-      onChange();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
+  const [open, setOpen] = useState<SheetTx | null>(null);
   return (
     <div className="mt-5 rounded-xl border p-4" style={{ borderColor: `${gi.colour}66`, background: `${gi.colour}0d` }}>
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -774,62 +759,145 @@ function GroupDetail({ group, future, member, onChange, onClose }: { group: Grou
               })}
             </div>
           )}
-          {error && <Banner>{error}</Banner>}
-          {member && (
-            <label className="mb-2 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-              <input type="checkbox" checked={everyTime} onChange={(e) => setEveryTime(e.target.checked)} className="size-4" />
-              Moving one moves every payment from the same place, now and later
-            </label>
-          )}
           <ul className="max-h-96 divide-y divide-slate-200/70 overflow-y-auto text-sm dark:divide-slate-700/70">
             {group.transactions.map((t) => (
-              <li key={t.id} className="flex items-center gap-3 py-1.5">
-                <span className="w-12 shrink-0 text-xs text-slate-500">{dayLabel(t.posted)}</span>
-                <TxName id={t.id} member={member} className="min-w-0 flex-1 truncate" title={t.description}>
-                  {t.name}
-                  <span className="ml-1.5 text-xs text-slate-400">{t.account}</span>
-                </TxName>
-                <span className={cx('tabular-nums', t.amount > 0 && 'text-emerald-600')}>{money(-t.amount)}</span>
-                {member && (
-                  <select
-                    aria-label={`Move ${t.name} to`}
-                    value={group.key}
-                    disabled={busy === t.id}
-                    onChange={(e) => move(t.id, e.target.value)}
-                    className="w-28 shrink-0 rounded-md border border-slate-300 bg-white px-1.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-900"
-                  >
-                    {!moveTo().includes(group.key) && <option value={group.key}>{gi.label}</option>}
-                    {moveTo().map((k) => (
-                      <option key={k} value={k}>
-                        {info(k).label}
-                      </option>
-                    ))}
-                  </select>
-                )}
+              <li key={t.id}>
+                <button
+                  type="button"
+                  onClick={() => setOpen({ ...t, group: group.key })}
+                  className="flex w-full items-center gap-3 rounded-md py-2 text-left hover:bg-white/60 dark:hover:bg-slate-800/60"
+                >
+                  <span className="w-12 shrink-0 text-xs text-slate-500">{dayLabel(t.posted)}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {t.name}
+                    <span className="ml-1.5 text-xs text-slate-400">{t.account}</span>
+                  </span>
+                  <span className={cx('tabular-nums', t.amount > 0 && 'text-emerald-600')}>{money(-t.amount)}</span>
+                  <ChevronRight className="size-4 shrink-0 text-slate-400" aria-hidden />
+                </button>
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-            {member ? 'Something in the wrong group? Pick the right one beside it.' : 'Something in the wrong group? Open it and give it a category; the group follows the category.'}
-          </p>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Tap a payment to see all of it and move it to another group.</p>
         </>
       )}
+      {open && <PaymentSheet tx={open} member={member} person={person} onClose={() => setOpen(null)} onMoved={onChange} />}
     </div>
   );
 }
 
-// A transaction's name: a link to it for the owner, plain text for a family login.
-function TxName({ id, member, className, title, children }: { id: number; member: boolean; className: string; title?: string; children: ReactNode }) {
-  if (member)
-    return (
-      <span className={className} title={title}>
-        {children}
-      </span>
-    );
+/* ---------- One payment ---------- */
+
+export interface SheetTx {
+  id: number;
+  posted: string;
+  amount: number;
+  name: string;
+  description: string;
+  account: string;
+  group: string;
+  category?: string | null;
+  family?: boolean;
+}
+
+// All of one payment, which a phone can't fit on a line: what the bank called it, when,
+// how much, from which account and in which group, with a way to move it.
+export function PaymentSheet({ tx, member, person, onClose, onMoved }: { tx: SheetTx; member: boolean; person: number | null; onClose: () => void; onMoved: () => void }) {
+  const gi = info(tx.group);
+  const [to, setTo] = useState(tx.group);
+  const [everyTime, setEveryTime] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const move = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await post('/api/personal/group', { transactionId: tx.id, group: to, everyTime, person: person ?? undefined });
+      onMoved();
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const when = new Date(`${tx.posted}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' });
   return (
-    <Link to={`/transactions?id=${id}&preset=all&kind=all`} className={cx(className, 'hover:underline')} title={title}>
-      {children}
-    </Link>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-4" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={tx.name}
+        onClick={(e) => e.stopPropagation()}
+        className="safe-bottom max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl dark:bg-slate-900"
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-lg leading-snug font-semibold break-words">{tx.name}</h2>
+            <p className={cx('mt-0.5 text-2xl font-bold tabular-nums', tx.amount > 0 && 'text-emerald-600')}>{money(-tx.amount)}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close">
+            <X className="size-5" aria-hidden />
+          </button>
+        </div>
+        <p className="mb-1 text-xs font-medium tracking-wide text-slate-500 uppercase">What the bank says</p>
+        <p className="mb-4 rounded-lg bg-slate-100 p-3 font-mono text-sm break-words select-text dark:bg-slate-800">{tx.description}</p>
+        <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+          <dt className="text-slate-500">When</dt>
+          <dd>{when}</dd>
+          <dt className="text-slate-500">Account</dt>
+          <dd className="break-words">{tx.account}</dd>
+          <dt className="text-slate-500">Group</dt>
+          <dd className="flex items-center gap-1.5">
+            <span className="size-2.5 rounded-full" style={{ background: gi.colour }} aria-hidden />
+            {gi.label}
+          </dd>
+          {!member && tx.category && (
+            <>
+              <dt className="text-slate-500">Category</dt>
+              <dd>{tx.category}</dd>
+            </>
+          )}
+        </dl>
+        {tx.family ? (
+          <p className="text-sm text-slate-500">Money between family is sorted under Between family.</p>
+        ) : (
+          <div className="space-y-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+            {error && <Banner>{error}</Banner>}
+            <label className="grid gap-1 text-sm font-medium">
+              Move to
+              <select value={to} onChange={(e) => setTo(e.target.value)} className="h-11 rounded-md border border-slate-300 bg-white px-2 text-base dark:border-slate-600 dark:bg-slate-900">
+                {!moveTo().includes(tx.group) && <option value={tx.group}>{gi.label}</option>}
+                {moveTo().map((k) => (
+                  <option key={k} value={k}>
+                    {info(k).label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-start gap-2 text-sm text-slate-600 dark:text-slate-300">
+              <input type="checkbox" checked={everyTime} onChange={(e) => setEveryTime(e.target.checked)} className="mt-0.5 size-5" />
+              Every payment from {tx.name}, now and later
+            </label>
+            <div className="flex items-center gap-2 pt-1">
+              <Button onClick={move} disabled={busy || to === tx.group}>
+                Move
+              </Button>
+              {!member && (
+                <Link to={`/transactions?id=${tx.id}&preset=all&kind=all`} className="text-sm text-slate-500 underline-offset-2 hover:underline">
+                  Open in Transactions
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1512,8 +1580,9 @@ function ComingUp({ data }: { data: PersonalData }) {
 
 /* ---------- The biggest, and the year ---------- */
 
-function Biggest({ data, member }: { data: PersonalData; member: boolean }) {
+function Biggest({ data, member, onChange }: { data: PersonalData; member: boolean; onChange: () => void }) {
   const list = data.detail.biggest;
+  const [open, setOpen] = useState<SheetTx | null>(null);
   return (
     <Card title={`Biggest spending in ${spanName(data, true)}`}>
       {!list.length ? (
@@ -1529,18 +1598,19 @@ function Biggest({ data, member }: { data: PersonalData; member: boolean }) {
                 <span className="flex size-8 items-center justify-center rounded-full" style={{ background: `${gi.colour}22`, color: gi.colour }}>
                   <I className="size-4" aria-hidden />
                 </span>
-                <TxName id={t.id} member={member} className="min-w-0 flex-1">
+                <button type="button" onClick={() => setOpen(t)} className="min-w-0 flex-1 text-left">
                   <div className="truncate font-medium">{t.name}</div>
                   <div className="truncate text-xs text-slate-500">
                     {dayLabel(t.posted)} · {gi.label} · {t.account}
                   </div>
-                </TxName>
+                </button>
                 <span className="font-semibold tabular-nums">{wholeMoney(-t.amount)}</span>
               </li>
             );
           })}
         </ul>
       )}
+      {open && <PaymentSheet tx={open} member={member} person={data.person?.id ?? null} onClose={() => setOpen(null)} onMoved={onChange} />}
     </Card>
   );
 }
