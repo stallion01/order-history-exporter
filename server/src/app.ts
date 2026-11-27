@@ -43,6 +43,7 @@ import { plService } from './pl/service';
 import { returnsRoutes } from './routes/returns';
 import { returnsService } from './returns/service';
 import { personalRoutes } from './routes/personal';
+import { VENMO_KEY_PREFIX, VENMO_KEY_ROUTES, venmoKeyUser, venmoRoutes } from './routes/venmo';
 import { personalService } from './personal/service';
 import { peopleRoutes } from './routes/people';
 import { peopleService } from './people/service';
@@ -128,6 +129,10 @@ const MEMBER_ROUTES = new Set([
   'POST /api/personal/groups/:key/delete',
   'POST /api/personal/names',
   'POST /api/personal/rules/:id/delete',
+  'GET /api/personal/venmo',
+  'POST /api/personal/venmo/import',
+  'POST /api/personal/venmo/key',
+  'POST /api/personal/venmo/key/delete',
 ]);
 
 const isLoopback = (address: string) => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -173,6 +178,14 @@ export function buildApp(options: AppOptions): FastifyInstance {
     const authed = request as AuthedRequest;
     const routeKey = `${request.method} ${request.routeOptions.url}`;
     const bearer = String(request.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    // A person's Venmo sync key, from the extension: their own Venmo import only.
+    if (bearer.startsWith(VENMO_KEY_PREFIX)) {
+      if (!VENMO_KEY_ROUTES.has(routeKey)) throw new HttpError(403, 'A Venmo sync key only works for importing Venmo.');
+      const user = venmoKeyUser(db.raw, bearer);
+      if (!user) throw new HttpError(401, 'This Venmo sync key is wrong or was replaced. Make a new one on My money.');
+      authed.user = user;
+      return;
+    }
     if (bearer) {
       if (!SYNC_ROUTES.has(routeKey)) throw new HttpError(403, 'The access token only works for syncing. Sign in to use the rest.');
       if (!sameSecret(bearer, tokens.get())) throw new HttpError(401, 'The access token is missing or wrong.');
@@ -262,6 +275,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
   plRoutes(app, pl);
   const personal = personalService({ db: db.raw });
   personalRoutes(app, personal);
+  venmoRoutes(app, db.raw, bank);
   peopleRoutes(app, peopleService({ db: db.raw, auth: store, makePersonal: (id) => bank.updateAccount(id, { owner: 'personal' }) }));
   hoursRoutes(app, hoursService({ db: db.raw }));
   guestRoutes(app, guestService({ db: db.raw }));

@@ -74,6 +74,7 @@ export function peopleService({ db, auth, makePersonal = () => {} }: { db: Datab
     db.prepare('UPDATE bank_accounts SET person_id = NULL WHERE person_id = ?').run(id);
     db.prepare('DELETE FROM personal_budgets WHERE person_id = ?').run(id);
     db.prepare("DELETE FROM users WHERE role = 'member' AND person_id = ?").run(id);
+    db.prepare('DELETE FROM venmo_sync_keys WHERE person_id = ?').run(id);
     db.prepare('DELETE FROM personal_people WHERE id = ?').run(id);
   }
 

@@ -112,9 +112,52 @@
     }
   });
 
+  /* ---------- Venmo ---------- */
+
+  const venmoSettings = () => ({ url: $('venmo-url').value.trim(), key: $('venmo-key').value.trim(), every: Number($('venmo-every').value) });
+  function showVenmo(stored) {
+    if (!stored || !stored.lastTry) return;
+    const when = new Date(stored.lastTry).toLocaleString();
+    $('venmo-result').textContent = `Last sync ${when}: ${stored.lastMessage || ''}`;
+  }
+  async function saveVenmo(extra = {}) {
+    const previous = (await chrome.storage.local.get(OHE.VENMO_KEY))[OHE.VENMO_KEY] || {};
+    const next = { ...previous, ...venmoSettings(), ...extra };
+    await chrome.storage.local.set({ [OHE.VENMO_KEY]: next });
+    return next;
+  }
+  $('venmo-every').addEventListener('change', () => saveVenmo().catch(() => {}));
+  $('venmo-sync').addEventListener('click', async () => {
+    const settings = venmoSettings();
+    $('venmo-sync').disabled = true;
+    $('venmo-result').textContent = 'Syncing…';
+    const at = new Date().toISOString();
+    try {
+      if (!settings.url || !settings.key) throw new Error('Enter the Business Hub address and your Venmo sync key first.');
+      // The Hub's address needs this site's permission, asked for right after the click.
+      const origins = [serverOrigin(settings.url)];
+      if (!(await chrome.permissions.contains({ origins })) && !(await chrome.permissions.request({ origins }))) {
+        throw new Error('Chrome needs your permission to reach that address.');
+      }
+      const result = await OHE.venmoSync(settings);
+      showVenmo(await saveVenmo({ lastTry: at, lastSuccess: at, lastMessage: OHE.describeVenmoSync(result) }));
+    } catch (err) {
+      showVenmo(await saveVenmo({ lastTry: at, lastMessage: err.message }));
+    } finally {
+      $('venmo-sync').disabled = false;
+    }
+  });
+
   async function restoreSettings() {
     try {
-      const stored = await chrome.storage.local.get([SETTINGS_KEY, DATABASE_KEY]);
+      const stored = await chrome.storage.local.get([SETTINGS_KEY, DATABASE_KEY, OHE.VENMO_KEY]);
+      const venmo = stored[OHE.VENMO_KEY];
+      $('venmo-url').value = (venmo && venmo.url) || (stored[DATABASE_KEY] && /^https:/.test(stored[DATABASE_KEY].url || '') ? stored[DATABASE_KEY].url : '');
+      if (venmo) {
+        $('venmo-key').value = venmo.key || '';
+        $('venmo-every').value = String(venmo.every ?? (venmo.auto === false ? 0 : 7));
+        showVenmo(venmo);
+      }
       const saved = stored[SETTINGS_KEY];
       if (stored[DATABASE_KEY]) {
         $('db-url').value = stored[DATABASE_KEY].url || '';

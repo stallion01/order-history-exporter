@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { post, useApi } from '../api';
 import { BankBadge } from '../banks';
+import { VenmoImport } from './Venmo';
 import { MONTHS, money, plural, wholeMoney } from '../format';
 import { Banner, Button, Card, Input, Loading, cx } from '../ui';
 
@@ -256,6 +257,7 @@ export function Personal({ member = false }: { member?: boolean }) {
           )}
         </Banner>
       )}
+      <VenmoImport person={data.person?.id ?? null} onImported={reload} />
       <Timeline months={data.months} span={data.span} today={data.today} onPick={pick} />
       <div className="mb-5 grid gap-5 lg:grid-cols-[1.25fr_1fr]">
         <WhereItWent data={data} open={open} onOpen={setOpen} member={member} onChange={reload} />

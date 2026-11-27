@@ -432,14 +432,88 @@ export function createBankStore(db: DatabaseSync) {
     }
   }
 
+  // Venmo. Money Venmo took from a bank or card for a payment, or sent on to one, is
+  // in the bank too ("VENMO PAYMENT 1234…", "VENMO DES:CASHOUT"): the two are paired as
+  // a transfer, preferring the account whose last four digits Venmo gave. Without the
+  // bank's side here, it's still a transfer, so it never counts as money in or out. A
+  // payment between two Venmo accounts here (one family member paying another) has
+  // the same Venmo id on both sides, and those are paired too.
+  function venmoTransfers(): number {
+    const mine = db
+      .prepare(
+        `SELECT t.id, t.account_id, t.posted, t.amount, t.description, t.kind, t.kind_source, s.external_id
+         FROM bank_transactions t JOIN bank_tx_sources s ON s.transaction_id = t.id AND s.source = 'venmo'
+         WHERE t.transfer_id IS NULL AND (t.kind_source IS NULL OR t.kind_source = 'auto')
+         ORDER BY t.posted, t.id`
+      )
+      .all() as Row[];
+    if (!mine.length) return 0;
+    const pair = db.prepare(`UPDATE bank_transactions SET kind = 'transfer', kind_source = 'auto', transfer_id = ?, updated_at = ? WHERE id = ?`);
+    const lone = db.prepare(`UPDATE bank_transactions SET kind = 'transfer', kind_source = 'auto', updated_at = ? WHERE id = ?`);
+    let paired = 0;
+
+    // Between family: the same payment in two Venmo accounts.
+    const byVenmoId = new Map<string, Row[]>();
+    for (const row of mine) {
+      if (String(row.external_id).includes(':')) continue;
+      byVenmoId.set(row.external_id, [...(byVenmoId.get(row.external_id) ?? []), row]);
+    }
+    for (const sides of byVenmoId.values()) {
+      const out = sides.find((r) => r.amount < 0);
+      const inn = sides.find((r) => r.amount > 0 && out && r.account_id !== out.account_id && toCents(r.amount) === -toCents(out.amount));
+      if (!out || !inn) continue;
+      pair.run(inn.id, now(), out.id);
+      pair.run(out.id, now(), inn.id);
+      paired++;
+    }
+
+    // Between Venmo and a bank or card.
+    const last4 = new Map((db.prepare('SELECT id, last4 FROM bank_accounts WHERE last4 IS NOT NULL').all() as Row[]).map((a) => [a.id as number, String(a.last4)]));
+    const bankSide = db
+      .prepare(
+        `SELECT t.id, t.account_id, t.posted, t.amount FROM bank_transactions t
+         WHERE t.description LIKE '%venmo%' AND t.transfer_id IS NULL AND (t.kind_source IS NULL OR t.kind_source = 'auto')
+           AND NOT EXISTS (SELECT 1 FROM bank_tx_sources s WHERE s.transaction_id = t.id AND s.source = 'venmo')
+         ORDER BY t.posted, t.id`
+      )
+      .all() as Row[];
+    const used = new Set<number>();
+    for (const row of mine) {
+      if (!/:(fund|bank)$/.test(String(row.external_id))) continue;
+      const day = dayNumber(row.posted);
+      // The bank's side comes the same day or a few days after Venmo's.
+      let candidates = bankSide.filter(
+        (b) => !used.has(b.id) && b.account_id !== row.account_id && toCents(b.amount) === -toCents(row.amount) && dayNumber(b.posted) - day >= -1 && dayNumber(b.posted) - day <= TRANSFER_DAYS
+      );
+      const digits = String(row.description).match(/[*x#](\d{4})\b/i)?.[1];
+      if (digits && candidates.some((b) => last4.get(b.account_id) === digits)) candidates = candidates.filter((b) => last4.get(b.account_id) === digits);
+      if (!candidates.length) {
+        if (row.kind !== 'transfer') {
+          lone.run(now(), row.id);
+          paired++;
+        }
+        continue;
+      }
+      const match = candidates.reduce((best, b) => (Math.abs(dayNumber(b.posted) - day) < Math.abs(dayNumber(best.posted) - day) ? b : best));
+      used.add(match.id);
+      pair.run(match.id, now(), row.id);
+      pair.run(row.id, now(), match.id);
+      paired++;
+    }
+    return paired;
+  }
+
   // Pairs a payment out of one account with the same amount arriving in another,
   // so moving money (such as paying a card from checking) isn't counted as spending.
   function detectTransfers(): number {
+    let paired = venmoTransfers();
+    // Venmo's rows are paired above, by what Venmo says about them, and never by amount.
     const rows = db
       .prepare(
         `SELECT t.id, t.account_id, t.posted, t.amount, t.description, t.memo, t.kind, a.kind AS account_kind
          FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
          WHERE ((t.kind_source IS NULL AND t.kind = 'normal') OR (t.kind_source = 'auto' AND t.kind = 'transfer')) AND t.transfer_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM bank_tx_sources s WHERE s.transaction_id = t.id AND s.source = 'venmo')
          ORDER BY t.posted, t.id`
       )
       .all() as Row[];
@@ -452,7 +526,6 @@ export function createBankStore(db: DatabaseSync) {
     }
     const used = new Set<number>();
     const pair = db.prepare(`UPDATE bank_transactions SET kind = 'transfer', kind_source = 'auto', transfer_id = ?, updated_at = ? WHERE id = ?`);
-    let paired = 0;
     for (const out of rows) {
       if (out.amount >= 0 || used.has(out.id)) continue;
       const day = dayNumber(out.posted);

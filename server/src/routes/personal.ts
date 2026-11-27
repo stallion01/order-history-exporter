@@ -8,7 +8,7 @@ import { HttpError, queryOf } from '../params';
 import type { AuthedRequest } from '../app';
 
 // Whose money a request is about: a family login is always its own person.
-function personFor(request: FastifyRequest, asked: string | number | null | undefined): number | null {
+export function personFor(request: FastifyRequest, asked: string | number | null | undefined): number | null {
   const user = (request as AuthedRequest).user!;
   if (user.role === 'member') return user.personId;
   if (asked === null || asked === undefined || asked === '' || asked === 'me') return null;

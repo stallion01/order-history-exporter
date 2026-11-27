@@ -98,6 +98,20 @@
       </div>
     </form>
 
+    <section id="venmo" class="card">
+      <h2>Venmo</h2>
+      <p class="muted">Sends the Venmo statements of whoever is signed in to venmo.com in this Chrome to their own My money in the Business Hub: the last 12 months the first time, then what's new. Make the Venmo sync key on My money, under Venmo, "Sync from Chrome".</p>
+      <div class="row">
+        <label class="grow">Business Hub address <input type="url" id="venmo-url" placeholder="https://your-hub.example.ts.net" spellcheck="false" autocomplete="off"></label>
+        <label class="grow">Venmo sync key <input type="password" id="venmo-key" placeholder="vsk_…" spellcheck="false" autocomplete="off"></label>
+      </div>
+      <div class="row"><label>Sync by itself while Chrome is open <select id="venmo-every"><option value="1">Every day</option><option value="7" selected>Every week</option><option value="0">Only when I click</option></select></label></div>
+      <div class="row">
+        <button type="button" id="venmo-sync" class="primary">Save and sync now</button>
+        <span id="venmo-result" class="muted" role="status"></span>
+      </div>
+    </section>
+
     <section id="blocked" class="notice" role="alert" hidden>
       <p id="blocked-text"></p>
       <div class="actions">
@@ -131,6 +145,7 @@
   <script src="../stores/index.js"></script>
   <script src="../lib/crawler.js"></script>
   <script src="../lib/database.js"></script>
+  <script src="../lib/venmo.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

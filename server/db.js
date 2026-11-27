@@ -8,7 +8,7 @@ const tax = require('./tax');
 
 const RECHECK_DAYS = 60;
 const MAX_DETAIL_ATTEMPTS = 3;
-const SCHEMA_VERSION = 37;
+const SCHEMA_VERSION = 38;
 
 // Links from Amazon's top bar, side cart and footer (its own card ads among them), which
 // a details page read too early can mistake for the items bought.
@@ -674,6 +674,17 @@ const SCHEMA_V32 = `
 // payments they always put in one group. The owner is person 0.
 // Groups a person made for themselves in My money, beside the usual ones. A group's
 // key is "c" and its id.
+// Keys the Chrome extension uses to send a person's Venmo statements, one per person
+// (the owner is person 0). Only a hash of each is kept.
+const SCHEMA_V38 = `
+  CREATE TABLE venmo_sync_keys (
+    person_id INTEGER PRIMARY KEY,
+    key_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+  );
+`;
+
 const SCHEMA_V37 = `
   CREATE TABLE personal_custom_groups (
     id INTEGER PRIMARY KEY,
@@ -1134,6 +1145,7 @@ function migrate(db, file) {
     if (version < 35) db.exec(SCHEMA_V35);
     if (version < 36) db.exec(SCHEMA_V36);
     if (version < 37) db.exec(SCHEMA_V37);
+    if (version < 38) db.exec(SCHEMA_V38);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (err) {

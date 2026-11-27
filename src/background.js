@@ -1,3 +1,5 @@
+importScripts('lib/venmo.js');
+
 // The toolbar button opens (or refocuses) the exporter page.
 chrome.action.onClicked.addListener(async () => {
   const url = chrome.runtime.getURL('src/app/app.html');
@@ -19,4 +21,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true; // keeps the channel open for the async response
   }
   return undefined;
+});
+
+// Venmo, every day or every week by itself, as chosen. Chrome checks every six hours
+// and syncs when the last good sync is that old; a check missed while Chrome was closed
+// happens when it next starts.
+const VENMO_ALARM = 'venmo-sync';
+const ensureVenmoAlarm = () => chrome.alarms.create(VENMO_ALARM, { delayInMinutes: 1, periodInMinutes: 6 * 60 });
+chrome.runtime.onInstalled.addListener(ensureVenmoAlarm);
+chrome.runtime.onStartup.addListener(ensureVenmoAlarm);
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== VENMO_ALARM) return;
+  const stored = (await chrome.storage.local.get(OHE.VENMO_KEY))[OHE.VENMO_KEY];
+  const every = stored ? (stored.every ?? OHE.VENMO_EVERY_DAYS) : 0;
+  if (!stored || !every || !stored.url || !stored.key) return;
+  const due = !stored.lastSuccess || Date.now() - Date.parse(stored.lastSuccess) >= every * 86400000 - 3600000;
+  if (!due) return;
+  const at = new Date().toISOString();
+  try {
+    const result = await OHE.venmoSync(stored);
+    await chrome.storage.local.set({ [OHE.VENMO_KEY]: { ...stored, lastSuccess: at, lastTry: at, lastMessage: OHE.describeVenmoSync(result) } });
+  } catch (err) {
+    await chrome.storage.local.set({ [OHE.VENMO_KEY]: { ...stored, lastTry: at, lastMessage: err.message } });
+  }
 });
